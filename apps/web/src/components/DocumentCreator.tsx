@@ -8,7 +8,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useCan } from "@/hooks/useCan";
-import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { usePricePropagation } from "@/hooks/usePricePropagation";
+import { calcLineItem, calcInvoiceTotals, money, type PriceUpdateProposal } from "@hisaabo/shared";
 import { QuickPartyCreate } from "@/components/QuickPartyCreate";
 import { QuickItemCreate, type QuickItemCreateResult } from "@/components/QuickItemCreate";
 
@@ -67,7 +68,14 @@ interface LineItem {
   discountPercent: string;
   selectedUnit?: string;
   conversionFactor?: string;
+  /** Product variant the line was billed in (kept when editing a document made elsewhere). */
+  variantId?: string;
   availableUnits?: UnitOption[];
+  /**
+   * The rate the Price field held when the line was picked or loaded. A rate that
+   * still equals it was not edited, so it never proposes a catalog price update.
+   */
+  originalUnitPrice?: string;
 }
 
 interface Charge {
@@ -263,6 +271,11 @@ export function DocumentCreator({
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        // Keep the unit / variant the line was billed in: dropping them would
+        // re-save an alternate-unit line as base-unit and skew stock.
+        ...(li.selectedUnit ? { selectedUnit: li.selectedUnit, conversionFactor: li.conversionFactor || undefined } : {}),
+        ...(li.variantId ? { variantId: li.variantId } : {}),
+        originalUnitPrice: li.unitPrice,
       })));
     }
   }, [editData]);
@@ -284,21 +297,37 @@ export function DocumentCreator({
     }
   }
 
-  function handleSuccess() {
+  // "Update saved prices?": what the user accepted for this save. It is written
+  // only after the bill itself saved, and a failure there is a toast, never an
+  // error for the bill.
+  const pricing = usePricePropagation(documentType, invoiceType);
+  const acceptedPricesRef = useRef<PriceUpdateProposal[]>([]);
+
+  function applyAcceptedPrices(savedId: string | undefined) {
+    const accepted = acceptedPricesRef.current;
+    acceptedPricesRef.current = [];
+    void pricing.apply(savedId, accepted);
+  }
+
+  function handleSuccess(data?: { id?: string }) {
     invalidateLists();
     toast.success(isEditing ? `${documentTypeLabels[documentType]} updated` : `${documentTypeLabels[documentType]} created`);
+    applyAcceptedPrices(data?.id ?? editInvoiceId);
     onSuccess?.(partyId || undefined);
     onClose();
   }
 
-  function handleInvoiceCreateSuccess(data: { invoiceNumber: string }) {
+  function handleInvoiceCreateSuccess(data: { id?: string; invoiceNumber: string }) {
     invalidateLists();
     toast.success(`Invoice ${data.invoiceNumber} created`);
+    applyAcceptedPrices(data.id);
     onSuccess?.(partyId || undefined);
     onClose();
   }
 
   function handleError(err: { message: string }) {
+    // The bill did not save, so the prices that were to follow it must not either.
+    acceptedPricesRef.current = [];
     toast.error(isEditing ? "Failed to update document" : "Failed to create document", err.message);
   }
 
@@ -452,7 +481,7 @@ export function DocumentCreator({
       setItems((prev) =>
         prev.map((li) =>
           li.id === lineId
-            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined }
+            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined, variantId: undefined, originalUnitPrice: undefined }
             : li
         )
       );
@@ -483,9 +512,11 @@ export function DocumentCreator({
               itemName: product.name,
               notes: "",
               unitPrice: basePrice,
+              originalUnitPrice: basePrice,
               taxPercent: product.taxPercent,
               selectedUnit: undefined,
               conversionFactor: undefined,
+              variantId: undefined,
               availableUnits: allUnits.length > 1 ? allUnits : undefined,
             }
           : li
@@ -514,6 +545,7 @@ export function DocumentCreator({
           ...li,
           selectedUnit: unitKey === "__base__" ? undefined : unit.unit,
           unitPrice: unit.salePrice,
+          originalUnitPrice: unit.salePrice,
           conversionFactor: unitKey === "__base__" ? undefined : String(unit.conversionFactor),
         };
       })
@@ -536,9 +568,11 @@ export function DocumentCreator({
               itemName: item.name,
               notes: "",
               unitPrice: price || "",
+              originalUnitPrice: price || "",
               taxPercent: item.taxPercent || "0",
               selectedUnit: undefined,
               conversionFactor: undefined,
+              variantId: undefined,
               availableUnits: undefined,
             }
           : li
@@ -547,7 +581,7 @@ export function DocumentCreator({
     setQuickItemLineId(null);
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const validItems = items.filter((li) => li.itemName.trim() && li.unitPrice);
     if (validItems.length === 0) {
       toast.error("Add at least one line item with an item name and price");
@@ -577,8 +611,25 @@ export function DocumentCreator({
         discountPercent: li.discountPercent,
         selectedUnit: li.selectedUnit || undefined,
         conversionFactor: li.conversionFactor || undefined,
+        variantId: li.variantId || undefined,
       };
     });
+
+    // One question before saving: update the items' saved prices too? Skipped
+    // (no lookup, no dialog) unless the user can update items and edited a rate
+    // on a catalog-linked line.
+    const decision = await pricing.decide(
+      validItems.map((li) => ({
+        itemId: li.itemId,
+        variantId: li.variantId,
+        selectedUnit: li.selectedUnit,
+        conversionFactor: li.conversionFactor,
+        unitPrice: li.unitPrice,
+        originalUnitPrice: li.originalUnitPrice,
+      })),
+    );
+    if (decision.kind === "back") return;
+    acceptedPricesRef.current = decision.accepted;
 
     const chargesPayload = charges
       .filter((c) => c.label && c.amount && parseFloat(c.amount) > 0)
@@ -669,7 +720,7 @@ export function DocumentCreator({
             type="button"
             className="btn-primary"
             onClick={handleSubmit}
-            disabled={activeMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
+            disabled={activeMutation.isPending || pricing.checking || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {activeMutation.isPending
               ? isEditing ? "Saving..." : "Creating..."
@@ -1164,6 +1215,8 @@ export function DocumentCreator({
       initialName={quickItemName}
       invoiceType={invoiceType}
     />
+
+    {pricing.dialog}
 
     <ConfirmDialog
       open={confirmCloseOpen}
