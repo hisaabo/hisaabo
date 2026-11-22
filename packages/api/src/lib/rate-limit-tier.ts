@@ -69,13 +69,48 @@ export function countStrictProcedures(requestPath: string): number {
   return trpcProcedures(requestPath).filter((p) => STRICT_PROCEDURES.has(p)).length;
 }
 
-export type RateTier = "same-auth" | "same-anon" | "ext-auth" | "ext-anon";
+export type RateTier = "same-auth" | "same-anon" | "ext-auth" | "ext-anon" | "agent-auth";
 
-export function pickRateTier(opts: { sameOrigin: boolean; hasCredential: boolean }): { tier: RateTier; limit: number } {
+/**
+ * Per-minute budget for requests that say they come from a browser AI agent
+ * (`x-hisaabo-agent: webmcp`, see lib/audit-source.ts). It is its own bucket,
+ * keyed per IP like the others, so an agent stuck in a loop exhausts THIS budget
+ * and gets 429s of its own, while the human using the same tab keeps their
+ * normal 300/min. Deliberately below the human tier: an agent has no business
+ * making more than 2 calls a second against one person's books.
+ *
+ * The marker is client-supplied, so it only ever moves a request into a SMALLER
+ * budget of its own. It requires a plausible credential (an anonymous caller
+ * cannot use it to get a second bucket) and is never read for authorisation.
+ */
+export const AGENT_LIMIT_PER_MIN = 120;
+
+export function pickRateTier(opts: {
+  sameOrigin: boolean;
+  hasCredential: boolean;
+  /** The request carried the browser-agent marker. */
+  agent?: boolean;
+}): { tier: RateTier; limit: number } {
+  if (opts.agent && opts.hasCredential) return { tier: "agent-auth", limit: AGENT_LIMIT_PER_MIN };
   if (opts.sameOrigin && opts.hasCredential) return { tier: "same-auth", limit: 300 };
   if (opts.sameOrigin) return { tier: "same-anon", limit: 60 };
   if (opts.hasCredential) return { tier: "ext-auth", limit: 120 };
   return { tier: "ext-anon", limit: 10 };
+}
+
+/** One fixed-window counter per key (`<tier>:<ip>`). */
+export type RateMap = Map<string, { count: number; reset: number }>;
+
+/** Count one request against `key`'s per-minute window. True while it is within `limit`, false once the window is spent. */
+export function hitRateBucket(map: RateMap, key: string, limit: number, now: number): boolean {
+  const entry = map.get(key);
+  if (!entry || now > entry.reset) {
+    map.set(key, { count: 1, reset: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= limit) return false;
+  entry.count++;
+  return true;
 }
 
 export const STRICT_AUTH_LIMIT_PER_MIN = 20;

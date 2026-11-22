@@ -1,11 +1,12 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { claimIdempotencyKey, completeIdempotencyKey } from "../lib/idempotency.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
@@ -44,6 +45,8 @@ async function reverseInvoiceEffects(
       ));
   }
 }
+
+type InvoiceRow = typeof invoices.$inferSelect;
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -246,12 +249,18 @@ export const invoiceRouter = router({
       return { ...invoice, status: effectiveStatus, lineItems: lineItemsWithUnit, party: party ?? null, relatedDocuments: relatedDocs, totalAdjusted };
     }),
 
-  create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createInvoiceSchema.and(idempotencyInputSchema)).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
     if (!canCreateDocumentType(ctx.role, input.documentType, input.type)) {
       throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
     }
-    const invoice = await ctx.db.transaction(async (tx) => {
+    const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "invoice.create", key: input.idempotencyKey, input };
+    const created = await ctx.db.transaction(async (tx) => {
+      // An idempotency key that was already used with this exact input returns the
+      // first call's invoice here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey<InvoiceRow>(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, invoice: claim.value };
+
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
@@ -488,8 +497,11 @@ export const invoiceRouter = router({
         }
       }
 
-      return invoice;
+      await completeIdempotencyKey(tx, claim, invoice);
+      return { replayed: false as const, invoice };
     });
+    if (created.replayed) return created.invoice;
+    const invoice = created.invoice;
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,

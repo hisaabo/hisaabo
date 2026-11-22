@@ -10,6 +10,8 @@ import { money as decimal } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
+  idempotencyKeyFor,
+  idempotencyKeyProp,
   MONEY_PATTERN,
   UUID_PATTERN,
   enumOf,
@@ -134,6 +136,7 @@ const paymentCreate: WebMcpToolDefinition = {
     "Record money received from a customer or paid to a supplier. This moves real balances: the party's ledger, the invoice's amountPaid, and the invoice status, which Hisaabo recalculates to 'paid' or 'partial' by itself. Confirm the party, the amount and the date with the user before calling, and never use invoice_update_status to fake a payment.",
     "Three ways to apply the money. One invoice: set invoiceId. Several invoices: leave invoiceId out and pass 'allocations', where the amounts should add up to 'amount' (call payment_unpaid_invoices first to get the per-invoice balances). Neither: an advance or on-account payment that sits against the party's balance until it is applied.",
     "'amount' and 'discount' are decimal strings with 2 decimals and no currency symbol ('5000.00'); amount must be greater than zero. For a TDS payment, 'amount' is the net cash received and each allocation amount is the gross invoice settlement, with gross settlement = net cash received + TDS deducted. Provide tdsAmount, tdsSectionCode and tdsRate on the allocation when TDS is deducted. 'discount' is a write-off settled alongside the payment, not a deduction from what was received. paymentDate defaults to today.",
+    "Safe to retry: repeating the IDENTICAL call within 15 minutes (a timeout, a duplicated call) returns the payment the first call recorded instead of recording the money twice. To deliberately record a second identical payment, pass a new idempotencyKey.",
     "Example: { partyId: '3f1c…', amount: '12700.00', mode: 'upi', referenceNumber: '432198765432', allocations: [{ invoiceId: '8a2d…', amount: '12700.00' }] }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -158,6 +161,7 @@ const paymentCreate: WebMcpToolDefinition = {
       referenceNumber: { type: "string", maxLength: 100, description: "UTR, cheque number or transaction reference." },
       paymentDate: isoDate("When the money actually moved. Defaults to today."),
       notes: { type: "string", maxLength: 500, description: "Internal note about this payment. Not printed for the customer." },
+      idempotencyKey: idempotencyKeyProp(),
     },
     ["partyId", "amount", "mode"],
   ),
@@ -250,6 +254,8 @@ const paymentCreate: WebMcpToolDefinition = {
       referenceNumber: str(input.referenceNumber),
       paymentDate: str(input.paymentDate),
       notes: str(input.notes),
+      // A retry of the identical call returns the first payment instead of recording the money twice.
+      idempotencyKey: idempotencyKeyFor("payment_create", ctx.businessId, input),
     });
   },
 };

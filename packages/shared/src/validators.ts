@@ -426,6 +426,21 @@ export const paymentAllocationSchema = z.object({
   }
 });
 
+/**
+ * Optional client-supplied idempotency key for create mutations (invoice.create,
+ * payment.create). Reusing a key with the SAME input returns the record the first
+ * call created instead of creating a second one; reusing it with DIFFERENT input
+ * is a CONFLICT. Keys are remembered for a short window (see
+ * IDEMPOTENCY_WINDOW_MINUTES), per business and user. Used by the browser-agent
+ * (WebMCP) tools so a retried or double-submitted call cannot double-book.
+ */
+export const IDEMPOTENCY_WINDOW_MINUTES = 15;
+export const idempotencyKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.:-]{8,100}$/, "idempotencyKey must be 8-100 characters: letters, digits and _ . : -");
+/** Fields added to a create input to make it idempotent. Intersect, do not extend: the base schemas carry refinements. */
+export const idempotencyInputSchema = z.object({ idempotencyKey: idempotencyKeySchema.optional() });
+
 export const createPaymentSchema = z.object({
   invoiceId: z.string().uuid().optional(),
   partyId: z.string().uuid(),

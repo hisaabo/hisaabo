@@ -5,6 +5,9 @@ import {
   countStrictProcedures,
   trpcProcedures,
   pickRateTier,
+  hitRateBucket,
+  AGENT_LIMIT_PER_MIN,
+  type RateMap,
 } from "../lib/rate-limit-tier.js";
 import { NegativeCache } from "../lib/ttl-negative-cache.js";
 import {
@@ -41,6 +44,51 @@ describe("rate-limit credential shape", () => {
     expect(pickRateTier({ sameOrigin: true, hasCredential: true }).limit).toBe(300);
     expect(pickRateTier({ sameOrigin: true, hasCredential: false }).limit).toBe(60);
     expect(pickRateTier({ sameOrigin: false, hasCredential: false }).limit).toBe(10);
+  });
+});
+
+describe("browser-agent rate bucket", () => {
+  it("puts an authenticated agent request in its own, smaller tier", () => {
+    const agent = pickRateTier({ sameOrigin: true, hasCredential: true, agent: true });
+    expect(agent).toEqual({ tier: "agent-auth", limit: AGENT_LIMIT_PER_MIN });
+    expect(AGENT_LIMIT_PER_MIN).toBeLessThan(pickRateTier({ sameOrigin: true, hasCredential: true }).limit);
+    // Same for a cross-origin build (VITE_API_URL): the marker decides the bucket, not the origin.
+    expect(pickRateTier({ sameOrigin: false, hasCredential: true, agent: true }).tier).toBe("agent-auth");
+  });
+
+  it("never lets an anonymous caller use the marker to get a second bucket", () => {
+    expect(pickRateTier({ sameOrigin: true, hasCredential: false, agent: true })).toEqual({ tier: "same-anon", limit: 60 });
+    expect(pickRateTier({ sameOrigin: false, hasCredential: false, agent: true })).toEqual({ tier: "ext-anon", limit: 10 });
+  });
+
+  it("leaves every non-agent tier exactly as it was", () => {
+    expect(pickRateTier({ sameOrigin: true, hasCredential: true, agent: false }).limit).toBe(300);
+    expect(pickRateTier({ sameOrigin: false, hasCredential: true }).limit).toBe(120);
+  });
+
+  it("an agent stuck in a loop exhausts its own bucket and never the human's", () => {
+    const map: RateMap = new Map();
+    const ip = "203.0.113.7";
+    const now = 1_000_000;
+    const human = pickRateTier({ sameOrigin: true, hasCredential: true });
+    const agent = pickRateTier({ sameOrigin: true, hasCredential: true, agent: true });
+
+    // The agent hammers the API until it is refused...
+    let allowedAgentCalls = 0;
+    while (hitRateBucket(map, `${agent.tier}:${ip}`, agent.limit, now)) allowedAgentCalls++;
+    expect(allowedAgentCalls).toBe(AGENT_LIMIT_PER_MIN);
+    expect(hitRateBucket(map, `${agent.tier}:${ip}`, agent.limit, now)).toBe(false);
+
+    // ...while the person in the same tab, on the same IP, is not limited at all.
+    for (let i = 0; i < 50; i++) expect(hitRateBucket(map, `${human.tier}:${ip}`, human.limit, now)).toBe(true);
+  });
+
+  it("the agent bucket refills after its minute", () => {
+    const map: RateMap = new Map();
+    const key = "agent-auth:203.0.113.7";
+    for (let i = 0; i < AGENT_LIMIT_PER_MIN; i++) hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 0);
+    expect(hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 59_000)).toBe(false);
+    expect(hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 60_001)).toBe(true);
   });
 });
 

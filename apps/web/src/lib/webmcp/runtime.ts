@@ -36,6 +36,88 @@ import type {
 const MAX_TEXT_CHARS = 50_000;
 const TRUNCATION_NOTE = "\n… [truncated]";
 
+// ── Write throttling ───────────────────────────────────────────
+
+/** Approved writes the agent may START per minute (refilled continuously, burst of the same size). */
+export const WRITE_LIMIT_PER_MINUTE = 10;
+
+/** Continuous refill accumulates floating-point error; a token that is 1e-9 short is a token. */
+const EPSILON = 1e-9;
+
+/**
+ * A token bucket: `capacity` tokens, refilled at `capacity` per minute. Pure and
+ * clock-injectable so the rate rule can be tested without waiting a minute.
+ */
+export class TokenBucket {
+  private tokens: number;
+  private last: number;
+
+  constructor(
+    private readonly capacity: number,
+    private readonly now: () => number = () => Date.now(),
+  ) {
+    this.tokens = capacity;
+    this.last = now();
+  }
+
+  private refill(): void {
+    const t = this.now();
+    this.tokens = Math.min(this.capacity, this.tokens + ((t - this.last) / 60_000) * this.capacity);
+    this.last = t;
+  }
+
+  /** Milliseconds until a token is available (0 when one is). Takes nothing. */
+  retryAfterMs(): number {
+    this.refill();
+    return this.tokens >= 1 - EPSILON ? 0 : Math.ceil(((1 - this.tokens) / this.capacity) * 60_000);
+  }
+
+  /** Take one token; false (and nothing taken) when the bucket is empty. */
+  tryTake(): boolean {
+    this.refill();
+    if (this.tokens < 1 - EPSILON) return false;
+    this.tokens = Math.max(0, this.tokens - 1);
+    return true;
+  }
+}
+
+let writeBucket = new TokenBucket(WRITE_LIMIT_PER_MINUTE);
+
+/** Writes run one at a time: a second call waits for the first to finish (see runExclusive). */
+let writeChain: Promise<unknown> = Promise.resolve();
+
+/** Test hook: start from a full bucket and an idle queue. */
+export function resetWriteThrottle(now?: () => number): void {
+  writeBucket = new TokenBucket(WRITE_LIMIT_PER_MINUTE, now);
+  writeChain = Promise.resolve();
+}
+
+/**
+ * Run `task` after every earlier write has settled. Serialising writes is what
+ * makes a duplicated tool call safe: the second one reaches the server only after
+ * the first has committed, so the idempotency key sees it and returns the first
+ * record. Confirmation prompts are NOT inside this queue (they queue in the host,
+ * where the user can see and deny them all at once); only the execution is.
+ */
+function runExclusive<T>(task: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(task, task);
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
+function rateLimitedResult(retryAfterMs: number): WebMcpToolResult {
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Too many writes: the limit is ${WRITE_LIMIT_PER_MINUTE} per minute. Nothing was changed. Wait about ${seconds} second${seconds === 1 ? "" : "s"}, then retry, and only if the user still wants it.`,
+      },
+    ],
+    isError: true,
+  };
+}
+
 // ── Feature detection ──────────────────────────────────────────
 
 /**
@@ -102,6 +184,8 @@ function capText(text: string): string {
 interface TrpcLikeError {
   message: string;
   data?: { code?: string; zodError?: { fieldErrors?: Record<string, string[]> } | null } | null;
+  /** Set by the HTTP link: the raw response, which is all we get when the API's rate limiter answers outside tRPC. */
+  meta?: { response?: { status?: number } } | null;
 }
 
 function asTrpcError(err: unknown): TrpcLikeError | null {
@@ -111,7 +195,8 @@ function asTrpcError(err: unknown): TrpcLikeError | null {
   const named = candidate.name === "TRPCClientError";
   const data = candidate.data;
   const hasCode = !!data && typeof data === "object" && typeof (data as { code?: unknown }).code === "string";
-  return named || hasCode ? (err as unknown as TrpcLikeError) : null;
+  const rateLimited = (candidate.meta as TrpcLikeError["meta"])?.response?.status === 429;
+  return named || hasCode || rateLimited ? (err as unknown as TrpcLikeError) : null;
 }
 
 /** Strip anything that identifies our infrastructure before the agent sees it. */
@@ -128,6 +213,11 @@ function formatValidation(fields: Record<string, string[] | undefined>): string 
 
 function formatAgentError(err: unknown): string {
   const trpcErr = asTrpcError(err);
+  // The API's rate limiter answers 429 before tRPC, so the client sees a parse
+  // error with the response attached rather than a TOO_MANY_REQUESTS code.
+  if (trpcErr?.meta?.response?.status === 429) {
+    return "Too many requests: slow down and try again in a moment.";
+  }
   if (trpcErr) {
     const message = sanitize(trpcErr.message || "Unknown error");
     switch (trpcErr.data?.code) {
@@ -317,6 +407,8 @@ export function buildBrowserTool(
         if (isWrite && isWriteBudgetExhausted()) {
           return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true };
         }
+        // Likewise for the per-minute rate: refuse before bothering the user.
+        if (isWrite && writeBucket.retryAfterMs() > 0) return rateLimitedResult(writeBucket.retryAfterMs());
         if (isWrite) {
           const allowed = await confirmWrite(def, input ?? {}, options, ctx);
           // Re-check after the (possibly long) wait: the user may have switched
@@ -330,13 +422,22 @@ export function buildBrowserTool(
               isError: true,
             };
           }
-          // Spent on approval, not on success: a loop of writes the API keeps rejecting must not be free.
-          if (!consumeWrite()) {
-            return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true };
-          }
+          // Executing is serialised and metered. The token and the budget are spent
+          // on approval, not on success: a loop of writes the API keeps rejecting
+          // must not be free.
+          return await runExclusive(async () => {
+            const again = staleReason(ctx, options);
+            if (again) return staleResult(again);
+            if (!writeBucket.tryTake()) return rateLimitedResult(writeBucket.retryAfterMs());
+            if (!consumeWrite()) {
+              return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true } as WebMcpToolResult;
+            }
+            const written = await def.execute(input ?? {}, ctx);
+            fireInvalidate(ctx);
+            return toToolResult(written);
+          });
         }
         const value = await def.execute(input ?? {}, ctx);
-        if (isWrite) fireInvalidate(ctx);
         return toToolResult(value);
       } catch (err) {
         return toErrorResult(err);

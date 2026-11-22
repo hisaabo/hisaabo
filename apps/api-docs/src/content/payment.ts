@@ -83,6 +83,7 @@ resp = httpx.get(
         { name: "notes", type: "string", required: false, description: "Internal notes (max 500 chars)" },
         { name: "bankAccountId", type: "string (UUID)", required: false, description: "Bank account to credit/debit" },
         { name: "allocations", type: "array", required: false, description: "Multi-invoice allocation. Overrides `invoiceId` if provided. Each: `{invoiceId: UUID, amount: decimal string}`" },
+        { name: "idempotencyKey", type: "string", required: false, description: "Makes the call safe to retry. 8-100 characters (letters, digits, `_ . : -`). Repeating the identical request with the same key within 15 minutes returns the payment the first call recorded, without applying the money twice; the same key with a different request is a `CONFLICT`. Keys are scoped to the business and the user." },
       ],
       output: {
         description: "Created payment with auto-generated payment number.",

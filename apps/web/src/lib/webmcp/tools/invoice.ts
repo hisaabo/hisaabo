@@ -14,6 +14,8 @@ import { calcInvoiceTotals, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAG
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
+  idempotencyKeyFor,
+  idempotencyKeyProp,
   enumArray,
   enumOf,
   isoDate,
@@ -251,6 +253,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     "Set type='sale' for billing a customer and type='purchase' for recording a supplier's bill. partyId must come from party_list (create the party first if they are new); itemId on a line must come from item_list.",
     "Money and tax rates are decimal strings with 2 decimals ('15000.00', '18.00'); quantities allow 3 ('1.000'). Never send numbers or currency symbols. Totals, GST split and the invoice number are computed server-side — do not try to pass them.",
     "documentType defaults to 'invoice'; use 'quotation' to draft a quote instead, which creates no receivable.",
+    "Safe to retry: repeating the IDENTICAL call within 15 minutes (a timeout, a duplicated call) returns the invoice the first call created, with the same number, instead of booking a second one. To deliberately create a second identical invoice, pass a new idempotencyKey.",
     "Example: { partyId: '3f1c…', type: 'sale', lineItems: [{ itemName: 'Web Design', quantity: '1.000', unitPrice: '15000.00', taxPercent: '18.00' }], dueDate: '2026-10-14T00:00:00.000Z' }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -271,6 +274,7 @@ const invoiceCreate: WebMcpToolDefinition = {
       invoiceDiscount: money("Invoice-level discount. A flat amount or a percentage depending on invoiceDiscountType. Defaults to '0'."),
       invoiceDiscountType: oneOf(DISCOUNT_TYPES, "Whether invoiceDiscount is a flat 'amount' or a 'percent'. Defaults to 'amount'.", "amount"),
       roundOff: money("Round-off adjustment to the grand total, e.g. '0.50' or '-0.25'. Defaults to '0'.", true),
+      idempotencyKey: idempotencyKeyProp(),
     },
     ["partyId", "type", "lineItems"],
   ),
@@ -334,6 +338,8 @@ const invoiceCreate: WebMcpToolDefinition = {
       invoiceDiscount: str(input.invoiceDiscount),
       invoiceDiscountType: enumOf(input.invoiceDiscountType, DISCOUNT_TYPES),
       roundOff: str(input.roundOff),
+      // A retry of the identical call returns the first invoice instead of a second one.
+      idempotencyKey: idempotencyKeyFor("invoice_create", ctx.businessId, input),
     });
   },
 };

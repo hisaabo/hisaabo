@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { buildBrowserTool } from "../runtime";
+import { buildBrowserTool, resetWriteThrottle } from "../runtime";
 import { requestConfirmation, summarizeInput, isConfirmHostMounted } from "../confirm";
 import { resolveWebMcpBusinessId } from "../business-gate";
 import { resetWriteBudget } from "../budget";
@@ -21,7 +21,10 @@ function writeDef(execute = vi.fn(async () => "created")): WebMcpToolDefinition 
   } as unknown as WebMcpToolDefinition;
 }
 
-beforeEach(() => resetWriteBudget());
+beforeEach(() => {
+  resetWriteBudget();
+  resetWriteThrottle();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("summarizeInput", () => {

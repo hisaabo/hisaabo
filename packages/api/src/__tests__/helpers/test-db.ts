@@ -230,6 +230,7 @@ export async function truncateAllTables(): Promise<void> {
       shipments,
       store_phone_otps,
       store_orders,
+      idempotency_keys,
       audit_log,
       stock_adjustments,
       sales_targets,

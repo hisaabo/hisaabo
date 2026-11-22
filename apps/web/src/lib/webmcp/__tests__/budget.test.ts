@@ -16,7 +16,7 @@ import {
   writesRemaining,
   writesUsed,
 } from "../budget";
-import { buildBrowserTool } from "../runtime";
+import { buildBrowserTool, resetWriteThrottle } from "../runtime";
 import { setAgentAccessEnabled } from "../preferences";
 import type { WebMcpToolContext, WebMcpToolDefinition } from "../types";
 
@@ -43,8 +43,12 @@ function writeDef(execute: WebMcpToolDefinition["execute"] = async () => ({ id: 
   };
 }
 
-beforeEach(() => resetWriteBudget());
+beforeEach(() => {
+  resetWriteBudget();
+  resetWriteThrottle();
+});
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   localStorage.clear();
 });
@@ -73,6 +77,8 @@ describe("write budget", () => {
 
 describe("write budget in the runtime", () => {
   it("stops the agent after 20 approved writes, without prompting for the 21st", async () => {
+    // The per-minute throttle is a separate limit: pace the writes so only the session budget is in play.
+    vi.useFakeTimers();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const execute = vi.fn(async () => ({ id: "1" }));
     const tool = buildBrowserTool(writeDef(execute), ctx());
@@ -80,6 +86,7 @@ describe("write budget in the runtime", () => {
     for (let i = 0; i < WRITE_BUDGET; i++) {
       const result = await tool.execute({ name: `P${i}` }, opts());
       expect(result).not.toMatchObject({ isError: true });
+      vi.advanceTimersByTime(7_000);
     }
     expect(execute).toHaveBeenCalledTimes(WRITE_BUDGET);
     expect(confirm).toHaveBeenCalledTimes(WRITE_BUDGET);

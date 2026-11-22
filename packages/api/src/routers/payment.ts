@@ -2,10 +2,11 @@ import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
-import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
+import { createPaymentSchema, idempotencyInputSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { claimIdempotencyKey, completeIdempotencyKey } from "../lib/idempotency.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
@@ -138,6 +139,8 @@ async function assertBankAccountUsable(tx: PaymentTx, ability: AppAbility, busin
     .limit(1);
   if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
 }
+
+type PaymentRow = typeof payments.$inferSelect;
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -322,9 +325,15 @@ export const paymentRouter = router({
       return account ?? null;
     }),
 
-  create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createPaymentSchema.and(idempotencyInputSchema)).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Payment");
-    const payment = await ctx.db.transaction(async (tx) => {
+    const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "payment.create", key: input.idempotencyKey, input };
+    const created = await ctx.db.transaction(async (tx) => {
+      // An idempotency key that was already used with this exact input returns the
+      // first call's payment here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey<PaymentRow>(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, payment: claim.value };
+
       // Security: validate that partyId belongs to the current business.
       const [partyCheck] = await tx.select({ id: parties.id, name: parties.name, type: parties.type })
         .from(parties)
@@ -508,8 +517,11 @@ export const paymentRouter = router({
         }
       }
 
-      return payment;
+      await completeIdempotencyKey(tx, claim, payment);
+      return { replayed: false as const, payment };
     });
+    if (created.replayed) return created.payment;
+    const payment = created.payment;
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,

@@ -14,6 +14,7 @@ import { TRPCClientError } from "@trpc/client";
 import { resetWriteBudget } from "../budget";
 import {
   buildBrowserTool,
+  resetWriteThrottle,
   getModelContext,
   isWebMcpAvailable,
   isWriteTool,
@@ -83,7 +84,10 @@ function trpcError(code: string, message: string, data: Record<string, unknown> 
   return TRPCClientError.from(response as unknown as Error);
 }
 
-beforeEach(() => resetWriteBudget());
+beforeEach(() => {
+  resetWriteBudget();
+  resetWriteThrottle();
+});
 
 afterEach(() => {
   removeModelContext();

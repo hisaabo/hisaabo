@@ -77,6 +77,64 @@ export function searchProp(description: string): JsonSchema {
   return { type: "string", maxLength: 200, description };
 }
 
+/** Optional idempotency key property for create tools (invoice_create, payment_create). */
+export function idempotencyKeyProp(): JsonSchema {
+  return {
+    type: "string",
+    pattern: "^[A-Za-z0-9_.:-]{8,100}$",
+    description:
+      "Optional. Leave it out: Hisaabo derives one from the request, so retrying the IDENTICAL call within 15 minutes returns the record the first call created instead of creating a second one. Send your own key only to make a deliberate second copy of an identical record (use a new key) or to pin a retry to a specific attempt (reuse the key). 8-100 characters: letters, digits and _ . : -",
+  };
+}
+
+/** Canonical JSON: keys sorted, `idempotencyKey` and undefined dropped, so equal requests serialise equally. */
+function canonicalJson(value: unknown): string {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v !== null && typeof v === "object") {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .filter(([k, val]) => k !== "idempotencyKey" && val !== undefined)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([k, val]) => [k, walk(val)]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(walk(value));
+}
+
+/** cyrb53: a fast 53-bit string hash. Not cryptographic; the server also checks the full request, so a collision is a CONFLICT, never a silent replay. */
+function cyrb53(text: string, seed: number): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+/**
+ * The idempotency key a write tool sends when the agent did not supply one:
+ * stable for the same business, tool and input, so an agent's retry (or a
+ * duplicated tool call) carries the same key and the server returns the first
+ * record. Different input, business or tool give a different key.
+ */
+export function deriveIdempotencyKey(tool: string, businessId: string | null, input: Record<string, unknown>): string {
+  const body = `${tool}|${businessId ?? ""}|${canonicalJson(input)}`;
+  return `wm-${cyrb53(body, 1).toString(16).padStart(14, "0")}${cyrb53(body, 2).toString(16).padStart(14, "0")}`;
+}
+
+/** The key the agent asked for if it is well formed, otherwise one derived from the request. */
+export function idempotencyKeyFor(tool: string, businessId: string | null, input: Record<string, unknown>): string {
+  const supplied = str(input.idempotencyKey);
+  return supplied && /^[A-Za-z0-9_.:-]{8,100}$/.test(supplied) ? supplied : deriveIdempotencyKey(tool, businessId, input);
+}
+
 /**
  * Build an input schema, guaranteeing the three invariants the catalog test
  * enforces: object type, explicit `required`, no extra keys.

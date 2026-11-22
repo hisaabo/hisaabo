@@ -599,6 +599,35 @@ export const auditLog = pgTable("audit_log", {
   index("audit_log_date_idx").on(t.businessId, t.createdAt),
 ]);
 
+// ── Idempotency keys ──────────────────────────────────────────
+//
+// Remembers the response of a create mutation (invoice.create, payment.create)
+// under a client-supplied key, so a retried or double-submitted call returns the
+// record the first call made instead of creating a second one. The claim row is
+// written in the SAME transaction as the record it protects: either both exist
+// or neither does, so there is no "in progress" state to get stuck in. Rows are
+// short-lived (expiresAt) and purged opportunistically by the next keyed write
+// in the business. Scoped per business, user and procedure, so one user can
+// never read another's stored response. See packages/api/src/lib/idempotency.ts.
+
+export const idempotencyKeys = pgTable("idempotency_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  // Plain UUID, no FK: users live in the control schema (a different DB in cloud mode).
+  userId: uuid("user_id").notNull(),
+  scope: text("scope").notNull(), // procedure, e.g. "invoice.create"
+  key: text("key").notNull(),
+  // sha256 of the canonical input: same key + different input is rejected, not replayed.
+  requestHash: text("request_hash").notNull(),
+  // superjson of what the first call returned; null only inside the claiming transaction.
+  response: text("response"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [
+  uniqueIndex("idempotency_keys_claim_idx").on(t.businessId, t.userId, t.scope, t.key),
+  index("idempotency_keys_expires_idx").on(t.businessId, t.expiresAt),
+]);
+
 // ── Shipments ─────────────────────────────────────────────────
 
 export const shipmentStatusEnum = pgEnum("shipment_status", [
