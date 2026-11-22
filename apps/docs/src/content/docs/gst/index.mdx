@@ -56,10 +56,10 @@ See [GSTR-1](/gst/gstr1) for detailed instructions.
 | **Tax Payable** | Output tax (from sales), net of credit notes and including sale-side debit notes |
 | **Net Tax** | Tax payable minus ITC = tax you owe to the government (negative = credit carried forward) |
 
-GSTR-1 lists your invoices at their full value and the notes in their own sections; GSTR-3B nets them, so the two returns differ by the notes of the month, as they should. Where a month's GST on a document is an odd number of paise, CGST takes the lower half and SGST the remainder (GST of ₹102.59 is CGST ₹51.29 + SGST ₹51.30, as printed on the invoice), so CGST + SGST always equals the tax charged.
+GSTR-1 lists your invoices at their full value and the notes in their own sections; GSTR-3B nets them, so the two returns differ by the notes of the month, as they should. GST is split into CGST and SGST **line by line**, the same way the e-invoice (IRP) payload does: for each line CGST is half the tax rounded half-up and SGST is the remainder, so an odd paisa on a line goes to CGST (a line with ₹0.29 of GST is CGST ₹0.15 + SGST ₹0.14). The invoice, the books, GSTR-1, GSTR-3B, GSTR-9, the PDF and the e-way bill all use this one rule, so CGST + SGST always equals the tax charged and the sections of GSTR-1 tie to its totals.
 
 :::note[Past months changed in v0.10.1]
-Before v0.10.1, GSTR-3B ignored credit notes, returns and debit notes on the output side, added purchase returns to ITC, and rounded the odd paisa up for both CGST and SGST. Reports are recomputed every time you open them, so months you have already filed may now show different figures. Compare them with what was filed; see [Upgrading](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md).
+Before v0.10.1, GSTR-3B ignored credit notes, returns and debit notes on the output side, added purchase returns to ITC, and rounded the odd paisa up for both CGST and SGST (a different split from the invoice and the e-invoice). Reports are recomputed every time you open them, so months you have already filed may now show different figures. Compare them with what was filed; see [Upgrading](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md).
 :::
 
 ## CSV export

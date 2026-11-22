@@ -1,9 +1,10 @@
 import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
-import { csvCell, csvRow, money } from "@hisaabo/shared";
+import { csvCell, csvRow, money, splitDocumentGst } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
+import { documentGstSplit, loadLineGstSplits } from "./gst-split.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -203,22 +204,25 @@ export async function generateGSTR1(
 
   // All money below is accumulated as decimal strings (integer paise) and only
   // converted to the JS numbers of the report types when the rows are emitted.
-  // Intra-state tax is summed FIRST and split into CGST/SGST once per group with
-  // `money.splitHalf` (odd paisa to SGST, the same rule the invoice, the ledger
-  // and the ITC ledger use), so CGST + SGST always equals the tax they came from.
-  interface TaxSplit { cgst: number; sgst: number; igst: number }
-  const taxSplit = (intraTax: string, interTax: string): TaxSplit => {
-    const [cgst, sgst] = money.splitHalf(intraTax);
-    return { cgst: money.toNumber(cgst), sgst: money.toNumber(sgst), igst: money.toNumber(interTax) };
-  };
-
+  // CGST / SGST are split LINE BY LINE with `money.splitHalf` (the e-invoice rule, see
+  // gst-split.ts) and every section adds those line splits up, so the B2B rows, the B2CS
+  // rows, the HSN rows and the totals all tie to the same figures, and CGST + SGST always
+  // equals the tax they came from.
   const b2b: GSTR1Report["b2b"] = [];
   const b2cLargeMap = new Map<string, { state: string; taxable: string; igst: string }>();
-  const b2cSmallMap = new Map<number, { taxRate: number; taxable: string; intraTax: string; interTax: string }>();
+  const b2cSmallMap = new Map<number, {
+    taxRate: number; taxable: string; cgst: string; sgst: string; igst: string;
+  }>();
   const hsnSummaryMap = new Map<string, {
     hsn: string; description: string; quantity: number;
-    taxable: string; totalValue: string; intraTax: string; interTax: string;
+    taxable: string; totalValue: string; cgst: string; sgst: string; igst: string;
   }>();
+  /** One line's tax as [cgst, sgst, igst]: split in half (odd paisa to CGST) intra-state, IGST otherwise. */
+  const lineTaxHeads = (itemTax: string, sameState: boolean): [string, string, string] => {
+    if (!sameState) return ["0.00", "0.00", itemTax];
+    const [cgst, sgst] = money.splitHalf(itemTax);
+    return [cgst, sgst, "0.00"];
+  };
 
   let totalTaxableValue = "0.00";
   let totalCgst = "0.00";
@@ -233,7 +237,9 @@ export async function generateGSTR1(
     const tax = money.add(inv.taxAmount, "0");
     const total = money.add(inv.totalAmount, "0");
 
-    const [cgst, sgst] = sameState ? money.splitHalf(tax) : ["0.00", "0.00"];
+    const [cgst, sgst] = sameState
+      ? splitDocumentGst(tax, lineItems.map((li) => li.taxAmount))
+      : ["0.00", "0.00"];
     const igst = sameState ? "0.00" : tax;
 
     totalTaxableValue = money.add(totalTaxableValue, taxable);
@@ -267,14 +273,13 @@ export async function generateGSTR1(
       // B2C Small
       for (const li of lineItems) {
         const rate = parseFloat(li.taxPercent);
-        const existing = b2cSmallMap.get(rate) || { taxRate: rate, taxable: "0.00", intraTax: "0.00", interTax: "0.00" };
+        const existing = b2cSmallMap.get(rate) || { taxRate: rate, taxable: "0.00", cgst: "0.00", sgst: "0.00", igst: "0.00" };
         const itemTax = money.add(li.taxAmount, "0");
+        const [lCgst, lSgst, lIgst] = lineTaxHeads(itemTax, !!sameState);
         existing.taxable = money.add(existing.taxable, money.sub(li.totalAmount, itemTax));
-        if (sameState) {
-          existing.intraTax = money.add(existing.intraTax, itemTax);
-        } else {
-          existing.interTax = money.add(existing.interTax, itemTax);
-        }
+        existing.cgst = money.add(existing.cgst, lCgst);
+        existing.sgst = money.add(existing.sgst, lSgst);
+        existing.igst = money.add(existing.igst, lIgst);
         b2cSmallMap.set(rate, existing);
       }
     }
@@ -289,17 +294,16 @@ export async function generateGSTR1(
         // group — use itemName (required snapshot), not the optional notes
         // column.
         hsn: itemHsn, description: li.itemName, quantity: 0,
-        taxable: "0.00", totalValue: "0.00", intraTax: "0.00", interTax: "0.00",
+        taxable: "0.00", totalValue: "0.00", cgst: "0.00", sgst: "0.00", igst: "0.00",
       };
       const itemTax = money.add(li.taxAmount, "0");
+      const [lCgst, lSgst, lIgst] = lineTaxHeads(itemTax, !!sameState);
       existing.quantity += parseFloat(li.quantity);
       existing.taxable = money.add(existing.taxable, money.sub(li.totalAmount, itemTax));
       existing.totalValue = money.add(existing.totalValue, li.totalAmount);
-      if (sameState) {
-        existing.intraTax = money.add(existing.intraTax, itemTax);
-      } else {
-        existing.interTax = money.add(existing.interTax, itemTax);
-      }
+      existing.cgst = money.add(existing.cgst, lCgst);
+      existing.sgst = money.add(existing.sgst, lSgst);
+      existing.igst = money.add(existing.igst, lIgst);
       hsnSummaryMap.set(itemHsn, existing);
     }
   }
@@ -311,6 +315,7 @@ export async function generateGSTR1(
   // is not an outward credit note. A purchase-side debit note / purchase return is a document we
   // issue to a supplier, likewise not an outward supply.
   const rawNotes = await db.select({
+    id: invoices.id,
     documentType: invoices.documentType,
     type: invoices.type,
     invoiceNumber: invoices.invoiceNumber,
@@ -357,10 +362,15 @@ export async function generateGSTR1(
     : [];
   const refInvoiceMap = new Map(refInvoiceNumbers.map((r) => [r.id, r.invoiceNumber]));
 
+  // Per-line CGST / SGST sums of the notes (the e-invoice rule, see gst-split.ts).
+  const noteLineSplits = rawNotes.length > 0
+    ? await loadLineGstSplits(db, businessId, [inArray(invoices.id, rawNotes.map((n) => n.id))])
+    : new Map();
+
   const toNote = (n: (typeof rawCreditNotes)[number]): GSTR1Note => {
     const tax = money.add(n.taxAmount, "0");
     const sameState = isSameState(n.partyState, n.partyStateCode);
-    const [cgst, sgst] = sameState ? money.splitHalf(tax) : ["0.00", "0.00"];
+    const [cgst, sgst] = sameState ? documentGstSplit(tax, noteLineSplits.get(n.id)) : ["0.00", "0.00"];
     return {
       invoiceNumber: n.invoiceNumber,
       originalInvoiceNumber: n.referenceDocumentId ? refInvoiceMap.get(n.referenceDocumentId) : undefined,
@@ -395,14 +405,18 @@ export async function generateGSTR1(
     b2cSmall: Array.from(b2cSmallMap.values()).map((e) => ({
       taxRate: e.taxRate,
       taxableValue: money.toNumber(e.taxable),
-      ...taxSplit(e.intraTax, e.interTax),
+      cgst: money.toNumber(e.cgst),
+      sgst: money.toNumber(e.sgst),
+      igst: money.toNumber(e.igst),
     })),
     hsn: Array.from(hsnSummaryMap.values()).map((e) => ({
       hsn: e.hsn,
       description: e.description,
       quantity: e.quantity,
       taxableValue: money.toNumber(e.taxable),
-      ...taxSplit(e.intraTax, e.interTax),
+      cgst: money.toNumber(e.cgst),
+      sgst: money.toNumber(e.sgst),
+      igst: money.toNumber(e.igst),
       totalValue: money.toNumber(e.totalValue),
     })),
     creditNotes,
@@ -441,6 +455,7 @@ export async function generateGSTR3B(
   // which takes input credit back like a purchase return. Only invoices and these reversals
   // count; quotations, proformas and challans never reach ITC.
   const purchaseDocs = await db.select({
+    id: invoices.id,
     documentType: invoices.documentType,
     type: invoices.type,
     taxAmount: invoices.taxAmount,
@@ -463,6 +478,11 @@ export async function generateGSTR3B(
   // RCM accumulators: Table 3.1(d) — inward supplies liable to reverse charge
   let rcmTaxableValue = "0.00", rcmCgst = "0.00", rcmSgst = "0.00", rcmIgst = "0.00";
 
+  // Per-line CGST / SGST sums of the purchase-side documents (the e-invoice rule, see gst-split.ts).
+  const purchaseLineSplits = purchaseDocs.length > 0
+    ? await loadLineGstSplits(db, businessId, [inArray(invoices.id, purchaseDocs.map((d) => d.id))])
+    : new Map();
+
   for (const inv of purchaseDocs) {
     const cls = classifyLedgerDocument(inv.documentType, inv.type);
     if (cls?.side !== "purchase") continue; // a sale-side document that shares the documentType
@@ -476,7 +496,7 @@ export async function generateGSTR3B(
       ? biz.stateCode === inv.partyStateCode
       : (biz?.state && inv.partyState &&
           biz.state.toLowerCase() === inv.partyState.toLowerCase());
-    const [cgst, sgst] = sameState ? money.splitHalf(tax) : ["0.00", "0.00"];
+    const [cgst, sgst] = sameState ? documentGstSplit(tax, purchaseLineSplits.get(inv.id)) : ["0.00", "0.00"];
     const igst = sameState ? "0.00" : tax;
 
     if (inv.isReverseCharge) {

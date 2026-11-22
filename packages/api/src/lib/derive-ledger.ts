@@ -44,6 +44,7 @@ import {
 } from "@hisaabo/db";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { paymentSettlement, paymentTdsSql } from "./payment-settlement.js";
+import { loadLineGstSplits } from "./gst-split.js";
 import {
   buildDocumentLines,
   creditLine,
@@ -229,8 +230,14 @@ export async function deriveLedger(
   // Exclude cancelled invoices in JS (avoids sql`` template in shared code)
   const activeInvRows = properInvRows.filter((r) => r.status !== "cancelled");
 
+  // Per-line CGST / SGST sums for the intra-state split (the e-invoice rule), one row per invoice.
+  const lineGstSplits = await loadLineGstSplits(db, businessId, [
+    isNull(invoices.deletedAt),
+    ...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }),
+  ]);
+
   for (const inv of activeInvRows) {
-    const lines = buildDocumentLines(inv, {
+    const lines = buildDocumentLines({ ...inv, lineGstSplit: lineGstSplits.get(inv.id) }, {
       coa,
       systemCodes,
       sameState: isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState),

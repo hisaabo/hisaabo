@@ -288,7 +288,7 @@ describe("buildDocumentLines", () => {
     }
   });
 
-  it("splits odd GST paise as CGST = floor, SGST = remainder", () => {
+  it("splits odd GST paise as CGST = round-half-up(tax / 2), SGST = remainder (the e-invoice rule)", () => {
     const { coa, systemCodes } = seededCoa();
     const lines = buildDocumentLines(
       doc({ documentType: "invoice", type: "sale", subtotal: "659.96", taxAmount: "102.59", totalAmount: "762.55" }),
@@ -297,8 +297,30 @@ describe("buildDocumentLines", () => {
     expect(rows(lines)).toEqual([
       ["1100", "762.55", "0.00"],
       ["4000", "0.00", "659.96"],
-      ["2100", "0.00", "51.29"],
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"],
+      ["2101", "0.00", "51.29"],
+    ]);
+  });
+
+  it("uses the per-line sums when given: two odd 0.01 lines are CGST 0.02 / SGST 0.00, not 0.01 / 0.01", () => {
+    const { coa, systemCodes } = seededCoa();
+    const base = { documentType: "invoice", type: "sale", subtotal: "0.10", taxAmount: "0.02", totalAmount: "0.12" };
+    const withLines = buildDocumentLines(
+      doc({ ...base, lineGstSplit: { taxPaise: 2, cgstPaise: 2 } }),
+      { coa, systemCodes, sameState: true },
+    );
+    expect(rows(withLines).filter((r) => r[0] === "2100" || r[0] === "2101")).toEqual([
+      ["2100", "0.00", "0.02"],
+      ["2101", "0.00", "0.00"],
+    ]);
+    // line sums that do not add up to the document tax are ignored: the tax is split as one amount
+    const mismatch = buildDocumentLines(
+      doc({ ...base, lineGstSplit: { taxPaise: 3, cgstPaise: 3 } }),
+      { coa, systemCodes, sameState: true },
+    );
+    expect(rows(mismatch).filter((r) => r[0] === "2100" || r[0] === "2101")).toEqual([
+      ["2100", "0.00", "0.01"],
+      ["2101", "0.00", "0.01"],
     ]);
   });
 

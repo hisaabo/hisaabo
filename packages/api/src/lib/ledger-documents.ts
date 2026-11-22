@@ -39,6 +39,7 @@ import {
   OTHER_CHARGES_CODE,
   ROUND_OFF_CODE,
 } from "./coa-seed.js";
+import { documentGstSplit, type LineGstSplit } from "./gst-split.js";
 import type { DerivedEntryLine } from "./derive-ledger.js";
 
 // ── Chart-of-accounts helpers ───────────────────────────────────
@@ -213,6 +214,11 @@ export function splitDocumentAdjustments(doc: AdjustableDocument): DocumentAdjus
 export interface LedgerDocument extends AdjustableDocument {
   documentType: string;
   type: string;
+  /**
+   * The document's line taxes summed per line (see gst-split.ts). The intra-state CGST / SGST
+   * split follows the e-invoice rule, line by line; without it the tax is split as one amount.
+   */
+  lineGstSplit?: LineGstSplit | null;
 }
 
 export interface PostingContext {
@@ -247,7 +253,7 @@ export function buildDocumentLines(doc: LedgerDocument, cx: PostingContext): Der
   const taxLines = (accounts: [string, string, string], normal: "dr" | "cr") => {
     if (!tax) return;
     if (sameState) {
-      const [cgst, sgst] = money.splitHalf(tax);
+      const [cgst, sgst] = documentGstSplit(tax, doc.lineGstSplit);
       post(getAccount(coa, accounts[0]), cgst, normal);
       post(getAccount(coa, accounts[1]), sgst, normal);
     } else {

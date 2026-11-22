@@ -76,19 +76,22 @@ export const money = {
 
   /**
    * Split an amount into two halves that add back to it exactly, in integer
-   * paise. The first half is floor(amount / 2); the odd paisa, if any, goes to
-   * the SECOND half (e.g. 102.59 -> ["51.29", "51.30"]).
+   * paise. The first half is ceil(amount / 2), i.e. the odd paisa, if any, goes
+   * to the FIRST half (e.g. 102.59 -> ["51.30", "51.29"]); the second half is
+   * the remainder.
    *
-   * This is THE intra-state GST split: the first half is CGST, the second SGST.
-   * Every surface that splits tax (the posted ledger, the ITC ledger, GSTR-1,
-   * GSTR-3B) must use it so the same invoice never reports two different
-   * CGST/SGST figures. Negative amounts split symmetrically (-102.59 ->
-   * ["-51.29", "-51.30"]).
+   * This is THE intra-state GST split: the first half is CGST, the second SGST,
+   * and it is the e-invoice (IRP) rule: CGST = round-half-up(tax / 2), SGST =
+   * tax - CGST. The IRP-signed e-invoice is what the government holds, so every
+   * surface that splits tax (ledger, ITC ledger, GSTR-1 / 3B / 9, invoice PDF,
+   * e-way bill, the IRP payload itself) must use it, and apply it PER LINE (see
+   * `splitGstByLine`), exactly as the IRP payload does. Negative amounts split
+   * symmetrically (-102.59 -> ["-51.30", "-51.29"]).
    */
   splitHalf(amount: string | number): [string, string] {
     const total = toPaise(amount);
     const abs = Math.abs(total);
-    const first = Math.floor(abs / 2);
+    const first = Math.ceil(abs / 2);
     const second = abs - first;
     const sign = total < 0 ? -1 : 1;
     return [fromPaise(sign * first), fromPaise(sign * second)];

@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { money, splitDocumentGst } from "@hisaabo/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
@@ -185,21 +186,23 @@ function buildGstBreakdown(data: InvoicePDFData): GstBreakdown[] {
   const sameState = isSameState(data);
   const map = new Map<string, GstBreakdown>();
 
+  // Money is added in integer paise, and each line's tax is split with the one CGST / SGST rule
+  // (the e-invoice one: odd paisa to CGST), so the rows add up to the tax on the invoice.
   for (const item of data.lineItems) {
     const rate = item.taxPercent;
-    const taxable = parseFloat(item.totalAmount) - parseFloat(item.taxAmount);
-    const taxAmt = parseFloat(item.taxAmount);
+    const taxable = money.sub(item.totalAmount, item.taxAmount);
 
     if (!map.has(rate)) {
       map.set(rate, { rate, taxable: 0, cgst: 0, sgst: 0, igst: 0 });
     }
     const entry = map.get(rate)!;
-    entry.taxable += taxable;
+    entry.taxable = money.toNumber(money.add(entry.taxable, taxable));
     if (sameState) {
-      entry.cgst += taxAmt / 2;
-      entry.sgst += taxAmt / 2;
+      const [cgst, sgst] = money.splitHalf(item.taxAmount);
+      entry.cgst = money.toNumber(money.add(entry.cgst, cgst));
+      entry.sgst = money.toNumber(money.add(entry.sgst, sgst));
     } else {
-      entry.igst += taxAmt;
+      entry.igst = money.toNumber(money.add(entry.igst, item.taxAmount));
     }
   }
 
@@ -662,9 +665,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   if (gstMode && parseFloat(data.taxAmount) > 0) {
     if (sameState) {
-      const halfTax = (parseFloat(data.taxAmount) / 2).toFixed(2);
-      totalRow("CGST", halfTax);
-      totalRow("SGST", halfTax);
+      // Per line, odd paisa to CGST: the same split as the GST returns and the e-invoice.
+      const [cgst, sgst] = splitDocumentGst(data.taxAmount, data.lineItems.map((li) => li.taxAmount));
+      totalRow("CGST", cgst);
+      totalRow("SGST", sgst);
     } else {
       totalRow("IGST", data.taxAmount);
     }

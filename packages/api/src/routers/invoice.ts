@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { getTenantDb, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -459,13 +459,14 @@ export const invoiceRouter = router({
 
           const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
 
-          // The one CGST/SGST split (odd paisa to SGST), shared with the ledger and the GST returns
+          // The one CGST/SGST split (per line, odd paisa to CGST: the e-invoice rule), shared with
+          // the ledger and the GST returns
           let cgst = "0";
           let sgst = "0";
           let igst = "0";
 
           if (sameState) {
-            [cgst, sgst] = money.splitHalf(totals.taxTotal);
+            [cgst, sgst] = splitDocumentGst(totals.taxTotal, processedItems.map((li) => li.taxAmount));
           } else {
             igst = money.add(totals.taxTotal, "0");
           }

@@ -12,6 +12,7 @@
  */
 
 import type { IRPInvoiceJson } from "./irp-client.js";
+import { money } from "@hisaabo/shared";
 
 // ── Types (subset of what we need from DB rows) ────────────────────────────────
 
@@ -191,8 +192,13 @@ export function mapInvoiceToIRP(
     if (isInterState) {
       igstAmt = totalTax;
     } else {
-      cgstAmt = round2(totalTax / 2);
-      sgstAmt = round2(totalTax - cgstAmt); // handle odd paise
+      // CGST = round-half-up(tax / 2), SGST = the remainder (odd paisa to CGST). Done in integer
+      // paise through the shared split: `round2(totalTax / 2)` in floating point rounded some odd
+      // paise down (0.29 / 2 = 0.145 is 0.14499...), which is not what the rule says and not what
+      // the ledger and the GST returns, which use the same function, report.
+      const [cgstHalf, sgstHalf] = money.splitHalf(totalTax);
+      cgstAmt = money.toNumber(cgstHalf);
+      sgstAmt = money.toNumber(sgstHalf);
     }
 
     const totItemVal = round2(assAmt + totalTax);

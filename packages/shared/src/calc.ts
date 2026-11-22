@@ -44,6 +44,41 @@ export function calcLineItem(item: LineItemInput): LineItemResult {
   return { subtotal, discountAmount, afterDiscount, taxAmount, total };
 }
 
+/**
+ * The intra-state CGST / SGST of a document: the sum of each LINE's tax split
+ * with `money.splitHalf` (the odd paisa of every line goes to CGST). This is how
+ * the e-invoice (IRP) payload splits GST, so it is the single source of truth for
+ * the ledger, the ITC ledger, GSTR-1 / 3B / 9, the invoice PDF and the e-way
+ * bill. The two halves always add up to the sum of the line taxes.
+ */
+export function splitGstByLine(lineTaxes: Array<string | number>): { cgst: string; sgst: string } {
+  let cgst = "0.00";
+  let sgst = "0.00";
+  for (const tax of lineTaxes) {
+    const [c, s] = money.splitHalf(tax);
+    cgst = money.add(cgst, c);
+    sgst = money.add(sgst, s);
+  }
+  return { cgst, sgst };
+}
+
+/**
+ * [CGST, SGST] of a document from its line taxes (`splitGstByLine`), falling
+ * back to splitting the document's `taxAmount` as one amount when there are no
+ * lines or they do not add up to it (a legacy import, a document without items).
+ */
+export function splitDocumentGst(
+  taxAmount: string | number,
+  lineTaxes: ReadonlyArray<string | number>,
+): [string, string] {
+  const tax = money.add(taxAmount, "0");
+  const lines = splitGstByLine([...lineTaxes]);
+  if (lineTaxes.length > 0 && money.compare(money.add(lines.cgst, lines.sgst), tax) === 0) {
+    return [lines.cgst, lines.sgst];
+  }
+  return money.splitHalf(tax);
+}
+
 export interface InvoiceTotalsInput {
   lineItems: LineItemInput[];
   charges?: Array<{ amount: string }>;

@@ -16,6 +16,7 @@
 
 import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
+import { money, splitDocumentGst } from "@hisaabo/shared";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -104,18 +105,20 @@ function isInterState(fromStateCode: string | null, toStateCode: string | null):
 
 /**
  * Split tax amount into CGST/SGST/IGST based on supply type.
- * For intra-state: CGST = SGST = taxAmount / 2, IGST = 0
+ * For intra-state: CGST + SGST = the sum of each line's split, odd paisa to CGST (the
+ * e-invoice rule, shared with the ledger and the GST returns); IGST = 0
  * For inter-state: IGST = taxAmount, CGST = SGST = 0
  */
 function splitTax(
   taxAmount: number,
+  lineTaxes: string[],
   interState: boolean,
 ): { cgst: number; sgst: number; igst: number } {
   if (interState) {
     return { cgst: 0, sgst: 0, igst: taxAmount };
   }
-  const half = Math.round((taxAmount / 2) * 100) / 100;
-  return { cgst: half, sgst: half, igst: 0 };
+  const [cgst, sgst] = splitDocumentGst(taxAmount, lineTaxes);
+  return { cgst: money.toNumber(cgst), sgst: money.toNumber(sgst), igst: 0 };
 }
 
 /**
@@ -262,7 +265,7 @@ export function mapInvoiceToEWB(
   });
 
   const totalTaxRounded = Math.round(totalTax * 100) / 100;
-  const taxSplit = splitTax(totalTaxRounded, interState);
+  const taxSplit = splitTax(totalTaxRounded, lineItems.map((li) => li.taxAmount), interState);
   const totalValue = parseFloat(invoice.subtotal) || 0;
 
   return {

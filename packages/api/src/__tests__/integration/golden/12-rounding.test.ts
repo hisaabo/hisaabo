@@ -19,8 +19,17 @@
  *   GST      (sum of tax)       5.00 + 10.37 + 27.00 + 17.80 + 28.28 + 13.64 + 0.50   = 102.59  (odd paisa)
  *   total    659.96 + 102.59 = 762.55 = sum of the line totals
  *
- *   Intra-state the odd paisa is split 51.29 CGST + 51.30 SGST (derive-ledger:
- *   floor half to CGST, remainder to SGST); inter-state it is a single IGST 102.59.
+ *   Intra-state the tax is split LINE BY LINE, the e-invoice (IRP) rule: per line CGST =
+ *   round-half-up(tax / 2) and SGST = tax - CGST, i.e. the odd paisa of a line goes to CGST,
+ *   and the document figures are the sums of the lines (invoice-to-irp.ts, shared
+ *   splitGstByLine). In paise the line taxes are 500, 1037, 2700, 1780, 2828, 1364, 50 and
+ *   only line 2 (1037) is odd:
+ *     CGST = 250 + 519 + 1350 + 890 + 1414 + 682 + 25 = 5130 = 51.30
+ *     SGST = 250 + 518 + 1350 + 890 + 1414 + 682 + 25 = 5129 = 51.29
+ *   (Before the IRP rule was adopted this scenario was pinned as 51.29 CGST + 51.30 SGST,
+ *   "floor half to CGST", a convention that no filed document uses: the e-invoice the
+ *   government holds splits the odd paisa the other way, so the ledger and the returns follow
+ *   it.) Inter-state it is a single IGST 102.59.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import {
@@ -87,14 +96,14 @@ describe("golden 12A: many-line intra-state sale ties to the paisa", () => {
     // + 116.70 + 129.29 + 127.27 + 10.49 = 762.55.
   });
 
-  it("trial balance: the odd paisa of GST splits 51.29 / 51.30 and debits == credits exactly", () => {
+  it("trial balance: the odd paisa of GST splits 51.30 CGST / 51.29 SGST and debits == credits exactly", () => {
     expect(tbRows(b)).toEqual([
       ["1100", "762.55", "0.00"],
-      ["2100", "0.00", "51.29"], // floor(10259 / 2) paise
-      ["2101", "0.00", "51.30"], // the remaining paisa goes to SGST
+      ["2100", "0.00", "51.30"], // CGST: sum of the line halves, line 2's odd paisa included
+      ["2101", "0.00", "51.29"], // SGST: the remainder of every line
       ["4000", "0.00", "659.96"],
     ]);
-    // Credits 51.29 + 51.30 + 659.96 = 762.55 = the receivable.
+    // Credits 51.30 + 51.29 + 659.96 = 762.55 = the receivable.
     expect(b.tb.totalDebit).toBe("762.55");
     expect(b.tb.totalCredit).toBe("762.55");
   });
@@ -111,8 +120,8 @@ describe("golden 12A: many-line intra-state sale ties to the paisa", () => {
     expect(bsSummary(b)).toEqual({
       assets: [["1100", "762.55"]],
       liabilities: [
-        ["2100", "51.29"],
-        ["2101", "51.30"],
+        ["2100", "51.30"],
+        ["2101", "51.29"],
       ],
       equity: [["9999", "659.96"]],
       totalAssets: "762.55",
@@ -125,15 +134,16 @@ describe("golden 12A: many-line intra-state sale ties to the paisa", () => {
   it("GSTR-3B CGST + SGST equals the invoice GST exactly (102.59)", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 10 });
     expect(fixed2(r.taxPayable.cgst + r.taxPayable.sgst)).toBe("102.59");
-    // The odd paisa goes to SGST, as on the invoice's ledger entry (2100 = 51.29, 2101 = 51.30).
-    expect(fixed2(r.taxPayable.cgst)).toBe("51.29");
-    expect(fixed2(r.taxPayable.sgst)).toBe("51.30");
+    // The odd paisa goes to CGST (the e-invoice rule), as on the invoice's ledger entry
+    // (2100 = 51.30, 2101 = 51.29).
+    expect(fixed2(r.taxPayable.cgst)).toBe("51.30");
+    expect(fixed2(r.taxPayable.sgst)).toBe("51.29");
   });
 
   it("GSTR-1 splits the same way: totals, B2CS row and HSN row all add up to 102.59", async () => {
     const r = await w.caller.gst.gstr1({ year: 2025, month: 10 });
-    expect(fixed2(r.totalCgst)).toBe("51.29");
-    expect(fixed2(r.totalSgst)).toBe("51.30");
+    expect(fixed2(r.totalCgst)).toBe("51.30");
+    expect(fixed2(r.totalSgst)).toBe("51.29");
     expect(fixed2(r.totalTax)).toBe("102.59");
     // Unregistered customer, intra-state: B2CS rows by rate. Their tax adds up to the invoice's.
     const b2csTax = r.b2cSmall.reduce((acc, row) => acc + Math.round((row.cgst + row.sgst) * 100), 0);
@@ -141,6 +151,7 @@ describe("golden 12A: many-line intra-state sale ties to the paisa", () => {
     const hsnTax = r.hsn.reduce((acc, row) => acc + Math.round((row.cgst + row.sgst) * 100), 0);
     expect(hsnTax).toBe(10259);
   });
+
 });
 
 describe("golden 12B: the same invoice inter-state carries one IGST amount", () => {
@@ -171,14 +182,14 @@ describe("golden 12C: the same lines on a purchase", () => {
     b = await book(w);
   });
 
-  it("trial balance: input GST splits 51.29 / 51.30, payable is the invoice total", () => {
+  it("trial balance: input GST splits 51.30 / 51.29, payable is the invoice total", () => {
     expect(tbRows(b)).toEqual([
-      ["1510", "51.29", "0.00"],
-      ["1511", "51.30", "0.00"],
+      ["1510", "51.30", "0.00"],
+      ["1511", "51.29", "0.00"],
       ["2000", "0.00", "762.55"],
       ["5000", "659.96", "0.00"],
     ]);
-    // Debits 51.29 + 51.30 + 659.96 = 762.55 = credits.
+    // Debits 51.30 + 51.29 + 659.96 = 762.55 = credits.
     expect(b.tb.totalDebit).toBe("762.55");
     expect(b.tb.totalCredit).toBe("762.55");
     expectBooksBalance(b);
@@ -186,14 +197,14 @@ describe("golden 12C: the same lines on a purchase", () => {
 
   it("the ITC ledger splits the paisa the same way as the general ledger", async () => {
     const dash = await w.caller.itc.dashboard({ returnPeriod: "2025-10" });
-    expect(dash.summary.available).toMatchObject({ cgst: "51.29", sgst: "51.30", igst: "0.00" });
+    expect(dash.summary.available).toMatchObject({ cgst: "51.30", sgst: "51.29", igst: "0.00" });
   });
 
   it("GSTR-3B ITC CGST + SGST equals the purchase GST exactly (102.59)", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 10 });
     expect(fixed2(r.itc.cgst + r.itc.sgst)).toBe("102.59");
-    expect(fixed2(r.itc.cgst)).toBe("51.29");
-    expect(fixed2(r.itc.sgst)).toBe("51.30");
+    expect(fixed2(r.itc.cgst)).toBe("51.30");
+    expect(fixed2(r.itc.sgst)).toBe("51.29");
   });
 });
 
@@ -211,8 +222,8 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
     expect(tbRows(b)).toEqual([
       ["1100", "762.00", "0.00"],
-      ["2100", "0.00", "51.29"],
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"],
+      ["2101", "0.00", "51.29"],
       ["4000", "0.00", "659.96"],
       ["5030", "0.55", "0.00"], // the 0.55 the customer does not pay is a cost
     ]);
@@ -230,8 +241,8 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     const b = await book(w);
     expect(tbRows(b)).toEqual([
       ["1100", "763.00", "0.00"],
-      ["2100", "0.00", "51.29"],
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"],
+      ["2101", "0.00", "51.29"],
       ["4000", "0.00", "659.96"],
       ["5030", "0.00", "0.45"],
     ]);
@@ -252,8 +263,8 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
     expect(tbRows(b)).toEqual([
       ["1100", "712.55", "0.00"],
-      ["2100", "0.00", "51.29"], // GST stays on the pre-discount value: the discount is given after tax
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"], // GST stays on the pre-discount value: the discount is given after tax
+      ["2101", "0.00", "51.29"],
       ["4000", "0.00", "659.96"],
       ["5020", "50.00", "0.00"], // Discount Allowed
     ]);
@@ -275,8 +286,8 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
     expect(tbRows(b)).toEqual([
       ["1100", "787.55", "0.00"],
-      ["2100", "0.00", "51.29"],
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"],
+      ["2101", "0.00", "51.29"],
       ["4000", "0.00", "659.96"],
       ["4020", "0.00", "25.00"], // Other Charges
     ]);
@@ -316,8 +327,8 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     expect(tbRows(b)).toEqual([
       ["1000", "762.00", "0.00"],
       ["1100", "762.00", "762.00"], // fully collected
-      ["2100", "0.00", "51.29"],
-      ["2101", "0.00", "51.30"],
+      ["2100", "0.00", "51.30"],
+      ["2101", "0.00", "51.29"],
       ["4000", "0.00", "659.96"],
       ["5030", "0.55", "0.00"],
     ]);
@@ -347,8 +358,8 @@ describe("golden 12E: the same adjustments on a purchase", () => {
     expect(inv.totalAmount).toBe("738.00"); // 659.96 + 102.59 - 50.00 + 25.00 + 0.45
     const b = await book(w);
     expect(tbRows(b)).toEqual([
-      ["1510", "51.29", "0.00"],
-      ["1511", "51.30", "0.00"],
+      ["1510", "51.30", "0.00"],
+      ["1511", "51.29", "0.00"],
       ["2000", "0.00", "738.00"],
       ["4200", "0.00", "50.00"], // Discount Received
       ["5000", "659.96", "0.00"],

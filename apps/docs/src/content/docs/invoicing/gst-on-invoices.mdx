@@ -25,7 +25,7 @@ You can enter any tax percentage up to 56% (to accommodate cess-inclusive rates)
 
 Hisaabo determines CGST+SGST versus IGST using **2-digit GST state codes**:
 
-- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each = tax / 2; when the tax is an odd number of paise the extra paisa goes to SGST, e.g. ₹102.59 = CGST ₹51.29 + SGST ₹51.30)
+- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each line's tax is halved; when a line's tax is an odd number of paise the extra paisa goes to CGST, as in the e-invoice, e.g. ₹0.29 = CGST ₹0.15 + SGST ₹0.14)
 - If the state codes differ → **inter-state** → IGST (= full tax)
 
 ### Example
