@@ -49,7 +49,7 @@ test("the CLI and MCP npm publishes (irreversible API clients) wait for the API 
     const block = job(release, name);
     assert.ok(needs(block).includes("wait-for-api"), `${name} must need wait-for-api`);
     assert.doesNotMatch(block, /always\(\)/);
-    // wait-for-api must run when only this client changed, or the publish would be skipped.
+    // wait-for-api must treat a change to only this client as needing the wait (WAIT_NEEDED).
     assert.match(wait, new RegExp(`needs\\.changes\\.outputs\\.${name} == 'true'`));
   }
 });
@@ -147,14 +147,28 @@ test("a second run on the tag reuses the published images instead of failing, an
   assert.match(docker, /once_digest: \$\{\{ steps\.build_once\.outputs\.digest \|\| steps\.existing\.outputs\.once_digest \}\}/);
 });
 
-test("a timed-out API wait cannot publish the release", () => {
-  const notes = job(release, "release-notes");
-  // The decision is in the script and receives the wait result ...
-  assert.match(step(notes, "Publish release"), /WAIT_RESULT: \$\{\{ needs\.wait-for-api\.result \}\}/);
-  assert.match(step(notes, "Publish release"), /scripts\/publish-release\.sh/);
-  // ... and the script publishes only for success / skipped.
+test("only a wait-for-api that RAN can publish the release: a job-level skip (docker failed) must not", () => {
+  const wait = job(release, "wait-for-api");
+  // No job-level `if:`: the job runs whenever docker succeeded, so `skipped` can only mean an upstream failure.
+  assert.doesNotMatch(wait, /^ {4}if:/m, "wait-for-api must not be skipped by its own if:");
+  assert.ok(needs(wait).includes("docker"));
+  // What needs the wait is decided inside (WAIT_NEEDED), and a deliberate skip is an output.
+  const waitStep = step(wait, "Wait for the production API to report this version");
+  for (const changed of ["web", "store", "api_docs", "cli", "mcp"]) {
+    assert.match(waitStep, new RegExp(`needs\\.changes\\.outputs\\.${changed} == 'true'`));
+  }
+  assert.match(waitStep, /WAIT_NEEDED:/);
+  assert.match(wait, /skipped_by_operator: \$\{\{ steps\.wait\.outputs\.skipped_by_operator \}\}/);
+  // The publish step gets the result, the outcome and the operator flag.
+  const publish = step(job(release, "release-notes"), "Publish release");
+  assert.match(publish, /WAIT_RESULT: \$\{\{ needs\.wait-for-api\.result \}\}/);
+  assert.match(publish, /WAIT_OUTCOME: \$\{\{ needs\.wait-for-api\.outputs\.result \}\}/);
+  assert.match(publish, /WAIT_SKIPPED_BY_OPERATOR: \$\{\{ needs\.wait-for-api\.outputs\.skipped_by_operator \}\}/);
+  assert.match(publish, /scripts\/publish-release\.sh/);
+  // The script publishes only on success with a known outcome, never on a bare `skipped`.
   const script = readFileSync(new URL("./publish-release.sh", import.meta.url), "utf8");
-  assert.match(script, /success \| skipped\)\n\s+args\+=\(-F draft=false/);
+  assert.match(script, /ready \| not_needed\) publish=true/);
+  assert.doesNotMatch(script, /success \| skipped\)/);
 });
 
 test("every production deploy re-checks the API version after approval, with a loud override", () => {

@@ -313,51 +313,108 @@ test("check-existing-images: fails closed on a registry error or an unreadable d
   assert.match(bad.stdout, /digest could not be read/);
 });
 
-// ── publish-release.sh: publish only when the production API wait allows it ──
+// ── publish-release.sh: publish only when wait-for-api RAN and settled the API question ──
 
-function publish(waitResult: string, pages: Release[][] = [[release(77, "v1.2.3", true)]], tag = "v1.2.3") {
+interface Wait {
+  /** needs.wait-for-api.result */
+  result: string;
+  /** needs.wait-for-api.outputs.result */
+  outcome?: string;
+  /** needs.wait-for-api.outputs.skipped_by_operator */
+  byOperator?: string;
+}
+
+// The four situations the release flow can end in.
+const SUCCESS: Wait = { result: "success", outcome: "ready", byOperator: "false" };
+const NOT_NEEDED: Wait = { result: "success", outcome: "not_needed", byOperator: "false" };
+const OPERATOR_SKIP: Wait = { result: "success", outcome: "skipped", byOperator: "true" };
+const TIMEOUT: Wait = { result: "failure", outcome: "timeout", byOperator: "false" };
+// docker failed, so wait-for-api never ran: the job is skipped, with no outputs.
+const DOCKER_FAILED: Wait = { result: "skipped" };
+
+function publish(wait: Wait, pages: Release[][] = [[release(77, "v1.2.3", true)]], tag = "v1.2.3") {
   const body = join(work, "notes.md");
   writeFileSync(body, "notes");
   const r = sh(
     "publish-release.sh",
     [],
-    env(pages, { REPOSITORY: "o/r", RELEASE_ID: "77", REF_NAME: tag, BODY_PATH: body, WAIT_RESULT: waitResult }),
+    env(pages, {
+      REPOSITORY: "o/r",
+      RELEASE_ID: "77",
+      REF_NAME: tag,
+      BODY_PATH: body,
+      WAIT_RESULT: wait.result,
+      WAIT_OUTCOME: wait.outcome ?? "",
+      WAIT_SKIPPED_BY_OPERATOR: wait.byOperator ?? "",
+    }),
   );
   const patch = ghCalls().split("\n").find((l) => l.includes("--method PATCH")) ?? "";
   return { ...r, patch };
 }
 
-test("publish-release publishes (draft=false, make_latest) when the API wait succeeded or was not needed", () => {
-  for (const result of ["success", "skipped"]) {
-    const r = publish(result);
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.patch, /releases\/77/);
-    assert.match(r.patch, /draft=false/);
-    assert.match(r.patch, /make_latest=legacy/);
-    assert.match(r.patch, /prerelease=false/);
-  }
+const publishes = (r: { patch: string }) => /draft=false/.test(r.patch) && /make_latest=/.test(r.patch);
+
+test("publish-release publishes when the production API reports the version (success)", () => {
+  const r = publish(SUCCESS);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.patch, /releases\/77/);
+  assert.ok(publishes(r), r.patch);
+  assert.match(r.patch, /make_latest=legacy/);
+  assert.match(r.patch, /prerelease=false/);
 });
 
-test("publish-release keeps the release a draft when the API wait failed, timed out or was cancelled", () => {
-  for (const result of ["failure", "cancelled", ""]) {
-    const r = publish(result);
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.patch, /releases\/77/, "notes are still updated");
-    assert.match(r.patch, /body=@/);
-    assert.doesNotMatch(r.patch, /draft=/, `wait '${result}' must not touch the draft flag`);
-    assert.doesNotMatch(r.patch, /make_latest/);
-    assert.match(r.stdout, /::warning title=Release not published::/);
+test("publish-release publishes when nothing in the release needed the API wait", () => {
+  assert.ok(publishes(publish(NOT_NEEDED)));
+});
+
+test("publish-release publishes after a deliberate operator skip (the job ran its loud-bypass path)", () => {
+  const r = publish(OPERATOR_SKIP);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(publishes(r), r.patch);
+});
+
+test("publish-release keeps the release a draft after a timed-out or failed wait", () => {
+  const r = publish(TIMEOUT);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.patch, /releases\/77/, "notes are still updated");
+  assert.match(r.patch, /body=@/);
+  assert.doesNotMatch(r.patch, /draft=/, "must not touch the draft flag");
+  assert.doesNotMatch(r.patch, /make_latest/);
+  assert.match(r.stdout, /::warning title=Release not published::.*did not succeed \(result 'failure', outcome 'timeout'\)/);
+});
+
+test("publish-release keeps the release a draft when docker failed (wait-for-api is job-skipped, not operator-skipped)", () => {
+  const r = publish(DOCKER_FAILED);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(!publishes(r), `must not publish: ${r.patch}`);
+  assert.doesNotMatch(r.patch, /draft=/);
+  assert.match(r.stdout, /::warning title=Release not published::.*never ran because an earlier job did not succeed/);
+});
+
+test("publish-release keeps the release a draft when the wait was cancelled", () => {
+  const r = publish({ result: "cancelled" });
+  assert.ok(!publishes(r), r.patch);
+});
+
+test("publish-release does not trust an ambiguous outcome: 'skipped' without the operator flag, or no outcome at all", () => {
+  for (const wait of [
+    { result: "success", outcome: "skipped", byOperator: "false" },
+    { result: "success", outcome: "skipped", byOperator: "" },
+    { result: "success", outcome: "", byOperator: "" },
+    { result: "success", outcome: "timeout", byOperator: "false" },
+  ]) {
+    assert.ok(!publishes(publish(wait)), JSON.stringify(wait));
   }
 });
 
 test("publish-release marks a pre-release and never makes it latest", () => {
-  const r = publish("success", [[release(77, "v1.3.0-rc.1", true)]], "v1.3.0-rc.1");
+  const r = publish(SUCCESS, [[release(77, "v1.3.0-rc.1", true)]], "v1.3.0-rc.1");
   assert.match(r.patch, /prerelease=true/);
   assert.match(r.patch, /make_latest=false/);
 });
 
 test("publish-release refuses to publish next to a second release for the tag", () => {
-  const r = publish("success", [[release(77, "v1.2.3", true), release(78, "v1.2.3", false, true)]]);
+  const r = publish(SUCCESS, [[release(77, "v1.2.3", true), release(78, "v1.2.3", false, true)]]);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /::error title=Duplicate releases::.*ids: 78/);
   assert.equal(r.patch, "");

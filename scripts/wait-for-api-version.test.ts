@@ -83,6 +83,7 @@ test("passes at once when production already reports the tagged version (the v p
     assert.equal(r.code, 0, r.log);
     assert.match(r.log, /production reports 0\.10\.1, expected 0\.10\.1: MATCH/);
     assert.equal(r.outputs.result, "ready");
+    assert.equal(r.outputs.skipped_by_operator, "false");
     assert.equal(r.outputs.observed_version, "0.10.1");
     assert.equal(hits(), 1);
   });
@@ -113,6 +114,7 @@ test("times out (exit 1) when production never reaches the version", async () =>
     assert.match(r.log, /::error title=Timed out waiting for the production API::/);
     assert.match(r.log, /last: 0\.10\.0/);
     assert.equal(r.outputs.result, "timeout");
+    assert.equal(r.outputs.skipped_by_operator, "false");
     assert.equal(r.outputs.observed_version, "0.10.0");
   });
 });
@@ -149,6 +151,7 @@ test("skip_api_wait bypasses the check loudly and never calls the API", async ()
     assert.match(r.log, /::warning title=API wait SKIPPED::/);
     assert.match(r.log, /API WAIT BYPASSED/);
     assert.equal(r.outputs.result, "skipped");
+    assert.equal(r.outputs.skipped_by_operator, "true", "a deliberate skip must be observable, not just a job-level skip");
     assert.match(r.summary, /API wait bypassed/);
     assert.equal(hits(), 0);
   });
@@ -262,4 +265,26 @@ test("check: the override bypasses it loudly under the caller's input name, with
 test("rejects an unknown MODE (exit 2)", async () => {
   const r = await run({ MODE: "poll", API_URL: "http://127.0.0.1:1", EXPECTED_VERSION: "v0.10.1" });
   assert.equal(r.code, 2, r.log);
+});
+
+test("WAIT_NEEDED=false: nothing in the release waits for the API, so succeed at once without calling it", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.0.1"}' }], async (url, hits) => {
+    const r = await run({ API_URL: url, EXPECTED_VERSION: "v0.10.1", WAIT_NEEDED: "false" });
+    assert.equal(r.code, 0, r.log);
+    assert.match(r.log, /::notice title=No API wait needed::/);
+    assert.equal(r.outputs.result, "not_needed");
+    assert.equal(r.outputs.skipped_by_operator, "false", "not-needed is not an operator skip");
+    assert.equal(hits(), 0);
+  });
+});
+
+test("WAIT_NEEDED=true waits as usual, and a deliberate skip still reports result=skipped", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.10.1"}' }], async (url, hits) => {
+    const waited = await run({ API_URL: url, EXPECTED_VERSION: "v0.10.1", WAIT_NEEDED: "true" });
+    assert.equal(waited.outputs.result, "ready");
+    assert.equal(hits(), 1);
+    const skipped = await run({ API_URL: url, EXPECTED_VERSION: "v0.10.1", WAIT_NEEDED: "true", SKIP_API_WAIT: "true" });
+    assert.equal(skipped.outputs.result, "skipped");
+    assert.equal(skipped.outputs.skipped_by_operator, "true");
+  });
 });

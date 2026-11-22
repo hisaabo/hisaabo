@@ -28,7 +28,12 @@
 #   API_URL                  default https://api.hisaabo.in
 #   VERSION_PATH             default /api/version
 #   SKIP_API_WAIT            "true" bypasses the wait/check (emergencies and rollbacks only;
-#                            logged loudly)
+#                            logged loudly). The job still RUNS and succeeds, and reports
+#                            skipped_by_operator=true, so a deliberate bypass is
+#                            distinguishable from a job that never ran
+#   WAIT_NEEDED              wait mode: "false" when nothing in this release needs the API
+#                            to be upgraded first (no frontend or client changed); the job
+#                            then succeeds at once with result=not_needed. Default true
 #   OVERRIDE_NAME            the input a human sets to bypass, named in messages; default skip_api_wait
 #   -- wait mode --
 #   TIMEOUT_MINUTES          default 350. Capped at MAX_TIMEOUT_MINUTES
@@ -46,8 +51,9 @@
 #   REQUEST_TIMEOUT_SECONDS  default 10
 #   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  written when set (as in GitHub Actions)
 #
-# Outputs (GITHUB_OUTPUT): result = ready | skipped | timeout (wait mode)
+# Outputs (GITHUB_OUTPUT): result = ready | not_needed | skipped | timeout (wait mode)
 #                                 | ready | skipped | older | newer | unknown (check mode),
+#                          skipped_by_operator = true only on the loud bypass (result=skipped),
 #                          observed_version = last version the API reported
 set -uo pipefail
 
@@ -113,6 +119,17 @@ if [ -n "${TIMEOUT_SECONDS:-}" ]; then
   timeout_label="${timeout_s} s"
 fi
 
+if [ "$mode" = wait ] && [ "${WAIT_NEEDED:-true}" = "false" ]; then
+  echo "::notice title=No API wait needed::No frontend, npm package or API reference changed in this release, so nothing has to wait for the API upgrade."
+  summary "### API wait not needed"
+  summary ""
+  summary "No frontend, npm package or API reference changed in this release."
+  output result not_needed
+  output skipped_by_operator false
+  output observed_version ""
+  exit 0
+fi
+
 if [ "${SKIP_API_WAIT:-false}" = "true" ]; then
   if [ "$mode" = check ]; then what="API check"; else what="API wait"; fi
   echo "::warning title=${what} SKIPPED::${override}=true: NOT checking that production runs ${expected}. This deploys against whatever API version is live. Emergency or rollback use only."
@@ -124,6 +141,7 @@ if [ "${SKIP_API_WAIT:-false}" = "true" ]; then
   summary ""
   summary "\`${override}=true\`: the production API was **not** checked for \`${expected}\`. The deploy goes ahead against whatever API version is live."
   output result skipped
+  output skipped_by_operator true
   output observed_version ""
   exit 0
 fi
@@ -252,6 +270,7 @@ while true; do
       summary ""
       summary ":white_check_mark: Production reported \`${observed}\` after $(hms "$elapsed"); frontends released."
       output result ready
+      output skipped_by_operator false
       output observed_version "$observed"
       exit 0
     fi
@@ -271,6 +290,7 @@ while true; do
     summary ""
     summary ":x: Timed out after ${timeout_label} waiting for \`${expected}\` (last seen: \`${observed:-nothing usable}\`). Upgrade the API, then re-run the failed jobs."
     output result timeout
+    output skipped_by_operator false
     output observed_version "$observed"
     exit 1
   fi

@@ -408,17 +408,23 @@ jobs:
   # What waits for it: the Cloudflare Pages deploys AND the CLI and MCP npm
   # publishes, which are API clients too (npm publishes cannot be undone, and a
   # CLI/MCP that calls procedures the production API lacks fails in users'
-  # hands). Skipped, along with everything that needs it, when none of those
-  # changed in this release.
+  # hands).
   #
-  # Emergencies: dispatch this workflow on the tag with skip_api_wait=true (the
-  # job still runs, logs a loud warning and records the bypass in the release
-  # notes). A manual redeploy or rollback goes through deploy-web.yml /
+  # This job ALWAYS runs once the images are done (no job-level `if:`), so its
+  # result is meaningful to release-notes: `success` means the API question is
+  # settled, one of three ways, reported in the `result` output:
+  #   ready       production reports this version
+  #   not_needed  nothing in this release (no frontend, npm package or API
+  #               reference) has to wait for the API upgrade (WAIT_NEEDED)
+  #   skipped     the operator ticked skip_api_wait: the job takes its loud
+  #               bypass path and sets skipped_by_operator=true
+  # A job-level `skipped` therefore only ever means an upstream job (the image
+  # build) failed, never a deliberate skip, and the release stays a draft.
+  # A manual redeploy or rollback goes through deploy-web.yml /
   # deploy-store.yml directly, where the API-version check applies instead.
   wait-for-api:
     name: Wait for production API
     needs: [changes, docker]
-    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.store == 'true' || needs.changes.outputs.api_docs == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     # 355 = the script's 350-minute poll cap + checkout/setup. GitHub stops a
     # hosted job at 360 minutes, so a longer wait is not possible in one job;
@@ -428,6 +434,7 @@ jobs:
       contents: read
     outputs:
       result: ${{ steps.wait.outputs.result }}
+      skipped_by_operator: ${{ steps.wait.outputs.skipped_by_operator }}
       observed_version: ${{ steps.wait.outputs.observed_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -442,6 +449,8 @@ jobs:
           API_URL: ${{ vars.PRODUCTION_API_URL || 'https://api.hisaabo.in' }}
           TIMEOUT_MINUTES: ${{ inputs.api_wait_timeout_minutes || vars.API_WAIT_TIMEOUT_MINUTES || '350' }}
           SKIP_API_WAIT: ${{ inputs.skip_api_wait && 'true' || 'false' }}
+          # Only the Pages deploys and the npm publishes wait for the API.
+          WAIT_NEEDED: ${{ (needs.changes.outputs.web == 'true' || needs.changes.outputs.store == 'true' || needs.changes.outputs.api_docs == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.mcp == 'true') && 'true' || 'false' }}
           API_IMAGE: ${{ needs.docker.outputs.api_image }}
           API_DIGEST: ${{ needs.docker.outputs.api_digest }}
         run: bash scripts/wait-for-api-version.sh
@@ -848,6 +857,7 @@ jobs:
           DOCKER_RESULT: ${{ needs.docker.result }}
           WAIT_RESULT: ${{ needs.wait-for-api.result }}
           WAIT_OUTCOME: ${{ needs.wait-for-api.outputs.result }}
+          WAIT_SKIPPED_BY_OPERATOR: ${{ needs.wait-for-api.outputs.skipped_by_operator }}
           API_IMAGE: ${{ needs.docker.outputs.api_image }}
           API_DIGEST: ${{ needs.docker.outputs.api_digest }}
           ONCE_IMAGE: ${{ needs.docker.outputs.once_image }}
@@ -911,16 +921,20 @@ jobs:
           # /api/version until it reports this release (or is told to skip).
           api_wait_status() {
             local label="API in production"
-            if [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "skipped" ]; then
-              echo "| $label | Wait bypassed (skip_api_wait) | :warning: Version NOT verified |"
-            elif [ "$WAIT_RESULT" = "success" ]; then
+            if [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "skipped" ] && [ "$WAIT_SKIPPED_BY_OPERATOR" = "true" ]; then
+              echo "| $label | Wait bypassed by the operator (skip_api_wait) | :warning: Version NOT verified |"
+            elif [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "not_needed" ]; then
+              echo "| $label | Not needed (no frontend or client changed) | :heavy_minus_sign: |"
+            elif [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "ready" ]; then
               echo "| $label | Reports ${REF_NAME#v} | :white_check_mark: |"
+            elif [ "$WAIT_RESULT" = "success" ]; then
+              echo "| $label | Outcome not recorded | :hourglass: Release not published |"
             elif [ "$WAIT_RESULT" = "skipped" ]; then
-              echo "| $label | Not checked | :heavy_minus_sign: |"
+              echo "| $label | Not checked: an earlier job did not succeed | :x: Release not published |"
             elif [ "$WAIT_RESULT" = "cancelled" ]; then
-              echo "| $label | Check cancelled | :hourglass: Frontends not deployed |"
+              echo "| $label | Check cancelled | :hourglass: Frontends not deployed, release not published |"
             else
-              echo "| $label | Did not report ${REF_NAME#v} in time | :x: Frontends not deployed |"
+              echo "| $label | Did not report ${REF_NAME#v} in time | :x: Frontends not deployed, release not published |"
             fi
           }
 
@@ -1003,11 +1017,13 @@ jobs:
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
       # Updates the release prepare-release made (draft, or a hand-made one it
-      # reused) with the final notes and, when the production API wait
-      # succeeded or was not needed, publishes it (scripts/publish-release.sh).
-      # After a failed or timed-out wait the notes are updated but the release
-      # stays a draft, so the installers do not go public while production runs
-      # the old API; a re-run of the failed jobs publishes it. It never creates
+      # reused) with the final notes and publishes it only when wait-for-api RAN
+      # and succeeded (production reports the version, nothing needed the wait,
+      # or the operator deliberately skipped it: scripts/publish-release.sh).
+      # After a failed or timed-out wait, or when an upstream job such as the
+      # image build failed (wait-for-api then shows as skipped), the notes are
+      # updated but the release stays a draft, so the installers do not go public
+      # with no matching API; a re-run of the failed jobs publishes it. It never creates
       # a release: it patches by id, so a re-run is idempotent. (Why not
       # softprops/action-gh-release: the releases-by-tag API never returns
       # drafts, so v2.6.2 did not see the Tauri draft, made a second one and
@@ -1020,4 +1036,6 @@ jobs:
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           BODY_PATH: ${{ steps.notes.outputs.body_path }}
           WAIT_RESULT: ${{ needs.wait-for-api.result }}
+          WAIT_OUTCOME: ${{ needs.wait-for-api.outputs.result }}
+          WAIT_SKIPPED_BY_OPERATOR: ${{ needs.wait-for-api.outputs.skipped_by_operator }}
         run: bash scripts/publish-release.sh
