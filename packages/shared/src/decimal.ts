@@ -67,3 +67,34 @@ export function formatPaise(paise: bigint): string {
   const rest = abs % 100n;
   return `${neg ? "-" : ""}${rupees}.${rest.toString().padStart(2, "0")}`;
 }
+
+// ── Quantities (stock): exact, any number of decimals, at a fixed scale ─────────────────────────────────────────
+
+/** `value` as an integer count of 10^-scale units, rounded half-up once. Null when it is not a plain decimal. */
+export function decimalToScale(value: string | number, scale: number): bigint | null {
+  const d = parseDecimal(value);
+  if (!d) return null;
+  if (d.scale <= scale) return d.int * pow10(scale - d.scale);
+  return divRoundHalfUp(d.int, pow10(d.scale - scale));
+}
+
+/** a x b as an integer count of 10^-scale units, rounded half-up once. Null when either is not a plain decimal. */
+export function mulToScale(a: string | number, b: string | number, scale: number): bigint | null {
+  const x = parseDecimal(a);
+  const y = parseDecimal(b);
+  if (!x || !y) return null;
+  const product = x.int * y.int;
+  const have = x.scale + y.scale;
+  if (have <= scale) return product * pow10(scale - have);
+  return divRoundHalfUp(product, pow10(have - scale));
+}
+
+/** An integer count of 10^-scale units as a plain decimal string with exactly `scale` decimals ("-1250", 3 -> "-1.250"). */
+export function formatScaled(value: bigint, scale: number): string {
+  const neg = value < 0n;
+  const abs = neg ? -value : value;
+  if (scale === 0) return `${neg ? "-" : ""}${abs}`;
+  const unit = pow10(scale);
+  return `${neg ? "-" : ""}${abs / unit}.${(abs % unit).toString().padStart(scale, "0")}`;
+}
+

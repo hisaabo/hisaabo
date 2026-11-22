@@ -3,7 +3,7 @@ import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import {
   createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, unitVariantSchema,
-  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis, priceIsTaxInclusive, exclusiveRateFromInclusive,
+  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis, priceIsTaxInclusive, exclusiveRateFromInclusive, decimalToScale, mulToScale, formatScaled,
   type ItemPriceUpdate,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
@@ -329,11 +329,15 @@ export const itemRouter = router({
         const oldUnit = item.unit;
         const oldSalePrice = item.salePrice;
         const oldPurchasePrice = item.purchasePrice;
-        const oldStock = money.toNumber(item.stockQuantity || "0");
         const factor = input.conversionFactor;
 
-        // Convert stock: if 1 old unit = factor new units, then stock * factor = new stock
-        const newStock = (oldStock * factor).toFixed(3);
+        // Convert stock: if 1 old unit = factor new units, then stock * factor = new stock. Exact decimal arithmetic
+        // at the column's 3 decimals (stock is NUMERIC(15,3); the money helpers work in 2 and would turn 0.125 into 0.13).
+        const newStockScaled = mulToScale(item.stockQuantity || "0", factor, 3);
+        if (newStockScaled === null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The conversion factor must be a plain decimal number" });
+        }
+        const newStock = formatScaled(newStockScaled, 3);
 
         // Convert prices: if 1 old unit = factor new units, price per new unit = old price / factor
         const newSalePrice = oldSalePrice ? (parseFloat(oldSalePrice) / factor).toFixed(2) : null;
@@ -1619,9 +1623,13 @@ export const itemRouter = router({
         }
 
         // Merge stock (convert source stock to target units)
-        const sourceStock = money.toNumber(source.stockQuantity || "0");
-        const convertedStock = sourceStock * input.stockConversionFactor;
-        const mergedStock = money.add(target.stockQuantity || "0", convertedStock.toFixed(3));
+        // (exact decimal arithmetic at the column's 3 decimals: the money helpers work in 2 and would turn 0.125 into 0.13)
+        const convertedStock = mulToScale(source.stockQuantity || "0", input.stockConversionFactor, 3);
+        const targetStock = decimalToScale(target.stockQuantity || "0", 3);
+        if (convertedStock === null || targetStock === null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The stock conversion factor must be a plain decimal number" });
+        }
+        const mergedStock = formatScaled(targetStock + convertedStock, 3);
 
         // Fill missing fields on target from source
         const updates: Record<string, unknown> = {
@@ -1707,9 +1715,13 @@ export const itemRouter = router({
           previousStock = item.stockQuantity;
         }
 
-        const adj = parseFloat(input.quantity);
-        const prev = parseFloat(previousStock);
-        const newStock = (prev + adj).toFixed(3);
+        // exact decimal arithmetic at the column's 3 decimals (no float sum)
+        const adj = decimalToScale(input.quantity, 3);
+        const prev = decimalToScale(previousStock, 3);
+        if (adj === null || prev === null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The quantity must be a plain decimal number" });
+        }
+        const newStock = formatScaled(prev + adj, 3);
 
         // Apply stock change
         if (input.variantId) {

@@ -1,8 +1,11 @@
 import { parties, items, invoices, invoiceItems, payments, shipments } from "@hisaabo/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { calcLineItem, money } from "@hisaabo/shared";
+import { calcLineItem, money, mulToScale, formatScaled } from "@hisaabo/shared";
 import type { TenantDatabase } from "../../../trpc.js";
 import type { CanonicalInvoice } from "../types.js";
+
+/** Decimals kept while summing stock movements (quantity 3 dp x conversion factor 6 dp = 9, plus headroom). The column rounds to 3 at the end. */
+const STOCK_SCALE = 12;
 
 export interface InvoiceImportOpts {
   autoCreatePayments: boolean;
@@ -54,7 +57,8 @@ export async function runInvoicesImport(
     invoiceRow: any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     lineItemRows: any[];
-    stockDeltas: Map<string, number>;
+    /** base-unit stock movement per item, in 10^-STOCK_SCALE units (exact: see `STOCK_SCALE`) */
+    stockDeltas: Map<string, bigint>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     autoPaymentRow: any | null;
   }> = [];
@@ -102,7 +106,7 @@ export async function runInvoicesImport(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lineItemRows: any[] = [];
-    const stockDeltas = new Map<string, number>();
+    const stockDeltas = new Map<string, bigint>();
 
     if (inv.lineItems?.length) {
       for (let idx = 0; idx < inv.lineItems.length; idx++) {
@@ -146,9 +150,10 @@ export async function runInvoicesImport(
         });
 
         if (itemId) {
-          // Stock delta in base units: qty × conversionFactor
-          const baseQty = money.toNumber(li.quantity || "1") * money.toNumber(cf);
-          stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + baseQty);
+          // Stock delta in base units: qty × conversionFactor, exact (a quantity has 3 decimals, a conversion factor 6;
+          // the money helpers work in 2 and would turn 0.125 kg into 0.13 and a factor of 0.333333 into 0.33)
+          const baseQty = mulToScale(li.quantity || "1", cf, STOCK_SCALE) ?? 0n;
+          stockDeltas.set(itemId, (stockDeltas.get(itemId) ?? 0n) + baseQty);
         }
       }
     } else {
@@ -213,14 +218,14 @@ export async function runInvoicesImport(
       }
 
       // Aggregate stock deltas by direction
-      const saleDeltas = new Map<string, number>();
-      const purchaseDeltas = new Map<string, number>();
+      const saleDeltas = new Map<string, bigint>();
+      const purchaseDeltas = new Map<string, bigint>();
       for (const b of batch) {
         for (const [itemId, qty] of b.stockDeltas) {
           if (b.invoiceRow.type === "sale") {
-            saleDeltas.set(itemId, (saleDeltas.get(itemId) || 0) + qty);
+            saleDeltas.set(itemId, (saleDeltas.get(itemId) ?? 0n) + qty);
           } else {
-            purchaseDeltas.set(itemId, (purchaseDeltas.get(itemId) || 0) + qty);
+            purchaseDeltas.set(itemId, (purchaseDeltas.get(itemId) ?? 0n) + qty);
           }
         }
       }
@@ -231,7 +236,7 @@ export async function runInvoicesImport(
       for (let j = 0; j < stockItemIds.length; j += 1000) {
         const stockValues = sql.join(
           stockItemIds.slice(j, j + 1000).map((itemId) =>
-            sql`(${itemId}::uuid, ${(saleDeltas.get(itemId) ?? 0).toFixed(3)}::numeric, ${(purchaseDeltas.get(itemId) ?? 0).toFixed(3)}::numeric)`,
+            sql`(${itemId}::uuid, ${formatScaled(saleDeltas.get(itemId) ?? 0n, STOCK_SCALE)}::numeric, ${formatScaled(purchaseDeltas.get(itemId) ?? 0n, STOCK_SCALE)}::numeric)`,
           ),
           sql`, `,
         );
