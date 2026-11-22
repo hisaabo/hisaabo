@@ -139,7 +139,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `STORAGE_DRIVER` | No | Where uploaded item images are stored: `local` (default) or `s3` (Cloudflare R2, AWS S3, MinIO). An unknown value falls back to `local` with a warning | `s3` |
 | `STORAGE_LOCAL_DIR` | No | Directory for `STORAGE_DRIVER=local`. The images set it to `/storage/objects` and `docker-compose.prod.yml` pins it there (the `api_storage` volume), so a value in `.env.prod` has no effect with that compose file. Without it the default is `./.storage/objects` relative to the working directory | `/storage/objects` |
 | `STORAGE_S3_ENDPOINT` / `STORAGE_S3_BUCKET` / `STORAGE_S3_ACCESS_KEY_ID` / `STORAGE_S3_SECRET_ACCESS_KEY` | With `STORAGE_DRIVER=s3` | S3-compatible endpoint, bucket and credentials. The driver is created the first time storage is used (for example an item image upload), and fails with a configuration error if any of the four is missing. `STORAGE_S3_REGION` is optional (default `auto`) | `https://<account>.r2.cloudflarestorage.com` |
-| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU eviction, default 50) and connections per tenant pool (default 5) | `50` |
+| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU, default 50) and connections per tenant pool (default 5). Each process can hold up to their product in tenant connections, and the defaults allow 250, more than Postgres' default `max_connections` of 100: size both together, never raise `TENANT_POOL_MAX` alone. See [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `20` / `2` |
 | `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
 | `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
 | `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
@@ -149,6 +149,31 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
 When the online store is enabled for a business, its public catalog (including the business phone, email and address) can be read by any website a visitor's browser loads, so an intranet-only self-hosted install must not treat network position as protection for store data.
+
+### Tenant connection budget (multi-tenant)
+
+With `MULTI_TENANT=true` each API process keeps an LRU of tenant database pools (`TENANT_POOL_MAX`), and each pool may open up to `TENANT_POOL_PER_DB_MAX` connections. A connection that sits idle for 20 seconds is closed, so an idle pool holds **no** connections; what you must budget for is the ceiling, because a burst of traffic to many tenants at once can reach it. Per process:
+
+```
+tenant connections  <=  TENANT_POOL_MAX x TENANT_POOL_PER_DB_MAX          (live pools)
+                      +  pools evicted in the last ~20 s x TENANT_POOL_PER_DB_MAX
+control, queue and cache connections  ~  15 per API process, ~25 for a worker
+```
+
+Add the API processes and the workers together, plus `superuser_reserved_connections` (3) and some room for operators (`psql`, backups, the admin dashboard), and keep the total below Postgres' `max_connections`. **Raising `TENANT_POOL_MAX` without lowering `TENANT_POOL_PER_DB_MAX` multiplies the ceiling**: the defaults (50 x 5) allow 250 tenant connections from one process, which does not fit in `max_connections = 100`, and a second API replica doubles it.
+
+Evicting a pool is safe for requests that are still using it (since 0.10.1): the pool is dropped from the cache, not closed, so a request that already holds it finishes normally, and its connections close by themselves after 20 idle seconds. Eviction is therefore not an error, but every cache miss opens a new pool and leaves the evicted one draining for up to 20 seconds, so a cache much smaller than the number of tenants being served at once wastes connections and connect time.
+
+Starting points for about 230 tenants (rows are for one API process; subtract a second replica's share from the budget):
+
+| `max_connections` | `TENANT_POOL_MAX` | `TENANT_POOL_PER_DB_MAX` | Tenant ceiling | Notes |
+|---|---|---|---|---|
+| 100 (Postgres default) | 20 | 2 | 40 | Leaves about 30 for control, queue, a worker, draining pools and operators. Also fine with a worker on the same server. |
+| 300 | 100 | 2 | 200 | Few evictions: most active tenants stay cached. |
+
+Keep `TENANT_POOL_PER_DB_MAX` at 2 or more: a request that opens a transaction holds one connection and may still run a query beside it. If you need more tenants cached on a small server, raise `max_connections` (each idle connection costs Postgres a few MB) rather than `TENANT_POOL_MAX` alone.
+
+The recurring-invoice scheduler (multi-tenant) does not use these pools: it visits tenants one at a time with its own single connection, closed after each tenant, so one extra connection per process while it ticks (every 60 s) and no pool churn. To see who holds connections: `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
 ### GitHub Actions Secrets
 
