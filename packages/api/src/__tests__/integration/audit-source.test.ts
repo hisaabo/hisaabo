@@ -78,13 +78,25 @@ describe("every audit write carries the source", () => {
     });
   }
 
-  it("passes `source: ctx.source` at every logAudit(ctx.db, { ... }) and logAuditInTransaction(tx, { ... }) call site", () => {
+  it("passes `source: ctx.source` at every logAudit(<db>, { ... }) and logAuditInTransaction(<tx>, { ... }) call site", () => {
     const offenders: string[] = [];
+    const unmatched: string[] = [];
     let callSites = 0;
     for (const file of sourceFiles(srcRoot)) {
+      // lib/audit.ts defines the two functions; it is not a call site.
+      if (path.relative(srcRoot, file) === path.join("lib", "audit.ts")) continue;
       const text = fs.readFileSync(file, "utf8");
-      const needle = /(?:logAudit\(\s*ctx\.db|logAuditInTransaction\(\s*tx),\s*\{/g;
-      for (let m = needle.exec(text); m; m = needle.exec(text)) {
+      // Any first argument (ctx.db, tx, db, a local handle), then an object literal.
+      const needle = /\blog(?:Audit|AuditInTransaction)\(\s*[\w.]+,\s*\{/g;
+      const lineOf = (index: number) => text.slice(0, index).split("\n").length;
+      const matches = [...text.matchAll(needle)];
+      // Every call, whatever its shape: a call the pattern above cannot parse (a params
+      // variable, a cast, an unusual first argument) must fail here, not slip through.
+      const readable = new Set(matches.map((m) => m.index));
+      for (const m of text.matchAll(/\blog(?:Audit|AuditInTransaction)\(/g)) {
+        if (!readable.has(m.index)) unmatched.push(`${path.relative(srcRoot, file)}:${lineOf(m.index!)}`);
+      }
+      for (const m of matches) {
         callSites++;
         const open = m.index + m[0].length - 1;
         let depth = 0;
@@ -94,12 +106,12 @@ describe("every audit write carries the source", () => {
           else if (text[end] === "}" && --depth === 0) break;
         }
         if (!/\bsource:\s*ctx\.source\b/.test(text.slice(open, end + 1))) {
-          const line = text.slice(0, m.index).split("\n").length;
-          offenders.push(`${path.relative(srcRoot, file)}:${line}`);
+          offenders.push(`${path.relative(srcRoot, file)}:${lineOf(m.index!)}`);
         }
       }
     }
     expect(callSites).toBeGreaterThan(50);
+    expect(unmatched, `logAudit calls the guard cannot read (use logAudit(<db>, { ... }))`).toEqual([]);
     expect(offenders, `logAudit calls without source: ctx.source`).toEqual([]);
   });
 
