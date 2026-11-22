@@ -610,6 +610,36 @@ describe("E-invoicing page", () => {
       expect(button("Save Settings")).not.toBeInTheDocument();
       expect(button("Test Connection")).not.toBeInTheDocument();
     });
+
+    describe("Test Connection names the step that failed", () => {
+      const run = (result: Record<string, unknown>) => {
+        stub.mutationResults["eInvoice.testConnection"] = result;
+        openSettings("admin");
+        fireEvent.click(screen.getByRole("button", { name: "Test Connection" }));
+        return screen.getByText((_, el) => el?.tagName === "SPAN" && !!el.textContent?.includes(String(result.message)));
+      };
+
+      it("public key not configured: tells the admin it is a server setup matter", () => {
+        const box = run({ success: false, failedStep: "public_key", message: "E-invoicing is not configured: the NIC public key is missing or invalid (IRP_SANDBOX_PUBLIC_KEY_PEM or IRP_SANDBOX_PUBLIC_KEY_PATH is not set)." });
+        expect(box.textContent).toMatch(/Server setup: the NIC public key is missing or invalid/);
+        expect(box.textContent).toMatch(/IRP_SANDBOX_PUBLIC_KEY_PEM/);
+      });
+
+      it("network", () => {
+        expect(run({ success: false, failedStep: "network", message: "Could not reach the IRP: timed out" }).textContent)
+          .toMatch(/Network: the IRP could not be reached/);
+      });
+
+      it("authentication", () => {
+        expect(run({ success: false, failedStep: "authentication", message: "The IRP did not accept the sign-in: bad credentials" }).textContent)
+          .toMatch(/Sign-in: the IRP rejected the credentials/);
+      });
+
+      it("success shows no step", () => {
+        expect(run({ success: true, message: "Successfully connected to IRP" }).textContent)
+          .toBe("Successfully connected to IRP");
+      });
+    });
   });
 });
 

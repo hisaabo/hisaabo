@@ -33,6 +33,13 @@ type CancelReason = (typeof CANCEL_REASONS)[number]["value"];
 
 const PAGE_SIZE = 25;
 
+// Which step of "Test Connection" failed (see eInvoice.testConnection).
+const TEST_STEP_LABELS = {
+  public_key: "Server setup: the NIC public key is missing or invalid (ask whoever runs this server)",
+  network: "Network: the IRP could not be reached",
+  authentication: "Sign-in: the IRP rejected the credentials",
+} as const;
+
 // ── Helpers ───────────────────────────────────────────────────
 
 function statusColor(status: string | null | undefined): string {
@@ -420,7 +427,11 @@ const EMPTY_CONFIG: ConfigForm = {
 function SettingsTab() {
   const [form, setForm] = useState<ConfigForm>(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+    failedStep?: "public_key" | "network" | "authentication";
+  } | null>(null);
   const canManage = useCan("manage", "EInvoice");
 
   const { isLoading, data: configData } = trpc.eInvoice.getConfig.useQuery(undefined);
@@ -595,7 +606,12 @@ function SettingsTab() {
               : "bg-red-600/[0.08] text-red-700 dark:text-red-400",
           )}>
             <span>{testResult.success ? "✓" : "✗"}</span>
-            <span>{testResult.message}</span>
+            <span>
+              {testResult.failedStep && (
+                <strong className="block">{TEST_STEP_LABELS[testResult.failedStep]}</strong>
+              )}
+              {testResult.message}
+            </span>
           </div>
         )}
 

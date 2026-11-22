@@ -24,7 +24,8 @@
  * The IRPClient is mocked via vitest.mock() so tests never call real NIC APIs.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { invoices, eInvoiceConfigs, items as itemsTable, auditLog, paymentAllocations } from "@hisaabo/db";
 import {
@@ -98,6 +99,10 @@ vi.mock("../../lib/irp-client.js", () => {
     __mockAuthenticate: mockAuthenticate,
   };
 });
+
+// A valid RSA public key for the suites that set the key themselves (a real NIC key is never bundled).
+const testPublicKeyPem = generateKeyPairSync("rsa", { modulusLength: 2048 })
+  .publicKey.export({ type: "spki", format: "pem" }).toString();
 
 // ── Fixture ───────────────────────────────────────────────────────────────────
 
@@ -1112,6 +1117,164 @@ describe("eInvoice.cancel also cancels the invoice", () => {
     await caller.eInvoice.cancel({ invoiceId: doc.id, cancelReason: "2" });
     expect((await row(doc.id)).status).toBe("cancelled");
     expect(await stock(item.id)).toBeCloseTo(10, 3);
+  });
+});
+
+// ── 4c. NIC public key not configured ─────────────────────────────────────────
+
+describe("e-invoicing without a usable NIC public key", () => {
+  const KEYS = ["IRP_PUBLIC_KEY_PEM", "IRP_PUBLIC_KEY_PATH", "IRP_SANDBOX_PUBLIC_KEY_PEM", "IRP_SANDBOX_PUBLIC_KEY_PATH"] as const;
+  const saved: Record<string, string | undefined> = {};
+  let irp: IrpMock & { __mockGenerateIRN: ReturnType<typeof vi.fn>; __mockAuthenticate: ReturnType<typeof vi.fn> };
+
+  beforeAll(async () => {
+    irp = (await import("../../lib/irp-client.js")) as unknown as typeof irp;
+  });
+
+  beforeEach(() => {
+    for (const k of KEYS) saved[k] = process.env[k];
+    for (const k of KEYS) delete process.env[k];
+    irp.__mockGenerateIRN.mockClear();
+    irp.__mockCancelIRN.mockClear();
+    irp.__mockAuthenticate.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  const NOT_CONFIGURED = /E-invoicing is not configured: the NIC public key is missing or invalid/;
+
+  async function newInvoice() {
+    await setupEInvoiceConfig();
+    const { invoice } = await createInvoiceWithItems(
+      getTenantTestDb(), world.business1.id, b2bParty.id,
+      [{ description: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18" }],
+    );
+    return invoice;
+  }
+
+  async function row(id: string) {
+    const [r] = await getTenantTestDb().select().from(invoices).where(eq(invoices.id, id));
+    return r!;
+  }
+
+  it("generate fails fast with a clear error and leaves the invoice untouched (not 'failed', not 'pending')", async () => {
+    const invoice = await newInvoice();
+    await expect(
+      callerForRamesh().eInvoice.generate({ invoiceId: invoice.id }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(NOT_CONFIGURED) });
+
+    expect(irp.__mockGenerateIRN).not.toHaveBeenCalled();
+    const after = await row(invoice.id);
+    expect(after.eInvoiceStatus).toBeNull();
+    expect(after.eInvoiceError).toBeNull();
+    expect(after.eInvoiceRetryCount).toBe(0);
+  });
+
+  it("an invalid key is reported as such, with the variable to fix", async () => {
+    process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nnot a key\n-----END PUBLIC KEY-----";
+    const invoice = await newInvoice();
+    await expect(
+      callerForRamesh().eInvoice.generate({ invoiceId: invoice.id }),
+    ).rejects.toThrow(/IRP_SANDBOX_PUBLIC_KEY_PEM is set but is not a valid PEM/);
+    expect((await row(invoice.id)).eInvoiceStatus).toBeNull();
+  });
+
+  it("retryFailed leaves a failed invoice exactly as it was (the retry counter does not move)", async () => {
+    const invoice = await newInvoice();
+    await getTenantTestDb()
+      .update(invoices)
+      .set({ eInvoiceStatus: "failed", eInvoiceError: "Duplicate IRN", eInvoiceRetryCount: 2 })
+      .where(eq(invoices.id, invoice.id));
+
+    await expect(
+      callerForRamesh().eInvoice.retryFailed({ invoiceId: invoice.id }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(NOT_CONFIGURED) });
+
+    const after = await row(invoice.id);
+    expect(after).toMatchObject({ eInvoiceStatus: "failed", eInvoiceError: "Duplicate IRN", eInvoiceRetryCount: 2 });
+  });
+
+  it("bulkRetry refuses once, up front", async () => {
+    await newInvoice();
+    await expect(callerForRamesh().eInvoice.bulkRetry()).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED", message: expect.stringMatching(NOT_CONFIGURED),
+    });
+    expect(irp.__mockGenerateIRN).not.toHaveBeenCalled();
+  });
+
+  it("cancel refuses before the IRP and changes nothing", async () => {
+    const invoice = await newInvoice();
+    await getTenantTestDb()
+      .update(invoices)
+      .set({ irn: "A".repeat(64), irnAckDate: new Date(), eInvoiceStatus: "generated" })
+      .where(eq(invoices.id, invoice.id));
+
+    await expect(
+      callerForRamesh().eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "1" }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(NOT_CONFIGURED) });
+
+    expect(irp.__mockCancelIRN).not.toHaveBeenCalled();
+    const after = await row(invoice.id);
+    expect(after.eInvoiceStatus).toBe("generated");
+    expect(after.status).not.toBe("cancelled");
+  });
+
+  it("finishing a half-done local cancel needs no IRP, so it works without a key", async () => {
+    const invoice = await newInvoice();
+    await getTenantTestDb()
+      .update(invoices)
+      .set({ irn: "B".repeat(64), irnAckDate: new Date(), eInvoiceStatus: "cancelled", eInvoiceCancelReason: "2" })
+      .where(eq(invoices.id, invoice.id));
+
+    const done = await callerForRamesh().eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "2" });
+    expect(done.status).toBe("cancelled");
+    expect(irp.__mockCancelIRN).not.toHaveBeenCalled();
+  });
+
+  describe("testConnection says which step failed", () => {
+    it("public_key: not configured", async () => {
+      await setupEInvoiceConfig();
+      const result = await callerForRamesh().eInvoice.testConnection();
+      expect(result).toMatchObject({ success: false, failedStep: "public_key", message: expect.stringMatching(NOT_CONFIGURED) });
+      expect(irp.__mockAuthenticate).not.toHaveBeenCalled();
+    });
+
+    it("public_key: configured but invalid", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = "garbage";
+      await setupEInvoiceConfig();
+      const result = await callerForRamesh().eInvoice.testConnection();
+      expect(result).toMatchObject({ success: false, failedStep: "public_key" });
+      expect(result.message).toMatch(/is set but is not a valid PEM/);
+    });
+
+    it("success with a valid key", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = testPublicKeyPem;
+      await setupEInvoiceConfig();
+      const result = await callerForRamesh().eInvoice.testConnection();
+      expect(result).toEqual({ success: true, message: "Successfully connected to IRP" });
+    });
+
+    it("authentication: the IRP rejects the credentials", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = testPublicKeyPem;
+      await setupEInvoiceConfig();
+      irp.__mockAuthenticate.mockRejectedValueOnce(new irp.IRPError("Invalid client credentials", "AUTH_FAILED"));
+      const result = await callerForRamesh().eInvoice.testConnection();
+      expect(result).toMatchObject({ success: false, failedStep: "authentication" });
+      expect(result.message).toContain("Invalid client credentials");
+    });
+
+    it("network: the IRP cannot be reached", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = testPublicKeyPem;
+      await setupEInvoiceConfig();
+      irp.__mockAuthenticate.mockRejectedValueOnce(new irp.IRPError("IRP did not answer within 30 seconds", "RETRYABLE"));
+      const result = await callerForRamesh().eInvoice.testConnection();
+      expect(result).toMatchObject({ success: false, failedStep: "network" });
+      expect(result.message).toContain("Could not reach the IRP");
+    });
   });
 });
 

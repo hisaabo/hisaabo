@@ -35,6 +35,7 @@ import type { TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { emitNotificationEventSafe } from "../lib/notifications/index.js";
@@ -42,6 +43,25 @@ import { logAudit } from "../lib/audit.js";
 import { assertCancellable, cancelInvoiceInTx } from "../lib/invoice-cancel.js";
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
+
+/**
+ * Refuse to start IRP work when the NIC public key is not configured (see
+ * lib/irp-public-key.ts). Called before anything is written, so a configuration
+ * problem never leaves an invoice in a misleading state: a `failed` e-invoice
+ * means the IRP rejected it, not that this server was not set up. PRECONDITION_FAILED
+ * matches "E-invoicing is not enabled" below, and fixing the configuration lets the
+ * same invoice be generated, retried or cancelled as it was.
+ */
+function requireIrpPublicKey(isSandbox: boolean): void {
+  try {
+    loadIrpPublicKey(isSandbox);
+  } catch (err) {
+    if (err instanceof IRPNotConfiguredError) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+    }
+    throw err;
+  }
+}
 
 /**
  * Shared logic for generating an IRN. Used by both `generate` and `retryFailed`.
@@ -68,6 +88,7 @@ async function generateIRNForInvoice(
   }
 
   const config = decryptEInvoiceConfig(rawConfig);
+  requireIrpPublicKey(config.isSandbox);
 
   const [invoice] = await db
     .select()
@@ -189,6 +210,15 @@ async function generateIRNForInvoice(
 
     return updated!;
   } catch (err) {
+    if (err instanceof IRPNotConfiguredError) {
+      // The key went away after the check above (a file removed mid-flight): a
+      // configuration problem, not an IRP rejection. Leave the invoice pending.
+      await db
+        .update(invoices)
+        .set({ eInvoiceStatus: "pending", eInvoiceError: null, updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId));
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+    }
     const isRetryable = err instanceof IRPError && err.isRetryable;
     const errorMsg = err instanceof IRPError ? err.message : "Unknown IRP error";
     const retryCount = (invoice.eInvoiceRetryCount ?? 0) + 1;
@@ -376,9 +406,17 @@ export const eInvoiceRouter = router({
   }),
 
   /**
-   * Test connection to IRP sandbox by attempting authentication.
+   * Check the whole IRP sign-in chain and say which step failed:
+   *   public_key      the NIC public key is not configured or not valid (operator side)
+   *   network         the IRP could not be reached or did not answer in time
+   *   authentication  the IRP answered and rejected the credentials
+   * Nothing is written except the cached auth token on success.
    */
-  testConnection: adminProcedure.mutation(async ({ ctx }) => {
+  testConnection: adminProcedure.mutation(async ({ ctx }): Promise<{
+    success: boolean;
+    message: string;
+    failedStep?: "public_key" | "network" | "authentication";
+  }> => {
     requireCan(ctx.ability, "manage", "EInvoice");
 
     const [rawConfig] = await ctx.db
@@ -394,14 +432,29 @@ export const eInvoiceRouter = router({
       });
     }
 
+    const config = decryptEInvoiceConfig(rawConfig);
+
     try {
-      const config = decryptEInvoiceConfig(rawConfig);
-      const client = new IRPClient(config, ctx.db);
-      await client.authenticate();
+      loadIrpPublicKey(config.isSandbox);
+    } catch (err) {
+      if (err instanceof IRPNotConfiguredError) {
+        return { success: false, failedStep: "public_key", message: err.message };
+      }
+      throw err;
+    }
+
+    try {
+      await new IRPClient(config, ctx.db).authenticate();
       return { success: true, message: "Successfully connected to IRP" };
     } catch (err) {
-      const message = err instanceof IRPError ? err.message : "Connection failed";
-      return { success: false, message };
+      if (err instanceof IRPNotConfiguredError) {
+        return { success: false, failedStep: "public_key", message: err.message };
+      }
+      if (err instanceof IRPError && err.isRetryable) {
+        return { success: false, failedStep: "network", message: `Could not reach the IRP: ${err.message}` };
+      }
+      const detail = err instanceof IRPError ? err.message : "unexpected response";
+      return { success: false, failedStep: "authentication", message: `The IRP did not accept the sign-in: ${detail}` };
     }
   }),
 
@@ -515,9 +568,14 @@ export const eInvoiceRouter = router({
             message: "E-invoice configuration not found",
           });
         }
-        irp = new IRPClient(decryptEInvoiceConfig(rawConfig), ctx.db);
+        const config = decryptEInvoiceConfig(rawConfig);
+        requireIrpPublicKey(config.isSandbox);
+        irp = new IRPClient(config, ctx.db);
         return irp;
       };
+      // Everything that follows may talk to the IRP unless this only finishes a local
+      // cancel: fail fast, before any state is looked at further, when it cannot.
+      if (!resumeLocalCancel) await irpClient();
 
       // The IRP is the authority on whether the IRN is cancelled. A cancel it
       // accepted may never have been recorded here (the answer was lost to a
@@ -849,7 +907,7 @@ export const eInvoiceRouter = router({
 
     // Check e-invoicing is enabled before fetching invoices
     const [config] = await ctx.db
-      .select({ id: eInvoiceConfigs.id })
+      .select({ id: eInvoiceConfigs.id, isSandbox: eInvoiceConfigs.isSandbox })
       .from(eInvoiceConfigs)
       .where(and(eq(eInvoiceConfigs.businessId, ctx.businessId), eq(eInvoiceConfigs.isEnabled, true)))
       .limit(1);
@@ -857,6 +915,8 @@ export const eInvoiceRouter = router({
     if (!config) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "E-invoicing is not enabled" });
     }
+    // One clear error up front, not "failed" 50 times.
+    requireIrpPublicKey(config.isSandbox);
 
     const failedInvoices = await ctx.db
       .select({ id: invoices.id })
