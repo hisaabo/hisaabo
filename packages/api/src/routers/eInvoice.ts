@@ -35,11 +35,33 @@ import type { TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { emitNotificationEventSafe } from "../lib/notifications/index.js";
+import { logAudit } from "../lib/audit.js";
+import { assertCancellable, cancelInvoiceInTx } from "../lib/invoice-cancel.js";
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
+
+/**
+ * Refuse to start IRP work when the NIC public key is not configured (see
+ * lib/irp-public-key.ts). Called before anything is written, so a configuration
+ * problem never leaves an invoice in a misleading state: a `failed` e-invoice
+ * means the IRP rejected it, not that this server was not set up. PRECONDITION_FAILED
+ * matches "E-invoicing is not enabled" below, and fixing the configuration lets the
+ * same invoice be generated, retried or cancelled as it was.
+ */
+function requireIrpPublicKey(isSandbox: boolean): void {
+  try {
+    loadIrpPublicKey(isSandbox);
+  } catch (err) {
+    if (err instanceof IRPNotConfiguredError) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+    }
+    throw err;
+  }
+}
 
 /**
  * Shared logic for generating an IRN. Used by both `generate` and `retryFailed`.
@@ -66,6 +88,7 @@ async function generateIRNForInvoice(
   }
 
   const config = decryptEInvoiceConfig(rawConfig);
+  requireIrpPublicKey(config.isSandbox);
 
   const [invoice] = await db
     .select()
@@ -187,6 +210,15 @@ async function generateIRNForInvoice(
 
     return updated!;
   } catch (err) {
+    if (err instanceof IRPNotConfiguredError) {
+      // The key went away after the check above (a file removed mid-flight): a
+      // configuration problem, not an IRP rejection. Leave the invoice pending.
+      await db
+        .update(invoices)
+        .set({ eInvoiceStatus: "pending", eInvoiceError: null, updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId));
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+    }
     const isRetryable = err instanceof IRPError && err.isRetryable;
     const errorMsg = err instanceof IRPError ? err.message : "Unknown IRP error";
     const retryCount = (invoice.eInvoiceRetryCount ?? 0) + 1;
@@ -220,6 +252,71 @@ async function generateIRNForInvoice(
       message: `IRP submission failed: ${errorMsg}`,
     });
   }
+}
+
+/** Short, user-safe text of an error raised while cancelling locally. */
+function errorText(err: unknown): string {
+  if (err instanceof TRPCError) return err.message;
+  return "unexpected error, see the server log";
+}
+
+/** The error a caller sees when the IRN is cancelled at the IRP but the invoice could not be cancelled here. */
+function localCancelFailed(cause: unknown): TRPCError {
+  return new TRPCError({
+    code: cause instanceof TRPCError ? cause.code : "INTERNAL_SERVER_ERROR",
+    message: `The IRN was cancelled at the IRP, but the invoice could not be cancelled here (${errorText(cause)}). `
+      + "The invoice is still active. Cancel the invoice from its page, or cancel the e-invoice again to finish.",
+    cause,
+  });
+}
+
+/**
+ * The IRP has cancelled the IRN but the local cancel failed. Leave a state the
+ * operator can see and finish: eInvoiceStatus "cancelled" (the IRN really is
+ * cancelled, so the e-invoice must never read "generated" again) with
+ * eInvoiceError saying what is left to do. That is the same shape the pre-0.10.1
+ * bug left behind (IRN cancelled, invoice live), so one diagnostic and one
+ * remedy cover both: cancel the invoice normally, or cancel the e-invoice
+ * again, which skips the IRP and only finishes the local cancel.
+ */
+async function recordLocalCancelFailure(
+  db: TenantDatabase,
+  ctx: { businessId: string; user: { id: string }; ipAddress?: string | null },
+  invoice: { id: string; invoiceNumber: string; irn: string | null },
+  cancelReason: string,
+  cause: unknown,
+): Promise<void> {
+  const reason = errorText(cause);
+  console.error(`[einvoice] IRN cancelled at the IRP but the local cancel of invoice ${invoice.id} failed:`, cause);
+  try {
+    await db
+      .update(invoices)
+      .set({
+        eInvoiceStatus: "cancelled",
+        eInvoiceCancelReason: cancelReason,
+        eInvoiceError: `IRN cancelled at the IRP, but the invoice is still active: ${reason}. Cancel the invoice, or cancel the e-invoice again to finish.`.slice(0, 500),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(invoices.id, invoice.id), eq(invoices.businessId, ctx.businessId)));
+  } catch (err) {
+    // Nothing more can be done from here; the audit entry below is the last trace.
+    console.error(`[einvoice] could not record the half-cancelled state of invoice ${invoice.id}:`, err);
+  }
+  await logAudit(db, {
+    businessId: ctx.businessId,
+    userId: ctx.user.id,
+    action: "eInvoice.cancel",
+    entityType: "invoice",
+    entityId: invoice.id,
+    metadata: {
+      invoiceNumber: invoice.invoiceNumber,
+      irn: invoice.irn,
+      cancelReason,
+      invoiceCancelled: false,
+      localCancelError: reason,
+    },
+    ipAddress: ctx.ipAddress,
+  });
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -309,9 +406,17 @@ export const eInvoiceRouter = router({
   }),
 
   /**
-   * Test connection to IRP sandbox by attempting authentication.
+   * Check the whole IRP sign-in chain and say which step failed:
+   *   public_key      the NIC public key is not configured or not valid (operator side)
+   *   network         the IRP could not be reached or did not answer in time
+   *   authentication  the IRP answered and rejected the credentials
+   * Nothing is written except the cached auth token on success.
    */
-  testConnection: adminProcedure.mutation(async ({ ctx }) => {
+  testConnection: adminProcedure.mutation(async ({ ctx }): Promise<{
+    success: boolean;
+    message: string;
+    failedStep?: "public_key" | "network" | "authentication";
+  }> => {
     requireCan(ctx.ability, "manage", "EInvoice");
 
     const [rawConfig] = await ctx.db
@@ -327,14 +432,29 @@ export const eInvoiceRouter = router({
       });
     }
 
+    const config = decryptEInvoiceConfig(rawConfig);
+
     try {
-      const config = decryptEInvoiceConfig(rawConfig);
-      const client = new IRPClient(config, ctx.db);
-      await client.authenticate();
+      loadIrpPublicKey(config.isSandbox);
+    } catch (err) {
+      if (err instanceof IRPNotConfiguredError) {
+        return { success: false, failedStep: "public_key", message: err.message };
+      }
+      throw err;
+    }
+
+    try {
+      await new IRPClient(config, ctx.db).authenticate();
       return { success: true, message: "Successfully connected to IRP" };
     } catch (err) {
-      const message = err instanceof IRPError ? err.message : "Connection failed";
-      return { success: false, message };
+      if (err instanceof IRPNotConfiguredError) {
+        return { success: false, failedStep: "public_key", message: err.message };
+      }
+      if (err instanceof IRPError && err.isRetryable) {
+        return { success: false, failedStep: "network", message: `Could not reach the IRP: ${err.message}` };
+      }
+      const detail = err instanceof IRPError ? err.message : "unexpected response";
+      return { success: false, failedStep: "authentication", message: `The IRP did not accept the sign-in: ${detail}` };
     }
   }),
 
@@ -367,30 +487,36 @@ export const eInvoiceRouter = router({
     }),
 
   /**
-   * Cancel an IRN. Only valid within 24 hours of generation.
+   * Cancel an IRN, and with it the invoice. Only valid within 24 hours of
+   * generation. Under GST an e-invoice whose IRN is cancelled is cancelled: it
+   * cannot be amended, and a fresh invoice with a new number must be issued. So
+   * this cancels the invoice through the same code path as a normal invoice
+   * cancel (lib/invoice-cancel.ts): stock/ITC reversal, out of GSTR-1/3B, the
+   * ledger and party balances.
+   *
+   * Order: every check that can fail for a predictable reason runs first (24h
+   * window, permission, invoice state, payments allocated), then the IRP (the
+   * step that can fail for reasons we cannot know), then ONE local transaction
+   * that sets the IRN state and cancels the invoice together. If that local
+   * transaction fails after the IRP succeeded, the IRN is cancelled and the
+   * invoice is live, so the failure is recorded as a retryable state (see
+   * `recordLocalCancelFailure`) and calling this again finishes the job without
+   * touching the IRP.
+   *
+   * The reverse can also happen: the IRP cancels but the answer never arrives
+   * (timeout, crash), so the record still says "generated". Whenever the IRP
+   * refuses or cannot be reached, or the 24h window has passed, the IRP is asked
+   * whether the IRN is in fact cancelled (read-only `isIRNCancelled`). If it is,
+   * that counts as the IRP step having succeeded and the local cancel proceeds,
+   * which also lets the loser of a double click succeed. If it is not, the
+   * original error stands.
    */
   cancel: adminProcedure
     .input(cancelEInvoiceSchema)
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "manage", "EInvoice");
+      const actor = { businessId: ctx.businessId, role: ctx.role, ability: ctx.ability };
 
-      // Fetch config and decrypt credentials
-      const [rawConfig] = await ctx.db
-        .select()
-        .from(eInvoiceConfigs)
-        .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
-        .limit(1);
-
-      if (!rawConfig) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "E-invoice configuration not found",
-        });
-      }
-
-      const config = decryptEInvoiceConfig(rawConfig);
-
-      // Fetch invoice
       const [invoice] = await ctx.db
         .select()
         .from(invoices)
@@ -398,6 +524,7 @@ export const eInvoiceRouter = router({
           and(
             eq(invoices.id, input.invoiceId),
             eq(invoices.businessId, ctx.businessId),
+            isNull(invoices.deletedAt),
           ),
         )
         .limit(1);
@@ -413,45 +540,163 @@ export const eInvoiceRouter = router({
         });
       }
 
-      if (invoice.eInvoiceStatus === "cancelled") {
+      // IRN already cancelled at the IRP while the invoice is still live: a
+      // previous call (or a release before 0.10.1) stopped half way. Finish the
+      // local cancel; the IRP is not called again.
+      const resumeLocalCancel = invoice.eInvoiceStatus === "cancelled" && invoice.status !== "cancelled";
+
+      if (invoice.eInvoiceStatus === "cancelled" && !resumeLocalCancel) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "IRN is already cancelled",
         });
       }
 
-      // Enforce 24-hour cancellation window
-      if (invoice.irnAckDate) {
+      // The IRP client is only built when the IRP has to be asked something.
+      let irp: IRPClient | null = null;
+      const irpClient = async (): Promise<IRPClient> => {
+        if (irp) return irp;
+        const [rawConfig] = await ctx.db
+          .select()
+          .from(eInvoiceConfigs)
+          .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
+          .limit(1);
+
+        if (!rawConfig) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "E-invoice configuration not found",
+          });
+        }
+        const config = decryptEInvoiceConfig(rawConfig);
+        requireIrpPublicKey(config.isSandbox);
+        irp = new IRPClient(config, ctx.db);
+        return irp;
+      };
+      // Everything that follows may talk to the IRP unless this only finishes a local
+      // cancel: fail fast, before any state is looked at further, when it cannot.
+      if (!resumeLocalCancel) await irpClient();
+
+      // The IRP is the authority on whether the IRN is cancelled. A cancel it
+      // accepted may never have been recorded here (the answer was lost to a
+      // timeout, the process died, a second click raced the first), and then our
+      // record says "generated" for an IRN that is gone. Asking is read-only, and
+      // any failure to find out counts as "not cancelled".
+      const irpSaysCancelled = async (): Promise<boolean> => {
+        try {
+          return await (await irpClient()).isIRNCancelled(invoice.irn!);
+        } catch {
+          return false;
+        }
+      };
+      // True once the IRP has confirmed a cancel that our record did not have.
+      let reconciledWithIrp = false;
+      let irpCancelCalled = false;
+
+      // Enforce 24-hour cancellation window. After it the IRP refuses a new cancel,
+      // but one sent inside the window may have gone through unseen: ask before refusing.
+      if (!resumeLocalCancel && invoice.irnAckDate) {
         const ackAge = Date.now() - new Date(invoice.irnAckDate).getTime();
         const twentyFourHoursMs = 24 * 60 * 60 * 1000;
         if (ackAge > twentyFourHoursMs) {
+          if (!(await irpSaysCancelled())) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "IRN can only be cancelled within 24 hours of generation. Please contact GST authorities for late cancellation.",
+            });
+          }
+          reconciledWithIrp = true;
+        }
+      }
+
+      // The invoice is cancelled together with its IRN: refuse now, before the
+      // IRP is asked to cancel, whatever would make that local cancel fail
+      // (payments allocated, wrong status, role rule).
+      if (invoice.status !== "cancelled") {
+        try {
+          await assertCancellable(ctx.db, actor, invoice, { irnCancelled: true });
+        } catch (err) {
+          if (!(err instanceof TRPCError)) throw err;
+          if (reconciledWithIrp) {
+            // The IRN is cancelled at the IRP after all: make the record say so.
+            await recordLocalCancelFailure(ctx.db, ctx, invoice, input.cancelReason, err);
+            throw localCancelFailed(err);
+          }
           throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "IRN can only be cancelled within 24 hours of generation. Please contact GST authorities for late cancellation.",
+            code: err.code,
+            message: `${resumeLocalCancel ? "The invoice was not cancelled" : "The IRN was not cancelled"}. Cancelling an e-invoice also cancels the invoice, which is not possible right now: ${err.message}`,
+            cause: err,
           });
         }
       }
 
-      // Submit cancellation to IRP
-      const client = new IRPClient(config, ctx.db);
-      await client.cancelIRN(
-        invoice.irn,
-        input.cancelReason,
-        input.cancelRemarks,
-      );
+      if (!resumeLocalCancel && !reconciledWithIrp) {
+        // Submit cancellation to IRP. If it fails and the IRP does not say the IRN
+        // is cancelled, nothing has changed anywhere and the original error stands.
+        try {
+          irpCancelCalled = true;
+          await (await irpClient()).cancelIRN(
+            invoice.irn,
+            input.cancelReason,
+            input.cancelRemarks,
+          );
+        } catch (err) {
+          if (!(await irpSaysCancelled())) throw err;
+          reconciledWithIrp = true;
+        }
+      }
 
-      // Update invoice status
-      const [updated] = await ctx.db
-        .update(invoices)
-        .set({
-          eInvoiceStatus: "cancelled",
-          eInvoiceCancelReason: input.cancelReason,
-          updatedAt: new Date(),
-        })
-        .where(eq(invoices.id, invoice.id))
-        .returning();
+      // The IRN is cancelled at the IRP from here on. Set the IRN state and
+      // cancel the invoice in one transaction so they cannot diverge.
+      const cancelReason = resumeLocalCancel ? (invoice.eInvoiceCancelReason ?? input.cancelReason) : input.cancelReason;
+      let result: Awaited<ReturnType<typeof cancelInvoiceInTx>>;
+      try {
+        result = await ctx.db.transaction((tx) =>
+          cancelInvoiceInTx(tx, actor, invoice.id, {
+            irnCancelled: true,
+            extra: { eInvoiceStatus: "cancelled", eInvoiceCancelReason: cancelReason, eInvoiceError: null },
+          }),
+        );
+      } catch (err) {
+        await recordLocalCancelFailure(ctx.db, ctx, invoice, cancelReason, err);
+        throw localCancelFailed(err);
+      }
 
-      return updated;
+      await logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "eInvoice.cancel",
+        entityType: "invoice",
+        entityId: invoice.id,
+        metadata: {
+          invoiceNumber: invoice.invoiceNumber,
+          irn: invoice.irn,
+          cancelReason,
+          invoiceCancelled: result.changed,
+          irpCalled: irpCancelCalled,
+          irpReconciled: reconciledWithIrp,
+        },
+        ipAddress: ctx.ipAddress,
+      });
+      if (result.changed) {
+        // Same audit entry a normal cancel writes, so the trail reads the same.
+        await logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user.id,
+          action: `${invoice.documentType}.updateStatus`,
+          entityType: invoice.documentType,
+          entityId: invoice.id,
+          metadata: {
+            invoiceNumber: invoice.invoiceNumber,
+            fromStatus: result.fromStatus,
+            toStatus: "cancelled",
+            via: "eInvoice.cancel",
+          },
+          ipAddress: ctx.ipAddress,
+        });
+      }
+
+      return result.invoice;
     }),
 
   /**
@@ -536,6 +781,20 @@ export const eInvoiceRouter = router({
         }
       }
 
+      // IRN cancelled but the invoice still live: the cancel was never finished (a
+      // release before 0.10.1, or a failure after the IRP succeeded, see `cancel`).
+      const [{ unfinishedCancellations }] = await ctx.db
+        .select({ unfinishedCancellations: sql<number>`count(*)::int` })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.businessId, ctx.businessId),
+            isNull(invoices.deletedAt),
+            eq(invoices.eInvoiceStatus, "cancelled"),
+            sql`${invoices.status} <> 'cancelled'`,
+          ),
+        );
+
       // Invoice list with filters
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
@@ -572,6 +831,9 @@ export const eInvoiceRouter = router({
             invoiceNumber: invoices.invoiceNumber,
             invoiceDate: invoices.invoiceDate,
             totalAmount: invoices.totalAmount,
+            // The invoice's own status: "cancelled" e-invoice + live invoice means the
+            // local cancel is unfinished (see `cancel`).
+            invoiceStatus: invoices.status,
             eInvoiceStatus: invoices.eInvoiceStatus,
             eInvoiceError: invoices.eInvoiceError,
             eInvoiceRetryCount: invoices.eInvoiceRetryCount,
@@ -598,6 +860,7 @@ export const eInvoiceRouter = router({
         page: input.page,
         limit: input.limit,
         counts,
+        unfinishedCancellations,
       };
     }),
 
@@ -612,6 +875,7 @@ export const eInvoiceRouter = router({
       const [invoice] = await ctx.db
         .select({
           id: invoices.id,
+          invoiceStatus: invoices.status,
           irn: invoices.irn,
           irnAckNumber: invoices.irnAckNumber,
           irnAckDate: invoices.irnAckDate,
@@ -643,7 +907,7 @@ export const eInvoiceRouter = router({
 
     // Check e-invoicing is enabled before fetching invoices
     const [config] = await ctx.db
-      .select({ id: eInvoiceConfigs.id })
+      .select({ id: eInvoiceConfigs.id, isSandbox: eInvoiceConfigs.isSandbox })
       .from(eInvoiceConfigs)
       .where(and(eq(eInvoiceConfigs.businessId, ctx.businessId), eq(eInvoiceConfigs.isEnabled, true)))
       .limit(1);
@@ -651,6 +915,8 @@ export const eInvoiceRouter = router({
     if (!config) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "E-invoicing is not enabled" });
     }
+    // One clear error up front, not "failed" 50 times.
+    requireIrpPublicKey(config.isSandbox);
 
     const failedInvoices = await ctx.db
       .select({ id: invoices.id })

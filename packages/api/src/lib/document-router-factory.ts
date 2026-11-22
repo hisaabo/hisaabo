@@ -23,6 +23,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { requireCan } from "./permissions.js";
 import { logAudit } from "./audit.js";
 import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
+import { applyDocumentCancel, staleEInvoiceErrorPatch } from "./invoice-cancel.js";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { reverseDocumentStockEffect } from "./document-stock-reversal.js";
 import { applyStockDeltas } from "./stock-adjust.js";
@@ -474,18 +475,18 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
           if (before.status === input.status) return { ...before, fromStatus: before.status };
 
-          if (input.status === "cancelled") {
-            await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
+          const isCancelling = input.status === "cancelled";
+          if (isCancelling) {
             // Cancel undoes the stock effect exactly like delete (once: the
             // before.status === input.status early-return above and the
             // transition check prevent re-cancelling, and delete skips
-            // cancelled docs).
-            await reverseDocumentStockEffect(tx, ctx.businessId, before.id, config.stockEffect);
+            // cancelled docs). Same guard + reversal as eInvoice.cancel.
+            await applyDocumentCancel(tx, ctx.businessId, before, config.stockEffect);
           }
 
           const [updated] = await tx
             .update(invoices)
-            .set({ status: input.status as InvoiceStatus, updatedAt: new Date() })
+            .set({ status: input.status as InvoiceStatus, updatedAt: new Date(), ...(isCancelling ? staleEInvoiceErrorPatch(before) : {}) })
             .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
             .returning();
           return { ...updated, fromStatus: before.status };

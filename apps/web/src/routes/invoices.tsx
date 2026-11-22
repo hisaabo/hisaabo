@@ -649,6 +649,18 @@ function InvoiceDetailPanel({
         <p className="text-text-tertiary text-sm">Invoice not found.</p>
       ) : (
         <div className="space-y-5">
+          {/* The IRN was cancelled but the invoice was never cancelled with it */}
+          {invoice.eInvoiceStatus === "cancelled" && invoice.status !== "cancelled" && (
+            <div
+              role="alert"
+              className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+            >
+              The e-invoice (IRN) for this invoice is cancelled, but the invoice is still active, so it still counts
+              in your GST returns, ledger and stock. Finish cancelling it: remove any payments first, then use{" "}
+              <strong>Cancel invoice</strong> on the E-Invoicing page.
+            </div>
+          )}
+
           {/* Header info */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-3">

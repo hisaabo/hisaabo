@@ -78,7 +78,11 @@ export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: bo
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  await confirmOrExit(`Cancel the e-invoice for ${invoiceId}? This cannot be undone.`, opts);
+  await confirmOrExit(
+    `Cancel the e-invoice for ${invoiceId}? This also cancels the invoice (its stock and returns are adjusted, and it leaves GST returns and the ledger). ` +
+      "A cancelled e-invoice cannot be amended: issue a new invoice if you still need to bill the customer. This cannot be undone.",
+    opts,
+  );
 
   try {
     const cancelReason = opts.reason ?? "1";
@@ -90,7 +94,7 @@ export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: bo
       return;
     }
 
-    console.log(`  E-Invoice for ${invoiceId} cancelled.\n`);
+    console.log(`  E-Invoice for ${invoiceId} cancelled, and the invoice with it. Issue a new invoice if you still need to bill the customer.\n`);
 
   } catch (e) {
     handleError(e);

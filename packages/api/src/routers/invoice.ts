@@ -2,48 +2,17 @@ import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { getTenantDb, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
-
-// Reverse the stock (and purchase ITC) impact an invoice had at creation.
-// Shared by delete and cancel so both undo exactly the same effects.
-type InvoiceTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
-
-async function reverseInvoiceEffects(
-  tx: InvoiceTx,
-  businessId: string,
-  inv: { id: string; type: "sale" | "purchase"; documentType: string },
-) {
-  const lineItemRows = await tx.select()
-    .from(invoiceItems)
-    .where(eq(invoiceItems.invoiceId, inv.id));
-
-  // Reverse stock per line item (batched, NUMERIC arithmetic in SQL)
-  await applyStockDeltas(
-    tx,
-    lineItemRows.map((li) => ({ ...li, sign: inv.type === "sale" ? (1 as const) : (-1 as const) })),
-    { businessId },
-  );
-
-  // Auto-reverse ITC when a purchase invoice is deleted/cancelled
-  if (inv.type === "purchase" && inv.documentType === "invoice") {
-    await tx.update(itcLedgerEntries)
-      .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
-      .where(and(
-        eq(itcLedgerEntries.invoiceId, inv.id),
-        eq(itcLedgerEntries.businessId, businessId),
-        inArray(itcLedgerEntries.status, ["available", "blocked"]),
-      ));
-  }
-}
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -724,16 +693,12 @@ export const invoiceRouter = router({
 
         const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
         if (isCancelling) {
-          // Cancelling undoes stock like delete does, so it needs the same permission and rule.
-          requireCan(ctx.ability, "delete", "Invoice");
-          const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: before.status, createdAt: before.createdAt });
-          if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
-          await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
-          await reverseInvoiceEffects(tx, ctx.businessId, before);
+          // Same rules and effects as cancelling through eInvoice.cancel (lib/invoice-cancel.ts).
+          await applyInvoiceCancel(tx, ctx, before);
         }
 
         const [invoice] = await tx.update(invoices)
-          .set({ status: input.status, updatedAt: new Date() })
+          .set({ status: input.status, updatedAt: new Date(), ...(isCancelling ? staleEInvoiceErrorPatch(before) : {}) })
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
           .returning();
 

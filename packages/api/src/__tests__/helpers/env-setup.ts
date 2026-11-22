@@ -13,6 +13,7 @@
  * correct model for the test environment.
  */
 
+import { generateKeyPairSync } from "node:crypto";
 import { inject } from "vitest";
 import {
   templateDatabaseUrl,
@@ -42,6 +43,17 @@ process.env.MULTI_TENANT = "false";
 process.env.NODE_ENV = "test";
 // Prevent real email delivery during tests
 process.env.RESEND_API_KEY = "";
+// E-invoicing refuses to run without a NIC public key (lib/irp-public-key.ts). Tests that
+// exercise it mock the IRP client, so any valid RSA key will do; one generated here,
+// never a real NIC key. The suites that cover the key itself set their own.
+{
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  process.env.IRP_PUBLIC_KEY_PEM = pem;
+  process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = pem;
+  delete process.env.IRP_PUBLIC_KEY_PATH;
+  delete process.env.IRP_SANDBOX_PUBLIC_KEY_PATH;
+}
 // Most suites create several users on one self-hosted DB; the invite-only
 // signup policy has its own suite that turns this off.
 process.env.ALLOW_OPEN_SIGNUP = "true";

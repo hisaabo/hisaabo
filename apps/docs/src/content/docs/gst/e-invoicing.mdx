@@ -1,0 +1,51 @@
+---
+title: E-Invoicing (IRP)
+description: Set up e-invoicing in Hisaabo — the IRP credentials, the NIC public key a self-hosted server needs, Test Connection, generating and cancelling an IRN.
+sidebar:
+  order: 3
+---
+
+E-invoicing (GST Section 31A) means registering each B2B invoice with the government's Invoice Registration Portal (IRP) to get an **IRN** (Invoice Reference Number) and a signed QR code. Hisaabo submits invoices to the NIC IRP for you, tracks the status of every one, and lets you cancel an IRN within 24 hours.
+
+E-invoicing needs two things: **your business's IRP API credentials** (entered in the app) and the **NIC public key** (configured on the server).
+
+## 1. Your business's IRP credentials
+
+Create API credentials for your GSTIN on the NIC e-invoice portal (the API user, plus a client id and secret from your GSP or NIC). Then open **E-Invoicing, Settings** and enter:
+
+- your GSTIN, the client id and client secret, and the API username and password (stored encrypted)
+- **Sandbox mode** on while you test, off for real e-invoices
+- **Enable E-Invoicing** when you are ready for eligible B2B invoices to be submitted
+
+## 2. The NIC public key (server setup)
+
+The IRP only accepts a sign-in request encrypted with NIC's public key. NIC issues a **different key for the sandbox and for production**, and Hisaabo does not bundle either.
+
+- **Hisaabo cloud:** the server operator configures it. If Test Connection reports a server setup problem, contact support.
+- **Self-hosted:** whoever runs the server must download the key from the NIC e-invoice portal and set `IRP_SANDBOX_PUBLIC_KEY_PATH` (sandbox) and/or `IRP_PUBLIC_KEY_PATH` (production), or the `_PEM` variants. See [Deployment, E-invoicing (IRP)](https://github.com/hisaabo/hisaabo/blob/main/docs/DEPLOYMENT.md#e-invoicing-irp) for the steps, then restart the API.
+
+## 3. Test the connection
+
+Press **Test Connection** on the Settings tab. If it fails, it tells you which step:
+
+| Message | What it means | Who fixes it |
+|---|---|---|
+| **Server setup:** the NIC public key is missing or invalid | The server has no valid NIC key for this mode (sandbox or production) | The server operator, as above |
+| **Network:** the IRP could not be reached | The IRP did not answer in 30 seconds | Try again; check the server's internet access |
+| **Sign-in:** the IRP rejected the credentials | Wrong client id/secret, username, password or GSTIN, or a key for the wrong environment | You, in Settings |
+
+Until the server key is set up, generating, retrying and cancelling e-invoices is refused with "E-invoicing is not configured" and **nothing is changed**: your invoices are not marked failed because of a server setting.
+
+## Generating an IRN
+
+Open **E-Invoicing**, find the invoice (only B2B invoices, where the customer has a GSTIN, qualify) and press **Generate**. Failed or pending invoices have **Retry**, and **Retry All Failed** retries up to 50 at once.
+
+## Cancelling an IRN cancels the invoice
+
+Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and if the customer still needs billing you issue a **new invoice with a new number**. So **Cancel** on the E-Invoicing page cancels the IRN on the NIC portal **and the invoice itself**: its stock and returns are adjusted, and it leaves your GST returns, ledger and party balances.
+
+- It is only possible within **24 hours** of generating the IRN.
+- It is refused, before anything is sent to the portal, while payments are allocated to the invoice. Remove or reallocate them first.
+- If the portal accepts the cancellation but Hisaabo cannot cancel the invoice, the e-invoice shows **Cancelled** with a warning, a banner on the E-Invoicing page counts these, and **Cancel invoice** on the row finishes the job without contacting the portal again.
+
+See [Invoice statuses](/invoicing/invoice-statuses) for what cancelling does to an invoice.
