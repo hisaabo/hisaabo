@@ -96,6 +96,27 @@ export async function reverseInvoiceEffects(
 }
 
 /**
+ * Undo what creating a document of ANY type did to stock (and, for a purchase-side
+ * reversal, to the ITC ledger): `reverseInvoiceEffects` for an invoice, the type's own
+ * DOCUMENT_STOCK_EFFECT for everything else (a credit note or quotation moves no stock, a
+ * sales return added it, a purchase return or delivery challan removed it). For callers
+ * that accept any document id, i.e. `invoice.delete`, and that have already run their own
+ * guards; the document routers' delete does the same two steps for its own type.
+ */
+export async function reverseDocumentEffects(
+  tx: CancelTx,
+  businessId: string,
+  doc: { id: string; type: "sale" | "purchase"; documentType: string },
+): Promise<void> {
+  if (doc.documentType === "invoice") {
+    await reverseInvoiceEffects(tx, businessId, doc);
+    return;
+  }
+  await reverseDocumentStockEffect(tx, businessId, doc.id, DOCUMENT_STOCK_EFFECT[doc.documentType] ?? "none");
+  await removePurchaseReversalItc(tx, businessId, doc);
+}
+
+/**
  * Rules for cancelling a document whose documentType is "invoice": cancelling
  * undoes stock like delete does, so it needs the same permission and rule, and
  * it is refused while payments are allocated or an IRN is still live.

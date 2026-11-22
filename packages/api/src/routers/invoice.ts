@@ -7,7 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
-import { applyDocumentCancel, applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { applyDocumentCancel, applyInvoiceCancel, reverseDocumentEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
 import { DOCUMENT_STOCK_EFFECT } from "../lib/document-stock-reversal.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
@@ -1062,8 +1062,11 @@ export const invoiceRouter = router({
         await assertNoPaymentsOrActiveIrn(tx, "delete", inv);
 
         // A cancelled invoice already had its stock/ITC reversed when it was cancelled.
+        // This route accepts any document id, so undo what that document type did (an
+        // invoice's stock by its sale / purchase side; a credit note, quotation, sales
+        // return, ... by its own DOCUMENT_STOCK_EFFECT).
         if (inv.status !== "cancelled") {
-          await reverseInvoiceEffects(tx, ctx.businessId, inv);
+          await reverseDocumentEffects(tx, ctx.businessId, inv);
         }
 
         // Soft delete
