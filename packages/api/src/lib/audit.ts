@@ -11,6 +11,8 @@ export async function logAudit(
     entityId?: string | null;
     metadata?: Record<string, unknown>;
     ipAddress?: string | null;
+    /** "webmcp" | "mcp" | null — see lib/audit-source.ts. Pass `ctx.source`. */
+    source?: string | null;
   }
 ) {
   try {
@@ -22,6 +24,7 @@ export async function logAudit(
       entityId: params.entityId || null,
       metadata: params.metadata ? JSON.stringify(params.metadata) : null,
       ipAddress: params.ipAddress || null,
+      source: params.source || null,
     });
   } catch (err) {
     // Never let audit logging break the main operation

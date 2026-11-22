@@ -274,6 +274,7 @@ export const itemRouter = router({
           entityId: item.id,
           metadata: { name: item.name },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
 
         return { ...item, variants };
@@ -287,6 +288,7 @@ export const itemRouter = router({
         entityId: item.id,
         metadata: { name: item.name },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
@@ -382,6 +384,7 @@ export const itemRouter = router({
         entityId: input.id,
         metadata: { itemId: input.id, name: result.name, newUnit: input.newUnit, conversionFactor: input.conversionFactor },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return result;
@@ -441,6 +444,7 @@ export const itemRouter = router({
         entityId: item.id,
         metadata: { name: item.name },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return item;
@@ -511,6 +515,7 @@ export const itemRouter = router({
         entityId: input.id,
         metadata: { itemId: input.id, oldUnit: input.oldUnit, newUnit: input.newUnit },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return result;
@@ -582,6 +587,7 @@ export const itemRouter = router({
           entityId: input.id,
           metadata: { itemId: input.id },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 
@@ -1132,6 +1138,7 @@ export const itemRouter = router({
         entityId: variant.id,
         metadata: { itemId: input.itemId, variantName: JSON.stringify(input.variant.attributeValues) },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return variant;
@@ -1182,6 +1189,7 @@ export const itemRouter = router({
         entityId: input.variantId,
         metadata: { variantId: input.variantId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return variant;
@@ -1236,6 +1244,7 @@ export const itemRouter = router({
           entityId: input.variantId,
           metadata: { variantId: input.variantId },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 

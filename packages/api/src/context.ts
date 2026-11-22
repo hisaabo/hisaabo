@@ -2,6 +2,7 @@ import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { createHash } from "crypto";
 import { logger } from "./lib/logger.js";
 import { getTrustedClientIp } from "./lib/client-ip.js";
+import { auditSourceFromHeaders } from "./lib/audit-source.js";
 import { controlDb } from "@hisaabo/db";
 import { sessions, users, apiKeys, accessTokens } from "@hisaabo/db";
 import { eq, gt, and, or, isNull, lt, sql } from "drizzle-orm";
@@ -296,6 +297,8 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
     req: opts.req,
     resHeaders: opts.resHeaders,
     ipAddress: getTrustedClientIp(opts.req.headers),
+    // Attribution only (webmcp / mcp / null): copied onto audit rows by logAudit callers.
+    source: auditSourceFromHeaders(opts.req.headers),
     viaApiKey,
     authTokenKind,
   };
@@ -306,9 +309,11 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
 // may omit it — we make it optional here so the Context type is compatible
 // with both code paths.
 type RawContext = Awaited<ReturnType<typeof createContext>>;
-export type Context = Omit<RawContext, "authTokenKind" | "viaApiKey"> & {
+export type Context = Omit<RawContext, "authTokenKind" | "viaApiKey" | "source"> & {
   authTokenKind?: "access" | "refresh" | "cookie" | null;
   viaApiKey?: boolean;
+  /** Where the call came from, for the audit log (see lib/audit-source.ts). Optional so hand-built test contexts need not set it. */
+  source?: "webmcp" | "mcp" | null;
 };
 
 function getCookie(req: Request, name: string): string | null {

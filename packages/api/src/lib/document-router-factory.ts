@@ -434,6 +434,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityId: doc.id,
           metadata: { invoiceNumber: doc.invoiceNumber, type: config.documentType },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
 
         return doc;
@@ -499,6 +500,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityId: input.id,
           metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: doc.fromStatus, toStatus: input.status },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
 
         const { fromStatus: _from, ...result } = doc;
@@ -567,6 +569,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             entityId: input.id,
             metadata: { invoiceNumber: deleteResult.invoiceNumber },
             ipAddress: ctx.ipAddress,
+            source: ctx.source,
           });
         }
 

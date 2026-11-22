@@ -137,6 +137,7 @@ export const recurringInvoiceRouter = router({
       entityId: template.id,
       metadata: { templateName: input.name },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return template;
@@ -178,6 +179,7 @@ export const recurringInvoiceRouter = router({
         entityId: input.id,
         metadata: { templateId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -198,6 +200,7 @@ export const recurringInvoiceRouter = router({
         entityId: input.id,
         metadata: { templateId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };
@@ -225,6 +228,7 @@ export const recurringInvoiceRouter = router({
         entityId: input.id,
         metadata: { templateId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -264,6 +268,7 @@ export const recurringInvoiceRouter = router({
         entityId: input.id,
         metadata: { templateId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;

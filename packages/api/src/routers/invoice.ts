@@ -499,6 +499,7 @@ export const invoiceRouter = router({
       entityId: invoice.id,
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     // ── Async e-invoice submission (fire-and-forget) ───────────────────────
@@ -735,6 +736,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus, toStatus: input.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return invoice;
@@ -956,6 +958,7 @@ export const invoiceRouter = router({
         entityId: updated.id,
         metadata: { invoiceNumber: updated.invoiceNumber },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -1006,6 +1009,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: result.invoiceNumber, previousStatus: result.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

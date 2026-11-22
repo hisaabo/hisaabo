@@ -397,6 +397,12 @@ function getDateRange(filter: string): { fromDate?: string; toDate?: string } {
 
 const AUDIT_PAGE_SIZE = 30;
 
+/** Attribution labels for `audit_log.source`. Shown, never acted on: see packages/api/src/lib/audit-source.ts. */
+const AUDIT_SOURCE_LABELS: Record<string, string> = {
+  webmcp: "via browser AI agent",
+  mcp: "via MCP server",
+};
+
 function ActivityLogContent() {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -472,6 +478,11 @@ function ActivityLogContent() {
                     </div>
                     <span className="text-xs text-text-tertiary mt-0.5 block">
                       by {entry.userName ?? "Unknown"}
+                      {AUDIT_SOURCE_LABELS[entry.source as string] && (
+                        <span className="ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-text-secondary">
+                          {AUDIT_SOURCE_LABELS[entry.source as string]}
+                        </span>
+                      )}
                     </span>
                   </div>
                   <span className="text-xs text-text-tertiary whitespace-nowrap shrink-0">

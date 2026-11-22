@@ -23,11 +23,22 @@ import type { AppRouter } from "@hisaabo/api";
 import { TRPC_URL } from "@/lib/trpc";
 import type { WebMcpTrpcClient } from "./types";
 
+/**
+ * Marks a request as made by a browser AI agent. The API copies it onto the audit
+ * log (`audit_log.source = "webmcp"`) and counts it against a separate rate-limit
+ * bucket. It is attribution, not authorisation: a client can send or omit it, so
+ * nothing is permitted or refused because of it. Deliberately NOT
+ * `x-hisaabo-client`, which has meaning for auth (bearer-client.ts).
+ */
+export const WEBMCP_AGENT_HEADER = "x-hisaabo-agent";
+export const WEBMCP_AGENT_VALUE = "webmcp";
+
 /** The headers every WebMCP request carries. Pure, so tests can assert them without a network. */
 export function webMcpRequestHeaders(businessId: string): Record<string, string> {
   return {
     "X-Requested-With": "hisaabo",
     "x-business-id": businessId,
+    [WEBMCP_AGENT_HEADER]: WEBMCP_AGENT_VALUE,
   };
 }
 

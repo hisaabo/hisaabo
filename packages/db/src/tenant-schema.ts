@@ -586,6 +586,12 @@ export const auditLog = pgTable("audit_log", {
   entityId: uuid("entity_id"),
   metadata: text("metadata"), // JSON string of changes
   ipAddress: text("ip_address"),
+  // Which kind of client made the change when it was not a person at the UI:
+  // "webmcp" (a browser AI agent, header x-hisaabo-agent) or "mcp" (the MCP
+  // server, header x-client-type). Null = a normal client. ATTRIBUTION, not
+  // authorisation: the headers are client-supplied, so this says what the caller
+  // claimed, and no permission check ever reads it. See lib/audit-source.ts.
+  source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("audit_log_business_idx").on(t.businessId),

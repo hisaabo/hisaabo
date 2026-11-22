@@ -48,6 +48,8 @@ export interface CreateTestCallerOptions {
   tenantId: string;
   /** The active business ID. The middleware will verify it exists in the tenant DB. */
   businessId: string;
+  /** Extra request headers, e.g. `x-hisaabo-agent: webmcp` to exercise audit attribution. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -62,6 +64,7 @@ export function createTestCaller(opts: CreateTestCallerOptions): TestCaller {
     user: { id: opts.userId, email: opts.email, name: opts.name },
     tenantId: opts.tenantId,
     businessId: opts.businessId,
+    headers: opts.headers,
   });
 
   return _callerFactory(ctx);

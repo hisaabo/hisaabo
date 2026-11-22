@@ -519,6 +519,7 @@ export const paymentRouter = router({
       entityId: payment.id,
       metadata: { paymentNumber: payment.paymentNumber, amount: payment.amount, mode: payment.mode },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return payment;
@@ -876,6 +877,7 @@ export const paymentRouter = router({
       entityId: updated.id,
       metadata: { paymentNumber: updated.paymentNumber },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return updated;
@@ -997,6 +999,7 @@ export const paymentRouter = router({
           entityId: input.id,
           metadata: { paymentNumber: result.payment.paymentNumber, amount: result.payment.amount },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 
@@ -1191,6 +1194,7 @@ export const paymentRouter = router({
           entityId: result.paymentIds[0],
           metadata: { paymentId: result.paymentIds[0], bankAccountId: input.bankAccountId, totalAssigned: result.assigned },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 

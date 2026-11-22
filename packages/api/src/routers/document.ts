@@ -162,6 +162,7 @@ export const documentRouter = router({
           entityId: newDoc.id,
           metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
 
         return { id: newDoc.id, documentType: "invoice" as DocumentType, invoiceNumber: newDoc.invoiceNumber };
@@ -196,6 +197,7 @@ export const documentRouter = router({
         entityId: newDoc.id,
         metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { id: newDoc.id, documentType: targetType, invoiceNumber: newDoc.invoiceNumber };
