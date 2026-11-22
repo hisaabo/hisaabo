@@ -515,6 +515,10 @@ async function migrateMultiTenant(): Promise<boolean> {
 
 async function restrictTenantDbAccess(controlUrl: string): Promise<TenantDbAccessReport> {
   const report = await restrictExistingTenantDatabases({ controlUrl, logger: log });
+  if (report.skippedLockHeld) {
+    log("info", "Tenant database access: skipped, another instance is running the same pass");
+    return report;
+  }
   log(report.failed > 0 ? "warn" : "info", "Tenant database access: closed to PUBLIC", {
     total: report.total,
     restricted: report.restricted,
@@ -528,7 +532,7 @@ async function restrictTenantDbAccess(controlUrl: string): Promise<TenantDbAcces
 /**
  * `--restrict-tenant-db-access`: multi-tenant only, runs no schema migrations.
  * The same pass the migrate step runs after tenant migrations; exits 1 if any
- * tenant database could not be restricted.
+ * tenant database could not be restricted, or if another instance held the lock.
  */
 async function restrictTenantDbAccessCommand(): Promise<boolean> {
   if (process.env.MULTI_TENANT !== "true") {
@@ -541,6 +545,10 @@ async function restrictTenantDbAccessCommand(): Promise<boolean> {
     return false;
   }
   const report = await restrictTenantDbAccess(controlUrl);
+  if (report.skippedLockHeld) {
+    log("error", "Another instance holds the tenant database access lock; nothing was changed. Retry in a moment.");
+    return false;
+  }
   return report.failed === 0;
 }
 

@@ -250,11 +250,42 @@ describe("tenant database access (F-P3)", () => {
       for (const d of [a.dbName, b.dbName, legacy.dbName]) expect(await asMigrator(d)).toBe("ok");
     });
 
-    it("is idempotent and safe to run concurrently (several replicas booting together)", async () => {
-      const runs = await Promise.all([1, 2, 3].map(() => restrictExistingTenantDatabases({ controlUrl })));
-      for (const r of runs) expect(r).toMatchObject({ total: 5, restricted: 3, missing: 1, skipped: 1, failed: 0 });
+    it("is idempotent: a second run reports the same and changes nothing", async () => {
+      const r = await restrictExistingTenantDatabases({ controlUrl });
+      expect(r).toMatchObject({ total: 5, restricted: 3, missing: 1, skipped: 1, failed: 0, skippedLockHeld: false });
       expect(await as(a, b.dbName)).toBe("denied");
       expect(await as(a, a.dbName)).toBe("ok");
+    });
+
+    it("concurrent runs (several replicas booting together) neither fail nor wait: one runs, the others skip", async () => {
+      const runs = await Promise.all([1, 2, 3].map(() => restrictExistingTenantDatabases({ controlUrl })));
+      expect(runs.filter((r) => !r.skippedLockHeld).length).toBeGreaterThanOrEqual(1);
+      for (const r of runs) {
+        expect(r.failed).toBe(0);
+        if (!r.skippedLockHeld) expect(r).toMatchObject({ total: 5, restricted: 3 });
+      }
+      expect(await as(a, b.dbName)).toBe("denied");
+    });
+
+    it("does not hang when the lock is held: returns at once with skippedLockHeld and changes nothing", async () => {
+      // pg_advisory_lock(72919285) is TENANT_DB_ACCESS_LOCK_ID: hold it on another session
+      const holder = postgres(controlUrl, { max: 1, onnotice: () => {} });
+      try {
+        await holder`SELECT pg_advisory_lock(72919285)`;
+        await admin.unsafe(`GRANT CONNECT, TEMPORARY ON DATABASE "${b.dbName}" TO PUBLIC`); // reopen: a skipped run must not close it
+        const started = Date.now();
+        const r = await restrictExistingTenantDatabases({ controlUrl });
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(r).toMatchObject({ skippedLockHeld: true, total: 0, restricted: 0, failed: 0 });
+        expect(await as(a, b.dbName)).toBe("ok");
+      } finally {
+        await holder`SELECT pg_advisory_unlock(72919285)`;
+        await holder.end({ timeout: 2 });
+      }
+      // lock released: the next run does the work again
+      const after = await restrictExistingTenantDatabases({ controlUrl });
+      expect(after).toMatchObject({ skippedLockHeld: false, restricted: 3, failed: 0 });
+      expect(await as(a, b.dbName)).toBe("denied");
     });
 
     it("an explicit GRANT CONNECT to another role (backup, BI) survives later passes", async () => {

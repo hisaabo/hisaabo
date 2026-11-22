@@ -109,6 +109,8 @@ export interface TenantDbAccessReport {
   /** Databases that could not be restricted, or where the change had no effect (see `failures`). */
   failed: number;
   failures: { tenantId: string; slug: string; error: string }[];
+  /** Another run (replica) held the advisory lock, so this call did nothing. */
+  skippedLockHeld: boolean;
 }
 
 interface TenantAccessRow {
@@ -146,8 +148,10 @@ function adminUrlFor(controlUrl: string, host: string, port: string): string {
  * thrown, so one broken tenant cannot stop the others (or the boot).
  *
  * Uses one connection per distinct database server, not one per tenant. A
- * session-level advisory lock on the control database serialises concurrent
- * runs (several replicas booting together).
+ * session-level advisory lock on the control database keeps concurrent runs
+ * (several replicas booting together) from changing one pg_database row at
+ * once; it is TRY-locked, so a run that finds it held returns immediately with
+ * `skippedLockHeld` instead of making boot wait.
  */
 export async function restrictExistingTenantDatabases(opts: {
   controlUrl: string;
@@ -155,7 +159,7 @@ export async function restrictExistingTenantDatabases(opts: {
 }): Promise<TenantDbAccessReport> {
   const log: LogFn = opts.logger ?? (() => {});
   const report: TenantDbAccessReport = {
-    total: 0, restricted: 0, skipped: 0, missing: 0, failed: 0, failures: [],
+    total: 0, restricted: 0, skipped: 0, missing: 0, failed: 0, failures: [], skippedLockHeld: false,
   };
 
   const control = postgres(opts.controlUrl, {
@@ -164,7 +168,14 @@ export async function restrictExistingTenantDatabases(opts: {
   const servers = new Map<string, postgres.Sql>();
   let locked = false;
   try {
-    await control`SELECT pg_advisory_lock(${TENANT_DB_ACCESS_LOCK_ID})`;
+    // Never wait: a blocking lock would stall boot behind a hung or slow holder.
+    // If another run holds it, that run is doing the same work; skip.
+    const [lock] = await control<{ got: boolean }[]>`SELECT pg_try_advisory_lock(${TENANT_DB_ACCESS_LOCK_ID}) AS got`;
+    if (!lock?.got) {
+      report.skippedLockHeld = true;
+      log("info", "tenant database access: another run holds the lock, skipping (it is doing the same work)");
+      return report;
+    }
     locked = true;
 
     const rows = await control<TenantAccessRow[]>`
