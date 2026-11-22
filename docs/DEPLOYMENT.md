@@ -42,7 +42,7 @@
 
 ### On push to `main` (path-filtered): previews only
 
-Nothing reaches production from `main`. Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
+Nothing from the app reaches production from `main` (the documentation site below is the one exception). Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
 
 | Workflow | Trigger paths | Preview |
 |---|---|---|
@@ -57,7 +57,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 
 ### On a release tag (`v*`): production
 
-**`release.yml`** is the only path to production for the web app, the store and the API reference. It runs these jobs in order:
+The web app, the store and the API reference reach production only for a **release tag**, by one of two routes. A `v*` tag push runs **`release.yml`**, the normal route, described here. The other is a manual run of a deploy workflow (Deploy Web, Deploy Store, Deploy API Docs) with a tag, for a redeploy or rollback; it passes through the same `production` approval and the same API version check below, but does not build images or wait. `release.yml` runs these jobs in order:
 
 1. `changes` checks that the tag matches every version manifest.
 2. `prepare-release` creates the **one** GitHub release for the tag (a draft), or reuses one that already exists, draft or published. Every other job attaches to it by id; none creates another.
@@ -85,10 +85,10 @@ The `@hisaabo/cli` and `@hisaabo/mcp` npm publishes (API clients, and npm cannot
 
 Emergencies and recovery:
 
-- **Skip the API wait, or change its timeout.** Run the Release workflow manually on the tag ref (Actions → Release → Run workflow, ref = the tag) with `skip_api_wait` ticked, or `api_wait_timeout_minutes` set. A second run on a tag does not rebuild anything: `docker` finds both images already published, **verifies their existing cosign signatures** (this workflow, this tag, this commit) and carries on with those exact digests, so it reaches the wait and the deploys. The same applies to **Re-run all jobs**. With `skip_api_wait` the job logs a loud warning, the release notes say `Version NOT verified`, and the frontends run against whatever API is live, so use it only when that is known to be compatible.
+- **Run the release again on its tag** (to skip the wait, or to change its timeout). Run the Release workflow manually on the tag ref (Actions → Release → Run workflow, ref = the tag) with `skip_api_wait` ticked or `api_wait_timeout_minutes` set. A second run on a tag does not rebuild anything: `docker` finds both images already published, **verifies their existing cosign signatures** (this workflow, this tag, this commit) and carries on with those exact digests, so it reaches the wait and the deploys. The same applies to **Re-run all jobs**. With `skip_api_wait` the job logs a loud warning, the release notes say `Version NOT verified`, and the frontends run against whatever API is live, so use it only when that is known to be compatible.
 - **`force` is a separate, deliberate act.** It is the only way to overwrite release images: tick `force` on a manual run to re-push both images when a publish was partial (only one image exists) or an existing image has no valid signature. It is never implied by a re-run or by `skip_api_wait`, and without it a partial publish fails with a message saying so.
-- **Change the wait.** `api_wait_timeout_minutes` on a manual run, or the `API_WAIT_TIMEOUT_MINUTES` repository variable for tag pushes, shortens it (values above 350 are capped).
-- **Redeploy or roll back a frontend.** Run Deploy Web / Deploy Store / Deploy API Docs manually with a release tag such as `v0.9.1` (see [ROLLBACK.md](ROLLBACK.md#6-rolling-back-a-release)). These runs do not wait for the API, but they never skip the version check below, and need the `production` approval.
+- **Change the wait.** `api_wait_timeout_minutes` on a manual run, or the `API_WAIT_TIMEOUT_MINUTES` repository variable (which tag pushes use), sets how long `wait-for-api` polls (default and maximum 350 minutes).
+- **Redeploy or roll back a frontend.** Run Deploy Web / Deploy Store / Deploy API Docs manually with a release tag such as `v0.9.1` (see [ROLLBACK.md](ROLLBACK.md#6-rolling-back-a-release)). These runs do not wait for the API, but they never skip the version check described above, and need the `production` approval.
 - **Cloudflare settings:** the projects use direct uploads from these workflows. If a Pages project is also connected to the GitHub repository in the Cloudflare dashboard, disconnect it (or disable automatic production deployments), otherwise Cloudflare keeps deploying `main` itself. The production branch name defaults to `main`; set the `CF_PAGES_PRODUCTION_BRANCH` repository variable if a project uses another.
 
 ## Environment Variables

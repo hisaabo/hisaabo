@@ -999,4 +999,4 @@ This is about application versions, not schema (sections 1 to 5). A release is d
 2. **API.** Set `HISAABO_API_IMAGE` in `.env.prod` back to the previous tag and run `pull api` and `up -d api` (see [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install)). If the newer API already applied migrations, read sections 1 to 5 first: most migrations are expand-only and are left in place, and a restore from a pre-upgrade backup is the safe way back when one is not.
 3. **Confirm** with `curl https://api.hisaabo.in/api/version`: it must report the version you rolled back to (an API older than 0.10.1 answers 404).
 
-Do not re-run the Release workflow to roll back. It is not idempotent for images (an existing `vX.Y.Z` is refused), and re-tagging an old version is never needed: its images and its frontend build still exist.
+Do not use the Release workflow to roll back: it would only re-verify the existing images and then wait for, or check, the API again. The older version's images already exist and the deploy workflows rebuild its frontends from the tag, so a rollback is the two steps above and never needs a re-tag.
