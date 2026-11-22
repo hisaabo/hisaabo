@@ -335,7 +335,7 @@ For scripts and CI, pipe an API key instead: `echo "$KEY" | hisaabo login --api-
 
 `hisaabo invoice create`:
 
-The flow mirrors the web `InvoiceCreator.tsx` but linearized for terminal. Each step can be skipped or pre-filled via flags.
+The flow mirrors the web `DocumentCreator.tsx` but linearized for terminal. Each step can be skipped or pre-filled via flags.
 
 ```
 $ hisaabo invoice create
