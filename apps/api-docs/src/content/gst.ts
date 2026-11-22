@@ -141,6 +141,7 @@ print("Tax payable CGST:", summary["table3_1"]["outwardTaxable"]["cgst"])`,
       gotchas: [
         "Requires `Report:read` permission.",
         "GSTR-3B is a summary return — it aggregates all invoices into category totals. Use `gst.gstr1` for invoice-level detail.",
+        "A credit note or sales return is classified by its `type`, not its name: one raised from a purchase invoice (`type = purchase`) reverses the purchase, is not in `gst.gstr1` `creditNotes`, and reduces `itc` instead. Purchase-type quotations, proformas and delivery challans never count toward `itc`.",
         "Since v0.10.1, `outwardSupplies.taxable` and `taxPayable` are net of credit notes / sales returns and include sale-side debit notes, while `gst.gstr1` still lists invoices gross and the notes in `creditNotes` / `debitNotes`. `itc` is reduced by purchase returns and purchase-side debit notes. Figures for past months can differ from what an earlier version returned.",
         "CGST and SGST are split per line like the e-invoice (IRP) payload: CGST = round-half-up(line tax / 2), SGST = the remainder, so an odd paisa goes to CGST (0.29 = 0.15 + 0.14). The document figures are the sums of the lines. The invoice, the ledger, GSTR-1, GSTR-3B, GSTR-9, the PDF and the e-way bill all use this one rule.",
         "Inter-state supplies (table 3.2) are derived from invoice place-of-supply vs business state code.",
