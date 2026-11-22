@@ -33,11 +33,12 @@
  * subtotal + tax when those three are zero.
  */
 
-import { money } from "@hisaabo/shared";
+import { isRoundOffWithinBound, money } from "@hisaabo/shared";
 import {
   DISCOUNT_ALLOWED_CODE,
   OTHER_CHARGES_CODE,
   ROUND_OFF_CODE,
+  SUSPENSE_CODE,
 } from "./coa-seed.js";
 import { documentGstSplit, type LineGstSplit } from "./gst-split.js";
 import type { DerivedEntryLine } from "./derive-ledger.js";
@@ -172,6 +173,12 @@ export interface DocumentAdjustments {
   charges: string;
   /** Round-off, signed: positive raised the total, negative lowered it. */
   roundOff: string;
+  /**
+   * An UNEXPLAINED difference larger than a rupee, signed like the round-off. Zero for every
+   * document the app computed itself; non-zero only for rows whose stored total disagrees with
+   * their columns by more than a round-off could (legacy imports, hand-edited data).
+   */
+  suspense: string;
 }
 
 export interface AdjustableDocument {
@@ -193,7 +200,10 @@ export interface AdjustableDocument {
  * columns disagree with the stored total (older imports, legacy
  * `additionalCharges` that never reached the total, a `round_off` stored on a
  * document whose total excludes it) are not guessed at: the whole difference is
- * posted as round-off, so the entry always balances and net profit stays right.
+ * posted so the entry always balances, but WHERE depends on its size. Up to the
+ * round-off bound (1.00) it is a round-off; anything larger is not a rounding
+ * difference and must not be hidden in the P&L, so it goes to the Suspense /
+ * Unreconciled account (2900), a balance-sheet account, for someone to resolve.
  */
 export function splitDocumentAdjustments(doc: AdjustableDocument): DocumentAdjustments {
   const residual = money.sub(money.sub(doc.totalAmount, doc.subtotal), doc.taxAmount);
@@ -204,14 +214,20 @@ export function splitDocumentAdjustments(doc: AdjustableDocument): DocumentAdjus
   const explained = money.sub(money.add(charges, roundOff), discount);
   const columnsAreSane = money.compare(discount, "0") >= 0 && money.compare(charges, "0") >= 0;
   if (columnsAreSane && money.compare(explained, residual) === 0) {
-    return { discount, charges, roundOff };
+    return { discount, charges, roundOff, suspense: "0.00" };
   }
-  return { discount: "0.00", charges: "0.00", roundOff: residual };
+  if (isRoundOffWithinBound(residual)) {
+    return { discount: "0.00", charges: "0.00", roundOff: residual, suspense: "0.00" };
+  }
+  return { discount: "0.00", charges: "0.00", roundOff: "0.00", suspense: residual };
 }
 
 // ── Posting ─────────────────────────────────────────────────────
 
 export interface LedgerDocument extends AdjustableDocument {
+  /** For the warning about an unexplained difference. */
+  id?: string;
+  invoiceNumber?: string;
   documentType: string;
   type: string;
   /**
@@ -227,6 +243,8 @@ export interface PostingContext {
   systemCodes: ReadonlySet<string>;
   /** Intra-state supply: GST posts as CGST + SGST, otherwise IGST. */
   sameState: boolean;
+  /** Called when a document's unexplained difference had to be parked in Suspense. */
+  onSuspense?: (doc: LedgerDocument, amount: string) => void;
 }
 
 /**
@@ -289,6 +307,17 @@ export function buildDocumentLines(doc: LedgerDocument, cx: PostingContext): Der
       ? adjustmentAccount(coa, systemCodes, OTHER_CHARGES_CODE, "4100")
       : adjustmentAccount(coa, systemCodes, "5100", "5990");
     post(account, adj.charges, isSale ? "cr" : "dr");
+  }
+
+  if (!money.isZero(adj.suspense)) {
+    // Same direction rule as the round-off, into the Suspense account (a liability: it is on the
+    // balance sheet, not in the profit).
+    const suspenseAccount = adjustmentAccount(coa, systemCodes, SUSPENSE_CODE, "2300");
+    const positive = money.isPositive(adj.suspense);
+    const magnitude = positive ? adj.suspense : money.sub("0", adj.suspense);
+    const normal = isSale ? "cr" : "dr";
+    post(suspenseAccount, magnitude, positive ? normal : normal === "cr" ? "dr" : "cr");
+    cx.onSuspense?.(doc, adj.suspense);
   }
 
   if (!money.isZero(adj.roundOff)) {

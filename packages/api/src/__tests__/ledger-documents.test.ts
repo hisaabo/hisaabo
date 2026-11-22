@@ -95,7 +95,7 @@ describe("splitDocumentAdjustments", () => {
         additionalCharges: "25.00",
         roundOff: "-0.55",
       }),
-    ).toEqual({ discount: "50.00", charges: "25.00", roundOff: "-0.55" });
+    ).toEqual({ discount: "50.00", charges: "25.00", roundOff: "-0.55", suspense: "0.00" });
   });
 
   it("is all zero for a plain document", () => {
@@ -103,33 +103,41 @@ describe("splitDocumentAdjustments", () => {
       discount: "0.00",
       charges: "0.00",
       roundOff: "0.00",
+      suspense: "0.00",
     });
   });
 
-  it("puts the WHOLE difference in round-off when the columns do not explain the total", () => {
-    // additional_charges 25.00 was stored but never reached the total (legacy input path).
+  it("an unexplained difference up to a rupee is round-off", () => {
+    // additional_charges 25.00 was stored but never reached the total (legacy input path): the
+    // total is exactly subtotal + tax, nothing to post.
     expect(
-      splitDocumentAdjustments({
-        ...BASE,
-        totalAmount: "1180.00",
-        additionalCharges: "25.00",
-      }),
-    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.00" });
+      splitDocumentAdjustments({ ...BASE, totalAmount: "1180.00", additionalCharges: "25.00" }),
+    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.00", suspense: "0.00" });
 
+    // total 0.75 above what the columns explain: within the 1.00 bound -> round-off
+    expect(
+      splitDocumentAdjustments({ ...BASE, totalAmount: "1180.75", discountAmount: "10.00" }),
+    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.75", suspense: "0.00" });
+    // exactly 1.00 is still a round-off, 1.01 is not
+    expect(splitDocumentAdjustments({ ...BASE, totalAmount: "1181.00", discountAmount: "10.00" }).roundOff).toBe("1.00");
+    expect(splitDocumentAdjustments({ ...BASE, totalAmount: "1179.00", discountAmount: "10.00" }).roundOff).toBe("-1.00");
+  });
+
+  it("an unexplained difference of more than a rupee goes to Suspense, never into round-off", () => {
     // an import whose total differs by 3.00 from what its columns say
     expect(
-      splitDocumentAdjustments({
-        ...BASE,
-        totalAmount: "1183.00",
-        discountAmount: "10.00",
-      }),
-    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "3.00" });
+      splitDocumentAdjustments({ ...BASE, totalAmount: "1183.00", discountAmount: "10.00" }),
+    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.00", suspense: "3.00" });
+    expect(
+      splitDocumentAdjustments({ ...BASE, totalAmount: "1178.99", discountAmount: "10.00" }),
+    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.00", suspense: "-1.01" });
   });
 
   it("does not trust a negative discount or charge column", () => {
+    // -10 within the bound? no: 10.00 > 1.00 -> Suspense
     expect(
       splitDocumentAdjustments({ ...BASE, totalAmount: "1170.00", discountAmount: "-10.00" }),
-    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "-10.00" });
+    ).toEqual({ discount: "0.00", charges: "0.00", roundOff: "0.00", suspense: "-10.00" });
   });
 });
 
@@ -322,6 +330,45 @@ describe("buildDocumentLines", () => {
       ["2100", "0.00", "0.01"],
       ["2101", "0.00", "0.01"],
     ]);
+  });
+
+  it("a difference of more than a rupee posts to Suspense / Unreconciled (2900) and warns with the document", () => {
+    const { coa, systemCodes } = seededCoa();
+    const warned: Array<[string | undefined, string]> = [];
+    // total 1183.00 where the columns explain only 1170.00 (1000 + 180 - 10): 13.00 unexplained
+    const lines = buildDocumentLines(
+      doc({ documentType: "invoice", type: "sale", id: "doc-1", totalAmount: "1183.00", discountAmount: "10.00" }),
+      { coa, systemCodes, sameState: true, onSuspense: (d, amount) => warned.push([d.id, amount]) },
+    );
+    expect(rows(lines)).toEqual([
+      ["1100", "1183.00", "0.00"],
+      ["4000", "0.00", "1000.00"],
+      ["2100", "0.00", "90.00"],
+      ["2101", "0.00", "90.00"],
+      ["2900", "0.00", "3.00"], // the 3.00 nobody can explain: Cr on a sale, on the balance sheet
+    ]);
+    expect(balanced(lines)).toEqual({ dr: "1183.00", cr: "1183.00" });
+    expect(warned).toEqual([["doc-1", "3.00"]]);
+  });
+
+  it("Suspense mirrors on a credit note and flips on a purchase", () => {
+    const { coa, systemCodes } = seededCoa();
+    const unexplained = { totalAmount: "1183.00", discountAmount: "10.00" };
+    const creditNote = buildDocumentLines(doc({ documentType: "credit_note", type: "sale", ...unexplained }), { coa, systemCodes, sameState: true });
+    expect(rows(creditNote).find((r) => r[0] === "2900")).toEqual(["2900", "3.00", "0.00"]);
+    const purchase = buildDocumentLines(doc({ documentType: "invoice", type: "purchase", ...unexplained }), { coa, systemCodes, sameState: true });
+    expect(rows(purchase).find((r) => r[0] === "2900")).toEqual(["2900", "3.00", "0.00"]);
+    expect(balanced(creditNote)).toEqual({ dr: "1183.00", cr: "1183.00" });
+    expect(balanced(purchase)).toEqual({ dr: "1183.00", cr: "1183.00" });
+  });
+
+  it("falls back to Other Current Liabilities (2300) when the Suspense account is missing", () => {
+    const { coa, systemCodes } = seededCoa({ without: ["2900"] });
+    const lines = buildDocumentLines(
+      doc({ documentType: "invoice", type: "sale", totalAmount: "1183.00", discountAmount: "10.00" }),
+      { coa, systemCodes, sameState: true },
+    );
+    expect(rows(lines).find((r) => r[0] === "2300")).toEqual(["2300", "0.00", "3.00"]);
   });
 
   it("falls back to seeded accounts when the new system accounts are missing (not yet migrated)", () => {

@@ -1,7 +1,7 @@
 /**
  * Migration 0024_ledger_adjustment_accounts (drizzle/) and its tenant twin
  * 0011_ledger_adjustment_accounts (drizzle-tenant/): adds the Round Off (5030),
- * Discount Allowed (5020) and Other Charges (4020) system accounts to every
+ * Discount Allowed (5020), Other Charges (4020) and Suspense (2900) system accounts to every
  * EXISTING business. Runs the committed SQL itself against the test database.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -15,6 +15,7 @@ import { getTenantTestDb, truncateAllTables, closeTestDb } from "../helpers/test
 import { seedChartOfAccounts, DEFAULT_ACCOUNTS } from "../../lib/coa-seed.js";
 
 const NEW_ACCOUNTS = [
+  { code: "2900", name: "Suspense / Unreconciled", accountType: "liability" },
   { code: "4020", name: "Other Charges", accountType: "income" },
   { code: "5020", name: "Discount Allowed", accountType: "expense" },
   { code: "5030", name: "Round Off", accountType: "expense" },
@@ -68,13 +69,14 @@ describe("migration: ledger adjustment accounts", () => {
     // An existing business: the chart as seeded before this release.
     await seedChartOfAccounts(db(), biz.id);
     await db().delete(chartOfAccounts).where(
-      and(eq(chartOfAccounts.businessId, biz.id), eq(chartOfAccounts.isSystem, true), sql`${chartOfAccounts.code} IN ('4020', '5020', '5030')`),
+      and(eq(chartOfAccounts.businessId, biz.id), eq(chartOfAccounts.isSystem, true), sql`${chartOfAccounts.code} IN ('2900', '4020', '5020', '5030')`),
     );
-    expect(await accountsOf(biz.id, ["4020", "5020", "5030"])).toEqual([]);
+    expect(await accountsOf(biz.id, ["2900", "4020", "5020", "5030"])).toEqual([]);
 
     await applyMigration(UNIFIED);
-    const after = await accountsOf(biz.id, ["4020", "5020", "5030"]);
+    const after = await accountsOf(biz.id, ["2900", "4020", "5020", "5030"]);
     expect(after.map((a) => [a.code, a.name, a.accountType, a.isSystem, a.isActive])).toEqual([
+      ["2900", "Suspense / Unreconciled", "liability", true, true],
       ["4020", "Other Charges", "income", true, true],
       ["5020", "Discount Allowed", "expense", true, true],
       ["5030", "Round Off", "expense", true, true],
@@ -83,7 +85,7 @@ describe("migration: ledger adjustment accounts", () => {
     // Running it again (and the tenant copy after the unified one) changes nothing.
     await applyMigration(UNIFIED);
     await applyMigration(TENANT);
-    const again = await accountsOf(biz.id, ["4020", "5020", "5030"]);
+    const again = await accountsOf(biz.id, ["2900", "4020", "5020", "5030"]);
     expect(again.map((a) => a.id)).toEqual(after.map((a) => a.id));
   });
 
@@ -95,8 +97,8 @@ describe("migration: ledger adjustment accounts", () => {
 
     await applyMigration(UNIFIED);
 
-    expect((await accountsOf(a.id, ["4020", "5020", "5030"])).length).toBe(3);
-    expect((await accountsOf(b.id, ["4020", "5020", "5030"])).length).toBe(3);
+    expect((await accountsOf(a.id, ["2900", "4020", "5020", "5030"])).length).toBe(4);
+    expect((await accountsOf(b.id, ["2900", "4020", "5020", "5030"])).length).toBe(4);
     // A already had them from the fresh seed: no duplicate rows, nothing else touched.
     expect((await db().select().from(chartOfAccounts).where(eq(chartOfAccounts.businessId, a.id))).length).toBe(before);
   });
@@ -118,6 +120,6 @@ describe("migration: ledger adjustment accounts", () => {
     expect(mine).toHaveLength(1);
     expect(mine[0]).toMatchObject({ name: "My own thing", accountType: "asset", isSystem: false });
     // The other two were still added.
-    expect((await accountsOf(biz.id, ["4020", "5020"])).length).toBe(2);
+    expect((await accountsOf(biz.id, ["2900", "4020", "5020"])).length).toBe(3);
   });
 });

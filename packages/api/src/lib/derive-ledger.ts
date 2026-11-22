@@ -45,6 +45,7 @@ import {
 import { buildBusinessDateFilter } from "./business-date.js";
 import { paymentSettlement, paymentTdsSql } from "./payment-settlement.js";
 import { loadLineGstSplits } from "./gst-split.js";
+import { logger } from "./logger.js";
 import {
   buildDocumentLines,
   creditLine,
@@ -77,6 +78,23 @@ export interface DerivedEntry {
 }
 
 // ── Internal helpers ────────────────────────────────────────────
+
+/**
+ * A document whose stored total is more than a round-off away from what its columns explain is
+ * parked in the Suspense account. Say so once per document per process (reports re-derive the
+ * ledger on every call), with the document id so it can be found and fixed.
+ */
+const warnedSuspense = new Set<string>();
+function warnUnexplainedDifference(doc: { id?: string; invoiceNumber?: string }, amount: string): void {
+  const key = doc.id ?? doc.invoiceNumber ?? amount;
+  if (warnedSuspense.has(key)) return;
+  if (warnedSuspense.size >= 5000) warnedSuspense.clear();
+  warnedSuspense.add(key);
+  logger.warn(
+    { documentId: doc.id, invoiceNumber: doc.invoiceNumber, unexplained: amount },
+    "ledger: document total differs from its parts by more than a round-off; posted to Suspense / Unreconciled (2900)",
+  );
+}
 
 /** Determine whether two state codes represent the same state. */
 function isSameState(
@@ -241,6 +259,7 @@ export async function deriveLedger(
       coa,
       systemCodes,
       sameState: isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState),
+      onSuspense: warnUnexplainedDifference,
     });
     // Quotations, proformas, delivery challans etc. are non-financial — skip
     if (!lines) continue;

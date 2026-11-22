@@ -8,6 +8,8 @@ import { chartOfAccounts } from "@hisaabo/db";
 export const OTHER_CHARGES_CODE = "4020";
 export const DISCOUNT_ALLOWED_CODE = "5020";
 export const ROUND_OFF_CODE = "5030";
+/** Where an unexplained difference between a document's total and its parts is parked (see ledger-documents.ts). */
+export const SUSPENSE_CODE = "2900";
 
 interface SeedAccount {
   code: string;
@@ -37,6 +39,7 @@ const DEFAULT_ACCOUNTS: SeedAccount[] = [
   { code: "2102", name: "Output IGST Payable", accountType: "liability" },
   { code: "2200", name: "TDS Payable", accountType: "liability" },
   { code: "2300", name: "Other Current Liabilities", accountType: "liability" },
+  { code: SUSPENSE_CODE, name: "Suspense / Unreconciled", accountType: "liability" },
 
   // Equity
   { code: "3000", name: "Capital Account", accountType: "equity" },

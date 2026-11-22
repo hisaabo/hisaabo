@@ -2209,6 +2209,7 @@ export const reportsRouter = router({
         "2102": "Output IGST Payable",
         "2200": "TDS Payable",
         "2300": "Other Current Liabilities",
+        "2900": "Suspense / Unreconciled",
       };
 
       const workingCapitalChanges: Array<{ description: string; amount: string }> = [];

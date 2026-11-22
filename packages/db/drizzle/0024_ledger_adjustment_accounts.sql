@@ -28,3 +28,11 @@ WHERE NOT EXISTS (
   SELECT 1 FROM "chart_of_accounts" coa
   WHERE coa."business_id" = "businesses"."id" AND coa."code" = '5030'
 );
+--> statement-breakpoint
+INSERT INTO "chart_of_accounts" ("business_id", "code", "name", "account_type", "is_system", "is_active")
+SELECT "id", '2900', 'Suspense / Unreconciled', 'liability', true, true
+FROM "businesses"
+WHERE NOT EXISTS (
+  SELECT 1 FROM "chart_of_accounts" coa
+  WHERE coa."business_id" = "businesses"."id" AND coa."code" = '2900'
+);
