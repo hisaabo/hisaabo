@@ -1839,7 +1839,7 @@ MCP resources are read-only data snapshots that AI agents can load into their co
 
 **Treat data as untrusted** — Names, notes and store orders can be written by other people. The server fences every result as untrusted data and requires `confirm: true` for destructive tools; keep a human in the loop for anything the agent proposes to delete, void, merge, import or file.
 
-**Audit log** — All tool calls made through the MCP server are recorded in Hisaabo's audit log under `x-client-type: mcp`. You can review them under **Settings > Audit Log**.
+**Audit log** — Every change made through the MCP server is recorded in Hisaabo's audit log, labelled *via MCP server* (the `x-client-type: mcp` header the server sends is stored as the entry's `source`). You can review them under **Settings > Account > Activity Log**. The label is attribution, not authorisation: a client chooses its own headers, so permissions never depend on it.
 
 ---
 

@@ -1,5 +1,29 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to the next release: browser AI agent (WebMCP) hardening
+
+Applies to every install; nothing needs configuring and the migration step applies everything on first boot (expand-only, safe while the previous version is still serving).
+
+**Database migrations**
+
+| Mode | Directory | Migration | What it adds |
+|---|---|---|---|
+| Self-hosted (unified) | `packages/db/drizzle` | `0023_webmcp_audit_source`, `0024_idempotency_keys`, `0025_tenant_webmcp_disabled` | see below |
+| Multi-tenant, each tenant database | `packages/db/drizzle-tenant` | `0010_webmcp_audit_source`, `0011_idempotency_keys` | tenant tables only |
+| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled` | control table only |
+
+- `audit_log.source` (nullable text): where a change came from when it was not a person at the UI. `webmcp` for a browser AI agent, `mcp` for the MCP server (it already sent `x-client-type: mcp`), null for everything else, including every existing row. The web Activity Log labels these entries. It is attribution, not authorisation. Mobile and the CLI are unaffected (the extra field is ignored; the CLI's `--json` output now includes it), and self-export files written before the column existed still validate.
+- `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Repeating the identical request with the same key within 15 minutes returns the first record instead of creating a duplicate. Clients that do not send a key behave exactly as before. Expired rows are purged by the next keyed write.
+- `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me`.
+
+**Changes you may notice**
+
+- **Browser AI agents (WebMCP, experimental, web only) are off for everyone after the upgrade.** The setting used to be one flag per browser; it is now per person and organization, and the old flag is deleted, never honoured. Anyone who had turned it on must turn it on again in Settings → Account. The desktop app never registers browser-agent tools.
+- New controls: the organization owner can turn it off for the whole organization (Settings → Account), and operators can set `WEBMCP_DISABLED=true` to turn it off for the whole server (see [DEPLOYMENT.md](DEPLOYMENT.md#backend-docker--ghcr)). The API then also answers requests marked `X-Hisaabo-Agent: webmcp` with 403.
+- Browser agent calls send `X-Hisaabo-Agent: webmcp`. The header is in the credentialed CORS allow-list, and those calls use a separate rate bucket (120 per minute per address), so an agent loop cannot rate-limit the dashboard. If a reverse proxy in front of the API restricts custom request headers, allow `X-Hisaabo-Agent`.
+- `invoice_update_status` in the browser no longer accepts `cancelled`: an agent cannot void an invoice. The MCP server tool is unchanged.
+- `system.config` gains `webmcpDisabled` and `auth.me` gains `webmcpDisabled`; both are additive.
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.

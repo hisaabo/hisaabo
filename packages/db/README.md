@@ -49,7 +49,8 @@ In self-hosted mode (`MULTI_TENANT=false`), both databases are the same PostgreS
 | `expenses` | Business expenses: amount, category, description, bank account |
 | `bank_accounts` | Bank, cash, UPI, and credit card accounts with running balance |
 | `bank_transactions` | Individual transactions on bank accounts |
-| `audit_logs` | Immutable audit trail: every mutation with user, entity, action, IP |
+| `audit_log` | Immutable audit trail: every mutation with user, entity, action, IP and `source` (`webmcp` for a browser AI agent, `mcp` for the MCP server, null otherwise; attribution only, never used for authorisation) |
+| `idempotency_keys` | Short-lived (15 minute) claims that make `invoice.create` and `payment.create` safe to retry: written in the same transaction as the record, scoped per business, user and procedure |
 
 **Key invariants:**
 - All monetary columns use `NUMERIC(15,2)` — never `FLOAT` or `DOUBLE PRECISION`
