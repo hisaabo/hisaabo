@@ -18,6 +18,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { Pagination } from "@/components/ui/Pagination";
+import {
+  DuplicateLinesNotice,
+  SkipDuplicatesToggle,
+  importSummaryMessage,
+} from "@/components/bank-recon/DuplicateLines";
 
 export const Route = createFileRoute("/bank-reconciliation")({
   component: BankReconciliationPage,
@@ -105,6 +110,10 @@ function BankReconciliationPage() {
   const [activeTab, setActiveTab] = useState<Tab>("hub");
   const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  // Duplicate lines skipped by the import that was just confirmed. Only known
+  // right after confirmMapping (not stored), so it is cleared when a different
+  // import is opened.
+  const [lastImport, setLastImport] = useState<{ importId: string; duplicatesSkipped: number; totalLines: number } | null>(null);
   const canImport = useCan("create", "BankReconciliation");
   const tabs = canImport ? TABS : TABS.filter((t) => t.value !== "upload");
 
@@ -142,14 +151,19 @@ function BankReconciliationPage() {
       )}
       {activeTab === "upload" && (
         <UploadTab
-          onSuccess={(importId) => {
-            setSelectedImportId(importId);
+          onSuccess={(result) => {
+            setLastImport(result);
+            setSelectedImportId(result.importId);
             setActiveTab("review");
           }}
         />
       )}
       {activeTab === "review" && (
-        <ReviewTab importId={selectedImportId} />
+        <ReviewTab
+          importId={selectedImportId}
+          duplicatesSkipped={lastImport?.importId === selectedImportId ? lastImport.duplicatesSkipped : 0}
+          importedLines={lastImport?.importId === selectedImportId ? lastImport.totalLines : 0}
+        />
       )}
       {activeTab === "summary" && (
         <SummaryTab accountId={selectedAccountId} />
@@ -339,8 +353,13 @@ type DetectedTemplate = {
   reason: string;
 } | null;
 
-function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
+function UploadTab({
+  onSuccess,
+}: {
+  onSuccess: (result: { importId: string; duplicatesSkipped: number; totalLines: number }) => void;
+}) {
   const [step, setStep] = useState<"upload" | "mapping">("upload");
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [csvContent, setCsvContent] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>("");
@@ -399,8 +418,12 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
   const confirmMutation = trpc.bankRecon.confirmMapping.useMutation({
     onSuccess: (data) => {
       utils.bankRecon.importList.invalidate();
-      toast.success(`Parsed ${data.totalLines} lines. ${data.matchedLines} auto-matched, ${data.unmatchedLines} unmatched.`);
-      onSuccess(data.importId);
+      toast.success(importSummaryMessage(data));
+      onSuccess({
+        importId: data.importId,
+        duplicatesSkipped: data.duplicatesSkipped,
+        totalLines: data.totalLines,
+      });
     },
     onError: (err) => toast.error(err.message),
   });
@@ -457,6 +480,7 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
       importId,
       csvContent,
       templateId: tmplId || undefined,
+      skipDuplicates,
       columnMapping: {
         date: parseInt(mapping.date, 10),
         narration: parseInt(mapping.narration, 10),
@@ -686,6 +710,8 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
           </div>
         )}
 
+        <SkipDuplicatesToggle checked={skipDuplicates} onChange={setSkipDuplicates} />
+
         <div className="flex gap-3">
           <button
             className="btn-secondary"
@@ -822,7 +848,15 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
 
 // ── Review Tab ─────────────────────────────────────────────────────────────────
 
-function ReviewTab({ importId }: { importId: string | null }) {
+function ReviewTab({
+  importId,
+  duplicatesSkipped = 0,
+  importedLines = 0,
+}: {
+  importId: string | null;
+  duplicatesSkipped?: number;
+  importedLines?: number;
+}) {
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [manualMatchLine, setManualMatchLine] = useState<any | null>(null);
@@ -886,6 +920,8 @@ function ReviewTab({ importId }: { importId: string | null }) {
 
   return (
     <div className="space-y-5">
+      <DuplicateLinesNotice count={duplicatesSkipped} importedLines={importedLines} />
+
       {/* Import stats bar */}
       {importDetail && (
         <div className="card p-4 flex flex-wrap gap-6 items-center">

@@ -110,6 +110,22 @@ The `currentBalance` in Hisaabo reflects transactions recorded through the app. 
 At the end of each month, compare your Hisaabo account balance with your bank statement. The difference equals the total of transactions that happened outside Hisaabo (bank charges, auto-debits, etc.). Enter these as manual adjustments to reconcile.
 :::
 
+## Importing bank statements and duplicate lines
+
+<ForDesktop>
+**Bank Reconciliation** lets you upload a bank statement CSV, map its columns, and match each line to your payments and expenses.
+</ForDesktop>
+
+Banks often give you overlapping statements (January to March, then March to May), and it is easy to upload the same file twice. Hisaabo skips any line that is already on file for the same bank account, so the repeated transactions do not pile up as unmatched lines.
+
+A line counts as a duplicate when an **earlier import of the same bank account** has a line with the same **date, debit, credit and reference number**. If the line has no reference number, the narration (ignoring capitalisation and extra spaces) is compared instead. A few details:
+
+- Only the same bank account is compared. The same transaction on another account, or in another business, is imported normally.
+- Two identical lines inside one file are both kept (two identical card swipes on one day are two transactions). If an earlier import held one such line and the new file holds two, only one is skipped.
+- After you confirm the column mapping, the review screen shows how many duplicate lines were skipped. Lines skipped as duplicates are not imported and do not appear in the review list.
+- The mapping step has a checkbox, **Skip lines already imported from an earlier statement**, which is on by default. Turn it off to import every line.
+- The skipped count is shown once, straight after the import; it is not stored.
+
 ## UPI details on invoices
 
 If you store a **UPI ID** on a bank account and set it as the default, the UPI ID is used to generate a QR code on invoice PDFs. This makes it easy for customers to pay by scanning the QR code with any UPI app.

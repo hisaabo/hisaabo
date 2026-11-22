@@ -403,10 +403,13 @@ describe("Bank Reconciliation — CSV Import", () => {
       referenceNumber: "REF001",
     });
 
-    // Upload CSV with that same credit amount on the same date
+    // Upload CSV with that same credit amount on the same date. The narration
+    // differs from simpleCSV's "Client Payment Received" line (same day and
+    // amount, imported for this account by an earlier test) so this line is not
+    // skipped as a duplicate of it.
     const matchCSV = [
       "Date,Description,Debit,Credit,Balance",
-      "02/04/2026,Client Payment Received,,25000.00,125000.00",
+      "02/04/2026,Customer Remittance For Auto Match,,25000.00,125000.00",
     ].join("\n");
 
     const upload = await caller.bankRecon.uploadCSV({
