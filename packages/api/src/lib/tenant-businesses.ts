@@ -14,26 +14,37 @@
  *   - CLOUD (MULTI_TENANT=true): never. Each tenant has its own database, so
  *     the database is the boundary and every business in it belongs to the
  *     tenant, including one whose creator has since been removed.
- *   - SELF-HOSTED with exactly one tenant: never, for the same reason (the one
- *     database holds one organisation).
+ *   - SELF-HOSTED with exactly one tenant, and never more: never, for the same
+ *     reason (the one database holds one organisation).
  *   - SELF-HOSTED with several tenants: always. They share one database, so a
  *     bare `WHERE businesses.id = :id` would let any tenant read or mutate any
  *     other tenant's business. This is the rare multi-org install; until
  *     0.11.0 adds `businesses.tenant_id` its isolation relies on the rule:
  *     a business belongs to a tenant iff its creator is a member of that tenant.
+ *   - SELF-HOSTED that EVER had several tenants: always (latched). Hard-deleting
+ *     a tenant row leaves its businesses in the shared database; with the rule
+ *     off they would become visible to the surviving organisation. The first
+ *     time more than one tenant is seen, a `system_config` row
+ *     (MULTI_ORG_LATCH_KEY) records it and the rule stays on from then on, until
+ *     an operator removes the row (see docs/UPGRADING.md, 0.10.1).
  *
  * The same decision is applied in lib/authz.ts (getBusinessAccess) and
  * queue/context.ts (worker job context), so the three sites cannot disagree.
  */
 
-import { controlDb, tenantMembers, tenants, businesses, type TenantDatabase } from "@hisaabo/db";
+import { controlDb, tenantMembers, tenants, systemConfig, businesses, type TenantDatabase } from "@hisaabo/db";
 import { eq, and, inArray, count, sql, type SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
+import { logger } from "./logger.js";
+
+/** `system_config` key recording that a self-hosted database has held more than one tenant. */
+export const MULTI_ORG_LATCH_KEY = "self_host_multi_org_seen";
 
 /**
- * Cached "does this self-hosted database hold more than one organisation".
+ * Cached "does the creator rule apply on this self-hosted database": more than
+ * one tenant now, or ever (the latch).
  *
  * TTL is short on purpose: a cached `false` relaxes the creator rule, so it must
  * not outlive the second organisation for long. In-process writers
@@ -45,9 +56,39 @@ const multiOrgCache = new TtlCache<boolean>({ name: "authz.multiOrg", max: 1, tt
 
 cacheBus.on("tenant", () => multiOrgCache.clear());
 
-async function hasMultipleTenants(): Promise<boolean> {
+/**
+ * Reads the tenant count and the latch; the first time the count is above one
+ * it persists the latch (best effort: if the write fails the answer for this
+ * call is still "applies" and the next uncached read retries it).
+ */
+async function observeSelfHostedOrgs(): Promise<{ tenants: number; latched: boolean; applies: boolean }> {
   const [row] = await controlDb.select({ n: count() }).from(tenants);
-  return (row?.n ?? 0) > 1;
+  const tenantCount = row?.n ?? 0;
+  const [latchRow] = await controlDb
+    .select({ key: systemConfig.key })
+    .from(systemConfig)
+    .where(eq(systemConfig.key, MULTI_ORG_LATCH_KEY))
+    .limit(1);
+  let latched = !!latchRow;
+  if (tenantCount > 1 && !latched) {
+    try {
+      // cache-guard: the latch is written only after observing the state it
+      // records, so the cached answer is already "applies"; the system_config
+      // trigger's NOTIFY only reaches the maintenance cache.
+      await controlDb
+        .insert(systemConfig)
+        .values({ key: MULTI_ORG_LATCH_KEY, value: { firstSeenAt: new Date().toISOString(), tenants: tenantCount } })
+        .onConflictDoNothing();
+      latched = true;
+      logger.warn(
+        { tenants: tenantCount },
+        "self-hosted database holds more than one organisation: creator-membership isolation is latched on",
+      );
+    } catch (err) {
+      logger.error({ err }, "could not persist the multi-organisation latch; will retry");
+    }
+  }
+  return { tenants: tenantCount, latched, applies: tenantCount > 1 || latched };
 }
 
 /**
@@ -57,27 +98,30 @@ async function hasMultipleTenants(): Promise<boolean> {
  */
 export async function creatorRuleApplies(opts: { fresh?: boolean } = {}): Promise<boolean> {
   if (process.env.MULTI_TENANT === "true") return false;
-  if (opts.fresh) return hasMultipleTenants();
-  return (await multiOrgCache.getOrLoad("multi", hasMultipleTenants)) ?? true;
+  const load = async () => (await observeSelfHostedOrgs()).applies;
+  if (opts.fresh) return load();
+  return (await multiOrgCache.getOrLoad("multi", load)) ?? true;
 }
 
 /**
- * Boot-time notice for a self-hosted install with more than one organisation.
- * Never throws (a failed count only skips the notice).
+ * Boot-time notice for a self-hosted install with more than one organisation
+ * (now or ever); also records the latch. Never throws (a failed read only
+ * skips the notice).
  */
 export async function warnIfMultiOrgSelfHosted(
   warn: (msg: string, data?: Record<string, unknown>) => void,
 ): Promise<void> {
   if (process.env.MULTI_TENANT === "true") return;
   try {
-    const [row] = await controlDb.select({ n: count() }).from(tenants);
-    const n = row?.n ?? 0;
-    if (n > 1) {
+    const { tenants: n, latched, applies } = await observeSelfHostedOrgs();
+    if (applies) {
       warn(
-        "Self-hosted install with more than one organisation: cross-organisation isolation of businesses relies on " +
-          "the business creator being a member of the organisation until 0.11.0 adds businesses.tenant_id. " +
-          "Removing the member who created a business hides that business from its organisation until they are re-added.",
-        { tenants: n },
+        "Self-hosted install with more than one organisation" +
+          (n > 1 ? "" : " (an earlier one was deleted)") +
+          ": cross-organisation isolation of businesses relies on the business creator being a member of the " +
+          "organisation until 0.11.0 adds businesses.tenant_id, and stays on once latched. Removing the member who " +
+          "created a business hides that business from its organisation until they are re-added.",
+        { tenants: n, latched },
       );
     }
   } catch {

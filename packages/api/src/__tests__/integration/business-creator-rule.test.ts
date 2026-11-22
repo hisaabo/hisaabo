@@ -22,7 +22,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
-import { tenants, getTenantDb } from "@hisaabo/db";
+import { tenants, systemConfig, getTenantDb } from "@hisaabo/db";
 import {
   createUser,
   createTenant,
@@ -37,7 +37,7 @@ import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { cacheBus } from "../../lib/cache/index.js";
 import { getBusinessAccess } from "../../lib/authz.js";
-import { creatorRuleApplies } from "../../lib/tenant-businesses.js";
+import { creatorRuleApplies, MULTI_ORG_LATCH_KEY } from "../../lib/tenant-businesses.js";
 import { establishTenantContext } from "../../queue/context.js";
 import { PermanentError } from "../../queue/errors.js";
 import type { Envelope } from "../../queue/envelope.js";
@@ -202,21 +202,71 @@ describe("creator removed: self-hosted, several organisations (rule on)", () => 
   });
 });
 
-describe("the tenant count behind the rule is kept fresh", () => {
-  it("adding a second organisation turns the rule on at once, deleting it turns it off again", async () => {
+const latchRows = async () =>
+  getControlDb().select().from(systemConfig).where(eq(systemConfig.key, MULTI_ORG_LATCH_KEY));
+
+describe("the tenant count behind the rule is kept fresh, and latched", () => {
+  it("a single-organisation install never writes the latch", async () => {
+    await setup({ cloud: false, extraTenants: 0 });
+    expect(await creatorRuleApplies()).toBe(false);
+    expect(await latchRows()).toHaveLength(0);
+  });
+
+  it("cloud never writes the latch, whatever the tenant count", async () => {
+    await setup({ cloud: true, extraTenants: 3 });
+    expect(await creatorRuleApplies()).toBe(false);
+    expect(await latchRows()).toHaveLength(0);
+  });
+
+  it("adding a second organisation turns the rule on at once and latches it", async () => {
     const w = await setup({ cloud: false, extraTenants: 0 });
     expect(await creatorRuleApplies()).toBe(false); // warms the cache
+    expect(await latchRows()).toHaveLength(0);
 
     const second = await createTenant({ plan: "business" });
     cacheBus.invalidate({ kind: "tenant", tenantId: second.id }); // what the writers emit
     expect(await creatorRuleApplies()).toBe(true);
+    expect(await latchRows()).toHaveLength(1);
 
     await callerFor(w.owner, w.tenant.id, null).tenant.removeMember({ userId: w.creator.id });
     expect(await getBusinessAccess(await getTenantDb(w.tenant.id), w.tenant.id, w.biz.id)).toMatchObject({ ok: false });
+  });
 
+  it("hard-deleting a tenant row does not expose its businesses: the rule stays on once more than one tenant has existed", async () => {
+    const w = await setup({ cloud: false, extraTenants: 0 });
+    // a second organisation with a business of its own, in the same shared database
+    const foreignOwner = await createUser();
+    const foreign = await createTenant({ plan: "business" });
+    await addMember(foreign.id, foreignOwner.id, "owner");
+    const foreignBiz = await createBusiness(getTenantTestDb(), foreignOwner.id, { name: "Deleted Org Business" });
+    cacheBus.invalidate({ kind: "tenant", tenantId: foreign.id });
+    expect(await creatorRuleApplies()).toBe(true); // seen: latches
+
+    // the organisation is hard-deleted (its memberships go with it); the business row stays in the shared DB
+    await getControlDb().delete(tenants).where(eq(tenants.id, foreign.id));
+    cacheBus.invalidate({ kind: "tenant", tenantId: foreign.id }); // what the tenants delete trigger emits
+
+    expect(await creatorRuleApplies()).toBe(true);
+    expect(await creatorRuleApplies({ fresh: true })).toBe(true);
+    expect((await callerFor(w.owner, w.tenant.id, null).business.list()).map((b) => b.id)).not.toContain(foreignBiz.id);
+    expect(await callerFor(w.owner, w.tenant.id, null).business.getById({ id: foreignBiz.id })).toBeNull();
+    expect(await getBusinessAccess(await getTenantDb(w.tenant.id), w.tenant.id, foreignBiz.id)).toEqual({
+      ok: false,
+      reason: "creator_not_member",
+    });
+    // the surviving organisation's own business is still there for its members
+    expect((await callerFor(w.owner, w.tenant.id, null).business.list()).map((b) => b.id)).toContain(w.biz.id);
+  });
+
+  it("clearing the latch row (the documented manual step) turns the rule off again for a single organisation", async () => {
+    await setup({ cloud: false, extraTenants: 0 });
+    const second = await createTenant({ plan: "business" });
+    expect(await creatorRuleApplies({ fresh: true })).toBe(true);
     await getControlDb().delete(tenants).where(eq(tenants.id, second.id));
-    cacheBus.invalidate({ kind: "tenant", tenantId: second.id }); // what the tenants delete trigger emits
+    expect(await creatorRuleApplies({ fresh: true })).toBe(true); // latched
+
+    await getControlDb().delete(systemConfig).where(eq(systemConfig.key, MULTI_ORG_LATCH_KEY));
+    cacheBus.invalidate({ kind: "tenant", tenantId: second.id });
     expect(await creatorRuleApplies()).toBe(false);
-    expect(await getBusinessAccess(await getTenantDb(w.tenant.id), w.tenant.id, w.biz.id)).toMatchObject({ ok: true });
   });
 });

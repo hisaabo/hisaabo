@@ -47,6 +47,7 @@ import { enforceSessionLimit } from "../../lib/plan-limits.js";
 import { rotateSessionsOnPrivilegeEvent } from "../../lib/session-rotation.js";
 import { sessionHandle } from "../../routers/auth.js";
 import { _resetApiKeyTouchThrottle } from "../../lib/auth-caches.js";
+import { MULTI_ORG_LATCH_KEY } from "../../lib/tenant-businesses.js";
 
 const factory = createCallerFactory(appRouter);
 
@@ -251,6 +252,8 @@ describe("authz caches: write -> next call sees it", () => {
       });
     } finally {
       await getControlDb().delete(tenants).where(eq(tenants.id, otherOrg.id));
+      // the multi-org latch would keep the creator rule on for the rest of the file
+      await getControlDb().delete(systemConfig).where(eq(systemConfig.key, MULTI_ORG_LATCH_KEY));
       cacheBus.invalidate({ kind: "tenant", tenantId: otherOrg.id });
     }
   });

@@ -49,7 +49,7 @@ triggers in `packages/db/src/cache-triggers.ts`.
 | `apiKeys` (`auth-caches.ts`) | sha256(raw key) | user, tenant, expiry, key id | `apikey:ID`, `user:U`, `tenant:T` | 60 s / 2000 | `apiKey`, `user`, `tenant`; api_keys trigger |
 | `authz.membership` (`authz.ts`) | `tenantId:userId` | role + active status | `tenant:T`, `user:U` | 60 s / 10000 | `membership`, `tenant`, `user`; tenant_members and tenants triggers |
 | `authz.business` (`authz.ts`) | `tenantId:businessId` | creator user id (immutable) | `tenant:T`, `business:B` | 5 min / 5000 | `business` (create), `tenant` |
-| `authz.multiOrg` (`tenant-businesses.ts`) | constant | self-hosted only: does the database hold more than one organisation | - | 15 s / 1 | `tenant` (in-process tenant insert, `tenants` delete trigger) |
+| `authz.multiOrg` (`tenant-businesses.ts`) | constant | self-hosted only: does the database hold, or has it ever held (`system_config` latch), more than one organisation | - | 15 s / 1 | `tenant` (in-process tenant insert, `tenants` delete trigger) |
 | `tenantPlan` (`plan-limits.ts`) | tenant id | plan | `tenant:T` | 60 s / 2000 | `tenant`; tenants trigger (status, plan) |
 | `maintenance` (`maintenance-cache.ts`) | constant | maintenance status | - | 30 s / 1 | `maintenance`; system_config trigger |
 | `storeSlug` (`store-slug-cache.ts`) | slug | tenant id + business id | - | 5 min / 2000 | `storeSlug`; store_slugs trigger |
