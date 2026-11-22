@@ -90,12 +90,14 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
-    await enforceBusinessLimit(ctx.tenantId!, ctx.db);
     // `business` is emitted after the transaction settled (authz business
     // entries are positive-only, so this keeps the contract rather than fixing
     // a stale negative).
     let createdBizId: string | undefined;
     const biz = await ctx.db.transaction(async (tx) => {
+      // The plan-limit check and the insert share this transaction under an
+      // advisory lock, so concurrent creates cannot both pass a limit of 1.
+      await enforceBusinessLimit(ctx.tenantId!, tx);
       const [biz] = await tx.insert(businesses).values({
         ...input,
         createdByUserId: ctx.user.id,
