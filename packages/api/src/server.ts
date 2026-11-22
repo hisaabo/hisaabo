@@ -502,8 +502,11 @@ async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): 
 
 // ── Shared business access check for non-tRPC endpoints ─────────
 // Mirrors the hasBusinessAccess middleware in trpc.ts: verifies the business
-// exists in the tenant DB AND (for self-hosted shared-DB mode) that the
-// business creator is a member of the caller's tenant.
+// exists in the tenant DB AND, only where one database holds several
+// organisations (a self-hosted install with more than one tenant, now or ever),
+// that the business creator is a member of the caller's tenant. On cloud and on
+// a single-organisation install the database is the boundary and the creator
+// check is skipped (lib/tenant-businesses.ts creatorRuleApplies).
 async function verifyBusinessAccess(
   db: Awaited<ReturnType<typeof getTenantDb>>,
   businessId: string,

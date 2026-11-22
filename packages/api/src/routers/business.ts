@@ -34,10 +34,13 @@ function carrierCredsFor(creds: Parameters<typeof decryptCarrierCredentials>[0],
 
 export const businessRouter = router({
   list: tenantProcedure.query(async ({ ctx }) => {
-    // Security: in cloud mode ctx.db is a per-tenant database, but in self-hosted
-    // mode every tenant shares one DB — so we MUST restrict to businesses owned by
-    // this tenant (creator ∈ tenant members), mirroring hasBusinessAccess. Without
-    // this filter a self-hosted tenant would see every other tenant's businesses.
+    // Security: in cloud mode ctx.db is a per-tenant database, but a self-hosted
+    // database that holds several organisations shares one DB — there we MUST
+    // restrict to businesses owned by this tenant (creator ∈ tenant members),
+    // mirroring hasBusinessAccess (tenantBusinessScope returns no restriction on
+    // cloud and single-organisation installs, where the database is the boundary
+    // and a business whose creator left must stay visible). Without this filter
+    // a multi-org self-hosted tenant would see every other tenant's businesses.
     // All businesses within a tenant are visible to every tenant member so that
     // they can switch between businesses.
     //
