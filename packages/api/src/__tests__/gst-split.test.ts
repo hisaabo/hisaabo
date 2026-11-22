@@ -51,14 +51,15 @@ describe("the IRP payload uses the same rule (no floating-point rounding)", () =
     stateCode: "27", pincode: "411001",
   };
 
-  function irpLineSplit(unitPrice: string, taxPercent: string) {
+  // the payload is built from the line as STORED: its tax and total are passed in, as the invoice row carries them
+  function irpLineSplit(unitPrice: string, taxPercent: string, taxAmount: string, totalAmount: string) {
     const json = mapInvoiceToIRP(
       {
         invoiceNumber: "INV-1", invoiceDate: new Date("2025-10-01T00:00:00Z"), type: "sale", documentType: "invoice",
-        subtotal: unitPrice, taxAmount: "0", discountAmount: "0", additionalCharges: "0", roundOff: "0", totalAmount: unitPrice,
+        subtotal: unitPrice, taxAmount, discountAmount: "0", additionalCharges: "0", roundOff: "0", totalAmount,
         isReverseCharge: false,
       } as never,
-      [{ itemName: "X", quantity: "1", unitPrice, taxPercent, discountPercent: "0", itemHsn: "1234", itemType: "product", selectedUnit: null } as never],
+      [{ itemName: "X", quantity: "1", unitPrice, taxPercent, taxAmount, totalAmount, discountPercent: "0", itemHsn: "1234", itemType: "product", selectedUnit: null } as never],
       party as never,
       business as never,
     );
@@ -69,10 +70,10 @@ describe("the IRP payload uses the same rule (no floating-point rounding)", () =
   it("an odd-paisa line tax gives the odd paisa to CGST, including where floating-point halving rounds down", () => {
     // 5.80 @ 5% = 0.29 of tax. 0.29 / 2 = 0.145 is 0.14499... in floating point, which the old
     // round2(tax / 2) turned into 0.14; the rule is round-half-up: CGST 0.15, SGST 0.14.
-    expect(irpLineSplit("5.80", "5")).toEqual([0.15, 0.14, 0]);
+    expect(irpLineSplit("5.80", "5", "0.29", "6.09")).toEqual([0.15, 0.14, 0]);
     // 1.00 @ 5% = 0.05 -> CGST 0.03, SGST 0.02
-    expect(irpLineSplit("1.00", "5")).toEqual([0.03, 0.02, 0]);
+    expect(irpLineSplit("1.00", "5", "0.05", "1.05")).toEqual([0.03, 0.02, 0]);
     // even tax: 2.00 @ 5% = 0.10 -> 0.05 / 0.05
-    expect(irpLineSplit("2.00", "5")).toEqual([0.05, 0.05, 0]);
+    expect(irpLineSplit("2.00", "5", "0.10", "2.10")).toEqual([0.05, 0.05, 0]);
   });
 });
