@@ -16,6 +16,7 @@
  * enforced by the web app the same way, via auth.me.
  */
 
+import type { MiddlewareHandler } from "hono";
 import { isAgentRequest } from "./audit-source.js";
 
 export function isWebMcpDisabledByOperator(env: Record<string, string | undefined> = process.env): boolean {
@@ -34,4 +35,19 @@ export function shouldRefuseAgentRequest(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return isWebMcpDisabledByOperator(env) && isAgentRequest(headers);
+}
+
+/**
+ * The HTTP layer's half of the operator kill switch: with WEBMCP_DISABLED set, a
+ * request marked as a browser-agent call is answered 403 before it reaches tRPC, so
+ * nothing runs and nothing is written. The environment is read per request, so a
+ * restart with the new value is all it takes. Mounted on /api/trpc/* in server.ts.
+ */
+export function agentKillSwitch(env: Record<string, string | undefined> = process.env): MiddlewareHandler {
+  return async (c, next) => {
+    if (shouldRefuseAgentRequest(c.req.raw.headers, env)) {
+      return c.json({ error: WEBMCP_DISABLED_MESSAGE }, 403);
+    }
+    await next();
+  };
 }

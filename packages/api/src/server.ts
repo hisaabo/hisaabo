@@ -44,7 +44,7 @@ import { getTrustedClientIp } from "./lib/client-ip.js";
 import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, chargeRateLimits, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
 import { isAgentRequest } from "./lib/audit-source.js";
 import { sweepIdempotencyKeysEverywhere } from "./lib/idempotency-sweep.js";
-import { shouldRefuseAgentRequest, WEBMCP_DISABLED_MESSAGE } from "./lib/webmcp-policy.js";
+import { agentKillSwitch } from "./lib/webmcp-policy.js";
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
@@ -255,13 +255,13 @@ const rateLimitDisabled =
   process.env.DISABLE_RATE_LIMIT === "1" &&
   process.env.NODE_ENV !== "production";
 
+// Operator kill switch (WEBMCP_DISABLED=true): calls that identify themselves as
+// browser-agent calls are refused (403) before anything runs. A second layer behind
+// the web app not registering tools at all; see lib/webmcp-policy.ts for why it is
+// not the permission boundary.
+app.use("/api/trpc/*", agentKillSwitch());
+
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
-  // Operator kill switch (WEBMCP_DISABLED=true): calls that identify themselves as
-  // browser-agent calls are refused. A second layer behind the web app not
-  // registering tools at all; see lib/webmcp-policy.ts for why it is not the boundary.
-  if (shouldRefuseAgentRequest(c.req.raw.headers)) {
-    return c.json({ error: WEBMCP_DISABLED_MESSAGE }, 403);
-  }
   if (rateLimitDisabled) {
     await next();
     return;
