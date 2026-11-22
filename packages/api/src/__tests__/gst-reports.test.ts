@@ -1311,6 +1311,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1335,6 +1336,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "3000.00",
           taxableAmount: "2542.37",
           taxAmount: "457.63",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1357,6 +1359,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1377,6 +1380,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
         debitNotes: [{
           invoiceNumber: "DN-00001",
@@ -1386,6 +1390,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "3000.00",
           taxableAmount: "2542.37",
           taxAmount: "457.63",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"

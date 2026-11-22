@@ -161,15 +161,14 @@ describe("golden 05A: credit note, sales return and sale-side debit note", () =>
     ]);
   });
 
-  it("GSTR-3B counts the invoice's tax gross: 900 CGST / 900 SGST (current behaviour)", async () => {
-    const r = await w.caller.gst.gstr3b({ year: 2025, month: 8 });
-    expect(fixed2(r.taxPayable.cgst)).toBe("900.00");
-    expect(fixed2(r.taxPayable.sgst)).toBe("900.00");
+  // GSTR-1 lists the invoice's tax gross and the notes separately (GSTR-3B nets them, below).
+  it("GSTR-1 counts the invoice's tax gross: 900 CGST / 900 SGST", async () => {
+    const r = await w.caller.gst.gstr1({ year: 2025, month: 8 });
+    expect(fixed2(r.totalCgst)).toBe("900.00");
+    expect(fixed2(r.totalSgst)).toBe("900.00");
   });
 
-  // BUG: gst-reports.ts generateGSTR3B never subtracts credit notes / sales returns
-  // or adds debit notes, although the ledger's output-GST accounts do (675 each).
-  it.fails("GSTR-3B output tax is net of credit/debit notes: 900 - 270 + 45 = 675 CGST and SGST", async () => {
+  it("GSTR-3B output tax is net of credit/debit notes: 900 - 270 + 45 = 675 CGST and SGST", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 8 });
     expect(fixed2(r.taxPayable.cgst)).toBe("675.00");
     expect(fixed2(r.taxPayable.sgst)).toBe("675.00");
