@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { getTenantDb, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
+import { getTenantDb, type TenantDatabase, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
