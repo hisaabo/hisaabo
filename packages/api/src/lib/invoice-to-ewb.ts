@@ -234,16 +234,14 @@ export function mapInvoiceToEWB(
     isSale ? invoice.partyStateCode    : invoice.businessStateCode,
   );
 
-  // Aggregate tax values
-  let totalTax = 0;
+  // Every amount comes from the line's STORED values (taxable = total - tax, after the line discount), not from
+  // qty x unitPrice: an online-store order of tax-inclusive items stores the exact inclusive amounts next to the
+  // tax-exclusive rate, and a discounted line's taxable value is not qty x rate. The items then add up to the
+  // invoice's stored subtotal and tax exactly.
   const itemList: EWBItemPayload[] = lineItems.map((li) => {
     const taxPct   = parseFloat(li.taxPercent) || 0;
     const qty      = parseFloat(li.quantity) || 0;
-    const price    = parseFloat(li.unitPrice) || 0;
-    const taxAmt   = parseFloat(li.taxAmount) || 0;
-    const taxable  = qty * price; // pre-tax amount per line
-
-    totalTax += taxAmt;
+    const taxable  = money.sub(li.totalAmount, li.taxAmount); // stored pre-tax amount of the line
 
     const rates = splitTaxRate(taxPct, interState);
 
@@ -260,11 +258,11 @@ export function mapInvoiceToEWB(
       sgstRate: rates.sgstRate,
       igstRate: rates.igstRate,
       cessRate: 0,
-      taxableAmount: Math.round(taxable * 100) / 100,
+      taxableAmount: money.toNumber(taxable),
     };
   });
 
-  const totalTaxRounded = Math.round(totalTax * 100) / 100;
+  const totalTaxRounded = money.toNumber(money.sum(lineItems.map((li) => li.taxAmount)));
   const taxSplit = splitTax(totalTaxRounded, lineItems.map((li) => li.taxAmount), interState);
   const totalValue = parseFloat(invoice.subtotal) || 0;
 

@@ -140,10 +140,6 @@ function n(s: string | null | undefined): number {
   return isNaN(v) ? 0 : Math.round(v * 100) / 100;
 }
 
-function round2(v: number): number {
-  return Math.round(v * 100) / 100;
-}
-
 // ── Main mapping function ──────────────────────────────────────────────────────
 
 /**
@@ -173,24 +169,36 @@ export function mapInvoiceToIRP(
 
   const supplyType = isInterState ? "EXPWP" : "B2B";
 
-  // Map line items
+  // Map line items. Every amount comes from the line's STORED values, never recomputed from qty x unitPrice x rate:
+  // the stored taxable value (total - tax), tax and total are what the invoice, ledger, GST returns and PDF report,
+  // and they are not always qty x rate x GST% to the paisa (an online-store order of tax-inclusive items stores the
+  // exact inclusive amounts next to the tax-exclusive rate). UnitPrice is the stored rate.
+  //   AssAmt     = stored taxable value
+  //   TotAmt     = qty x unitPrice, and Discount = TotAmt - AssAmt, so the IRP rule AssAmt = TotAmt - Discount is exact.
+  //                (When the stored taxable value is above qty x rate, by a paisa of rounding, TotAmt is raised to
+  //                AssAmt and Discount is 0: a discount is never negative.)
+  //   Cgst/Sgst  = the stored tax split with money.splitHalf (odd paisa to CGST: the ledger's and the returns' rule)
+  //   TotItemVal = stored line total
   const itemList = lineItems.map((li, idx) => {
-    const qty = n(li.quantity);
-    const unitPrice = n(li.unitPrice);
+    const qty = Number(li.quantity) || 0;
+    const unitPrice = money.toNumber(li.unitPrice);
     const taxPct = n(li.taxPercent);
-    const discPct = n(li.discountPercent);
 
-    const grossAmt = round2(qty * unitPrice);
-    const discAmt = round2(grossAmt * discPct / 100);
-    const assAmt = round2(grossAmt - discAmt);
-    const totalTax = round2(assAmt * taxPct / 100);
+    const taxable = money.sub(li.totalAmount, li.taxAmount);
+    const totalTax = money.add(li.taxAmount, "0");
+    let grossAmt = money.mul(li.unitPrice, li.quantity);
+    let discAmt = money.sub(grossAmt, taxable);
+    if (money.compare(discAmt, "0") < 0) {
+      grossAmt = taxable;
+      discAmt = "0.00";
+    }
 
     let cgstAmt = 0;
     let sgstAmt = 0;
     let igstAmt = 0;
 
     if (isInterState) {
-      igstAmt = totalTax;
+      igstAmt = money.toNumber(totalTax);
     } else {
       // CGST = round-half-up(tax / 2), SGST = the remainder (odd paisa to CGST). Done in integer
       // paise through the shared split: `round2(totalTax / 2)` in floating point rounded some odd
@@ -201,7 +209,7 @@ export function mapInvoiceToIRP(
       sgstAmt = money.toNumber(sgstHalf);
     }
 
-    const totItemVal = round2(assAmt + totalTax);
+    const totItemVal = money.toNumber(li.totalAmount);
     const isService = li.itemType === "service" ? "Y" : "N";
 
     return {
@@ -216,9 +224,9 @@ export function mapInvoiceToIRP(
       Qty: qty,
       Unit: toUQC(li.selectedUnit),
       UnitPrice: unitPrice,
-      TotAmt: grossAmt,
-      Discount: discAmt,
-      AssAmt: assAmt,
+      TotAmt: money.toNumber(grossAmt),
+      Discount: money.toNumber(discAmt),
+      AssAmt: money.toNumber(taxable),
       GstRt: taxPct,
       IgstAmt: igstAmt,
       CgstAmt: cgstAmt,
@@ -227,12 +235,15 @@ export function mapInvoiceToIRP(
     };
   });
 
-  // Aggregate ValDtls from itemList (sum of individual items)
-  const assVal = round2(itemList.reduce((sum, item) => sum + item.AssAmt, 0));
-  const cgstVal = round2(itemList.reduce((sum, item) => sum + item.CgstAmt, 0));
-  const sgstVal = round2(itemList.reduce((sum, item) => sum + item.SgstAmt, 0));
-  const igstVal = round2(itemList.reduce((sum, item) => sum + item.IgstAmt, 0));
-  const discountTotal = round2(itemList.reduce((sum, item) => sum + item.Discount, 0));
+  // Aggregate ValDtls from itemList (sum of individual items), in integer paise: the sums are the stored invoice's
+  // subtotal and tax exactly.
+  const sumOf = (pick: (item: (typeof itemList)[number]) => number) =>
+    money.toNumber(money.sum(itemList.map((item) => pick(item).toFixed(2))));
+  const assVal = sumOf((item) => item.AssAmt);
+  const cgstVal = sumOf((item) => item.CgstAmt);
+  const sgstVal = sumOf((item) => item.SgstAmt);
+  const igstVal = sumOf((item) => item.IgstAmt);
+  const discountTotal = sumOf((item) => item.Discount);
   const othChrg = n(invoice.additionalCharges);
   const rndOffAmt = n(invoice.roundOff);
   const totInvVal = n(invoice.totalAmount);
