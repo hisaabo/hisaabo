@@ -168,7 +168,7 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
 
   return (
     <div className="space-y-5">
-      <MissingHsnWarning lines={data.hsnMissing} />
+      <MissingHsnWarning lines={data.hsnMissing} invalid={data.hsnInvalid} />
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

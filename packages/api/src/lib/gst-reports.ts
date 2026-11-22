@@ -6,6 +6,7 @@ import { buildBusinessDateFilter } from "./business-date.js";
 import { gstMonthWindow } from "./gst-period.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
 import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "./gst-split.js";
+import { resolveHsn } from "./hsn-check.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -35,6 +36,23 @@ export interface GSTR1HsnMissingLine {
   line: number;
   itemName: string;
   itemId: string | null;
+}
+
+/**
+ * One sale line whose item has an HSN code that cannot be filed: not 4 to 8 digits, or too short for
+ * the business's turnover (4 digits up to and including ₹5 Cr, 6 above). Same rule and same wording
+ * as the e-invoice and the e-way bill (`lib/hsn-check.ts`).
+ */
+export interface GSTR1HsnInvalidLine {
+  invoiceNumber: string;
+  /** 1-based line number on the invoice */
+  line: number;
+  itemName: string;
+  itemId: string;
+  /** the code as it will be filed (separators dropped) */
+  hsn: string;
+  /** e.g. "line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item" */
+  problem: string;
 }
 
 export interface GSTR1Report {
@@ -85,11 +103,16 @@ export interface GSTR1Report {
     sgst: number;
     igst: number;
     totalValue: number;
+    /** "missing": filed under the stand-in 0000; "invalid": the code cannot be filed (see `hsnInvalid`); null: fine */
+    hsnFlag?: "missing" | "invalid" | null;
   }>;
   // Sale lines with no HSN code (a typed-in line, or an item that has none). Table 12 files them
   // under "0000", which is not a real code: the portal JSON export is refused while this list is
   // not empty, and the CSV flags them. Fix the item (or the line) first.
   hsnMissing: GSTR1HsnMissingLine[];
+  // Sale lines whose item HSN is present but cannot be filed (malformed, or too short for the
+  // turnover). The portal JSON export is refused for these too, and the CSV flags them.
+  hsnInvalid: GSTR1HsnInvalidLine[];
   // Credit Notes (sales returns / adjustments reducing output tax)
   creditNotes: GSTR1Note[];
   // Debit Notes (sale-side: additional charges to the buyer, increasing output tax)
@@ -227,7 +250,8 @@ export async function generateGSTR1(
         .from(itemsTable)
         .where(inArray(itemsTable.id, [...allItemIds]))
     : [];
-  const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, i.hsn?.trim() || ""]));
+  // the code as it is filed: separators dropped ("7306.90" and "730690" are one code)
+  const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, (i.hsn ?? "").replace(/[\s.-]/g, "")]));
   const itemUnitLookup = new Map(itemHsnData.map((i) => [i.id, i.unit as string | null]));
 
   // Fix 3: State comparison using stateCode (preferred) with text fallback
@@ -248,6 +272,7 @@ export async function generateGSTR1(
   // Table 12 rows keyed by HSN + UQC + GST rate (see `hsnRowKey`); the quantity is summed in
   // integer thousandths (stored quantities have three decimals), never as JS floats.
   const hsnMissing: GSTR1HsnMissingLine[] = [];
+  const hsnInvalid: GSTR1HsnInvalidLine[] = [];
   const hsnSummaryMap = new Map<string, {
     hsn: string; description: string; uqc: string; taxRate: number; quantityMilli: bigint;
     taxable: string; totalValue: string; cgst: string; sgst: string; igst: string;
@@ -321,9 +346,18 @@ export async function generateGSTR1(
 
     // Table 12 (HSN summary): the item's HSN, the unit the quantity is in, and the GST rate.
     for (const [lineIdx, li] of lineItems.entries()) {
-      const realHsn = li.itemId ? (itemHsnLookup.get(li.itemId) || "") : "";
+      // "0000" is the stand-in for a missing code, never a real one
+      const itemRealHsn = li.itemId ? (itemHsnLookup.get(li.itemId) || "") : "";
+      const realHsn = itemRealHsn === "0000" ? "" : itemRealHsn;
+      const lineNo = (li.sortOrder ?? lineIdx) + 1;
       if (!realHsn) {
-        hsnMissing.push({ invoiceNumber: inv.invoiceNumber, line: (li.sortOrder ?? lineIdx) + 1, itemName: li.itemName, itemId: li.itemId ?? null });
+        hsnMissing.push({ invoiceNumber: inv.invoiceNumber, line: lineNo, itemName: li.itemName, itemId: li.itemId ?? null });
+      } else {
+        // 4 to 8 digits, and the digit minimum of the turnover: the e-invoice's rule, per line
+        const check = resolveHsn({ itemName: li.itemName, itemHsn: realHsn }, lineNo - 1, biz?.annualTurnover);
+        if ("problem" in check) {
+          hsnInvalid.push({ invoiceNumber: inv.invoiceNumber, line: lineNo, itemName: li.itemName, itemId: li.itemId!, hsn: realHsn, problem: check.problem });
+        }
       }
       // "0000" stands in for a missing HSN so the totals still tie; see `hsnMissing`
       const itemHsn = realHsn || "0000";
@@ -465,8 +499,12 @@ export async function generateGSTR1(
       sgst: money.toNumber(e.sgst),
       igst: money.toNumber(e.igst),
       totalValue: money.toNumber(e.totalValue),
+      hsnFlag: e.hsn === "0000"
+        ? ("missing" as const)
+        : ("problem" in resolveHsn({ itemName: e.description, itemHsn: e.hsn }, 0, biz?.annualTurnover) ? ("invalid" as const) : null),
     })),
     hsnMissing,
+    hsnInvalid,
     creditNotes,
     debitNotes,
     totalTaxableValue: money.toNumber(totalTaxableValue),
@@ -857,11 +895,18 @@ export function gstr1ToCSV(report: GSTR1Report): string {
 
   // HSN summary (Table 12): one row per HSN + UQC + GST rate
   lines.push("HSN - Summary of Outward Supplies (Table 12)");
+  // The JSON export is refused for these; the CSV carries them, flagged, so nothing is hidden.
   if (report.hsnMissing.length > 0) {
-    // The JSON export is refused for these; the CSV carries them, flagged, so nothing is hidden.
     lines.push(csvRow([`WARNING: ${report.hsnMissing.length} line(s) have no HSN code and are filed under 0000, which is not a real HSN code. Fix them before filing`]));
     for (const m of report.hsnMissing) {
       lines.push(csvRow(["NO HSN", m.invoiceNumber, `line ${m.line}`, m.itemName, m.itemId ? "item has no HSN: add it on the item" : "typed in without an item"]));
+    }
+  }
+  const invalid = report.hsnInvalid ?? [];
+  if (invalid.length > 0) {
+    lines.push(csvRow([`WARNING: ${invalid.length} line(s) have an HSN code that cannot be filed (not 4 to 8 digits, or too short for the turnover). Fix them before filing`]));
+    for (const m of invalid) {
+      lines.push(csvRow(["INVALID HSN", m.invoiceNumber, `line ${m.line}`, m.itemName, m.hsn, m.problem]));
     }
   }
   lines.push("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag");
@@ -873,7 +918,7 @@ export function gstr1ToCSV(report: GSTR1Report): string {
       // TODO(0.11.0): cess is not modelled on sales lines yet; always 0 until it is.
       "0.00",
       row.totalValue.toFixed(2),
-      row.hsn === "0000" ? "NO HSN" : "",
+      row.hsn === "0000" || row.hsnFlag === "missing" ? "NO HSN" : row.hsnFlag === "invalid" ? "INVALID HSN" : "",
     ]));
   }
   lines.push("");
@@ -893,7 +938,7 @@ export function gstr1ToCSV(report: GSTR1Report): string {
 
 // ── JSON export guard ───────────────────────────────────────────
 
-/** Raised when a GSTR-1 JSON export would carry lines with no HSN code. */
+/** Raised when a GSTR-1 JSON export would carry lines with a missing or unusable HSN code. */
 export class Gstr1ExportBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -902,13 +947,16 @@ export class Gstr1ExportBlockedError extends Error {
 }
 
 /**
- * Refuse to build the GSTR-1 portal JSON while any sale line has no HSN code: Table 12 would carry
- * "0000", which is not a real code, and the filing would be wrong or rejected. The message lists
- * what to fix: items with no HSN (with the invoices that sold them) and lines typed in without an
- * item. The on-screen report and the CSV are not blocked; they show the lines, flagged.
+ * Refuse to build the GSTR-1 portal JSON while any sale line has no usable HSN code. Missing: Table
+ * 12 would carry "0000", which is not a real code. Invalid: the code is not 4 to 8 digits, or too
+ * short for the business's turnover (the same rule and wording as the e-invoice, `lib/hsn-check.ts`).
+ * Either way the filing would be wrong or rejected. The message lists what to fix: items with no HSN
+ * (with the invoices that sold them), lines typed in without an item, and each line whose code is
+ * unusable. The on-screen report and the CSV are not blocked; they show the lines, flagged.
  */
 export function assertGstr1JsonExportable(report: GSTR1Report): void {
-  if (report.hsnMissing.length === 0) return;
+  const invalid = report.hsnInvalid ?? [];
+  if (report.hsnMissing.length === 0 && invalid.length === 0) return;
   const MAX_SHOWN = 10;
   const byItem = new Map<string, { name: string; where: string[] }>();
   const typedIn: string[] = [];
@@ -934,7 +982,20 @@ export function assertGstr1JsonExportable(report: GSTR1Report): void {
     const more = typedIn.length > MAX_SHOWN ? `, and ${typedIn.length - MAX_SHOWN} more` : "";
     parts.push(`these lines were typed in without an item and cannot carry an HSN: ${shown}${more}; bill a catalogue item with an HSN instead`);
   }
+  if (invalid.length > 0) {
+    const shown = invalid.slice(0, MAX_SHOWN).map((m) => `${m.invoiceNumber} ${m.problem}`).join("; ");
+    const more = invalid.length > MAX_SHOWN ? `; and ${invalid.length - MAX_SHOWN} more` : "";
+    parts.push(`these lines have an HSN code that cannot be filed: ${shown}${more}`);
+  }
+
+  const missing = report.hsnMissing.length;
+  const header = invalid.length === 0
+    ? `${missing} line(s) have no HSN code, and Table 12 cannot be filed with a made-up one.`
+    : `${missing + invalid.length} line(s) have a missing or unusable HSN code (${missing} missing, ${invalid.length} invalid or too short for the turnover), and Table 12 cannot be filed with a made-up or invalid one.`;
+  const footer = invalid.length === 0
+    ? "The on-screen report and the CSV still show these lines under HSN 0000, flagged."
+    : "The on-screen report and the CSV still show these lines, flagged (missing ones under HSN 0000).";
   throw new Gstr1ExportBlockedError(
-    `Cannot export GSTR-1 JSON for ${report.period}: ${report.hsnMissing.length} line(s) have no HSN code, and Table 12 cannot be filed with a made-up one. To fix: ${parts.join(". Also ")}. The on-screen report and the CSV still show these lines under HSN 0000, flagged.`,
+    `Cannot export GSTR-1 JSON for ${report.period}: ${header} To fix: ${parts.join(". Also ")}. ${footer}`,
   );
 }

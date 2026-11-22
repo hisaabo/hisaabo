@@ -629,6 +629,7 @@ function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     b2cSmall: [],
     hsn: [],
     hsnMissing: [],
+    hsnInvalid: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -923,6 +924,7 @@ function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     b2cSmall: [],
     hsn: [],
     hsnMissing: [],
+    hsnInvalid: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -1687,6 +1689,68 @@ describe("a GSTR-1 JSON export is refused while a line has no HSN", () => {
       `"NO HSN","INV-2","line 1","'=Copper","item has no HSN: add it on the item"`,
       "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
       `"0000","Packing","NOS","1","0","10.00","0.00","0.00","0.00","0.00","10.00","NO HSN"`,
+    ]);
+  });
+});
+
+describe("a GSTR-1 JSON export is refused while a line has an HSN that cannot be filed", () => {
+  const invalid = (invoiceNumber: string, line: number, itemName: string, hsn: string, problem: string) =>
+    ({ invoiceNumber, line, itemName, itemId: `item-${itemName}`, hsn, problem });
+  const short = invalid("INV-1", 2, "Steel Rods", "730", "line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item");
+
+  it("lists the line with the e-invoice wording and the 'invalid' header", () => {
+    const report = makePortalReport({ period: "Jan 2026", hsnInvalid: [short] });
+    expect(() => assertGstr1JsonExportable(report)).toThrow(Gstr1ExportBlockedError);
+    expect(() => assertGstr1JsonExportable(report)).toThrow(
+      "Cannot export GSTR-1 JSON for Jan 2026: 1 line(s) have a missing or unusable HSN code (0 missing, 1 invalid or too short for the turnover), " +
+        "and Table 12 cannot be filed with a made-up or invalid one. " +
+        "To fix: these lines have an HSN code that cannot be filed: INV-1 line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item. " +
+        "The on-screen report and the CSV still show these lines, flagged (missing ones under HSN 0000).",
+    );
+  });
+
+  it("combines with missing lines: both are listed, the count is the sum", () => {
+    const report = makePortalReport({
+      period: "Jan 2026",
+      hsnMissing: [{ invoiceNumber: "INV-2", line: 1, itemName: "Copper Wire", itemId: "item-c" }],
+      hsnInvalid: [short],
+    });
+    let message = "";
+    try {
+      assertGstr1JsonExportable(report);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("2 line(s) have a missing or unusable HSN code (1 missing, 1 invalid or too short for the turnover)");
+    expect(message).toContain("add the HSN on these items: 'Copper Wire' (INV-2 line 1)");
+    expect(message).toContain("INV-1 line 2 'Steel Rods' has HSN code '730'");
+  });
+
+  it("a long list of invalid lines is cut to ten and says how many more", () => {
+    const hsnInvalid = Array.from({ length: 12 }, (_, i) => invalid(`INV-${i + 1}`, 1, `Item ${i + 1}`, "7", `line 1 'Item ${i + 1}' has HSN code '7', which is not 4 to 8 digits; correct it on the item`));
+    let message = "";
+    try {
+      assertGstr1JsonExportable(makePortalReport({ hsnInvalid }));
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("INV-10 line 1 'Item 10'");
+    expect(message).not.toContain("INV-11 line 1");
+    expect(message).toContain("; and 2 more");
+  });
+
+  it("the CSV lists each unusable line and flags the Table 12 row", () => {
+    const csv = gstr1ToCSV(makeReport({
+      hsn: [{ hsn: "730", description: "Steel Rods", uqc: "NOS", taxRate: 18, quantity: 1, taxableValue: 50, cgst: 4.5, sgst: 4.5, igst: 0, totalValue: 59, hsnFlag: "invalid" }],
+      hsnInvalid: [short],
+    }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(lines.slice(at + 1, at + 5)).toEqual([
+      `"WARNING: 1 line(s) have an HSN code that cannot be filed (not 4 to 8 digits, or too short for the turnover). Fix them before filing"`,
+      `"INVALID HSN","INV-1","line 2","Steel Rods","730","line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item"`,
+      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
+      `"730","Steel Rods","NOS","1","18","50.00","4.50","4.50","0.00","0.00","59.00","INVALID HSN"`,
     ]);
   });
 });
