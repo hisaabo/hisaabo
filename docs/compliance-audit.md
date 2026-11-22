@@ -482,6 +482,15 @@ The older `party.tallyExport` returns a CSV that Tally cannot import. It is depr
 
 19. **Export: Stock Adjustments and Bank Transactions** (Gap 6.1.1): Complete the data export for full portability.
 
+### Open items recorded after the 0.10.1 accounting corrections
+
+Known issues that the 0.10.1 ledger / GST corrections deliberately did not change:
+
+20. **Reverse-charge liability in the books** (related to Gap 2.1.2): GSTR-3B reports reverse-charge purchases in Table 3.1(d) and takes the ITC, but the derived ledger posts a reverse-charge purchase like an ordinary one: no output-tax liability is credited and no matching input credit is debited for the RCM tax itself. A return of a reverse-charge purchase reduces ordinary ITC, not the 3.1(d) table, unless the return is itself flagged reverse-charge.
+21. **Tax-inclusive pricing uses a float** (Gap 4.1): `calcLineItem` with `taxInclusive` derives the base price as `unitPrice / (1 + rate / 100)` in floating point before stringifying to two decimals. The error is bounded to the paisa by the immediate `toFixed(2)`, but a line near a half-paisa boundary can round differently from an exact calculation.
+22. **GSTR-2B reconciliation tax split** (`gstr2b.reconcile`): the purchase-side figures it compares against are a heuristic (tax / 2 per head, no IGST), not the per-line split the returns use.
+23. **ITC ledger for reversals created before 0.10.1**: purchase-side reversals written before the ITC ledger started recording them have no entry, so the ITC dashboard for those months is gross while GSTR-3B Table 4 is net.
+
 ---
 
 ## Appendix A: Files Reviewed
