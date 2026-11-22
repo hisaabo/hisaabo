@@ -66,7 +66,7 @@ Tap **Items** in the bottom tab bar (if visible) or navigate to the Items sectio
 | **Sale Price** | Your default selling price per unit (excluding tax if tax-exclusive) |
 | **Purchase Price** | Your default buying price per unit |
 | **Tax %** | GST rate: 0%, 5%, 12%, 18%, or 28%. Applied to every invoice line item using this item. |
-| **Tax Inclusive** | If enabled, the sale price already includes GST. The taxable value is back-calculated. |
+| **Tax Inclusive** | If enabled, the **sale** price already includes GST (the purchase price never does). On a bill the line starts at the tax-exclusive rate, so ₹118.00 including 18% GST bills as ₹100.00 + ₹18.00 = ₹118.00. See [Tax-inclusive pricing](/invoicing/gst-on-invoices#tax-inclusive-pricing). |
 | **HSN Code** | Harmonised System of Nomenclature code (for products) or SAC code (for services). Printed on invoices and used in GSTR-1 HSN summary. |
 
 ### Stock tracking fields
@@ -136,6 +136,35 @@ Items where `stockQuantity <= lowStockAlert` appear in the **Low Stock** filter 
 :::tip
 Set a low-stock alert threshold on every item you actively purchase. Check the low-stock view weekly before placing purchase orders.
 :::
+
+## Update prices from a bill
+
+It is painful to open each item to change its price. When you make or edit an **invoice** and change the **rate** of a line that is linked to a catalog item, Hisaabo asks once, when you save, whether to update the item's saved price too.
+
+<ForDesktop>
+Change the **Price** of a line, then click **Create Invoice** (or **Save Changes**). A box "Update saved prices?" lists every changed item as old price to new price, for example:
+
+- Basmati Rice (5 kg) ₹450.00 → ₹480.00
+- Ghee 1L ₹620.00 → ₹600.00
+
+Every item has a checkbox, checked by default. **Update item prices** saves the bill and then updates the checked items. **Just this bill** saves the bill and leaves the catalog alone. **Esc** (or the ×) goes back to the form without saving anything.
+</ForDesktop>
+
+<ForMobile>
+Change the **Rate** of a line, then tap **Create Invoice** (or **Save**). A sheet "Update saved prices?" lists every changed item as old price to new price, with a checkbox per item (all checked). **Update item prices** saves the invoice and then the checked prices; **Just this bill** saves the invoice only. The close button or the back gesture returns to the form without saving.
+</ForMobile>
+
+How it decides:
+
+- **Only invoices ask.** A sale invoice proposes the selling price, a purchase invoice the purchase price. Quotations, proformas and delivery challans are offers and movement notes, usually priced for one customer (the invoice they become asks); credit notes, debit notes and returns copy the original invoice's rates, so a change there is an adjustment, not a new price.
+- **Only a rate you changed.** Opening an old bill and saving it does not offer to revert prices that changed since. A **discount** is never part of the price: a discounted line whose rate you did not touch proposes nothing, and one whose rate you did change proposes that rate, not the discounted amount.
+- **The right price.** A line in an alternate unit updates that unit's own price (the 5 kg pack's price, not the per-kg price); a variant line updates that variant's price. If the unit was renamed or removed since, the line is listed as "not offered" instead of guessing.
+- **Tax-inclusive items.** The rate on a bill is always tax-exclusive. For an item whose sale price includes GST, the rate you typed (₹105.00 at 18%) is converted back to the inclusive price (₹123.90) before it is compared and saved, and the box says "incl. GST".
+- **Who is asked.** Only people who can edit items: the owner, admins and seller managers. Sellers and accountants see no box and nothing changes for them.
+- **The bill always saves.** If the price update fails, the bill is already saved and you get a message; nothing is rolled back. Updating twice does nothing the second time.
+- **Audit.** Each changed price is written to the audit log with the old price, the new price and the bill it came from. The item's price history is built from your bills, so the bill itself is the record of the price you billed.
+
+The CLI and AI tools can do the same: `hisaabo invoice create --update-item-prices` and the MCP `update_item_prices` option update the saved price of every linked item whose rate you stated differs. See [CLI](/ai/cli/) and [MCP server](/ai/mcp-server/).
 
 ## Online store visibility
 

@@ -174,7 +174,7 @@ resp = httpx.get(
         { name: "lineItems", type: "array", required: true, description: "At least one line item required. See line item schema below." },
         { name: "lineItems[].description", type: "string", required: true, description: "Line item description (1–500 chars)" },
         { name: "lineItems[].quantity", type: "string (decimal)", required: true, description: "Quantity as decimal string, e.g. `\"10.000\"`" },
-        { name: "lineItems[].unitPrice", type: "string (decimal)", required: true, description: "Unit price as decimal string, e.g. `\"1500.00\"`" },
+        { name: "lineItems[].unitPrice", type: "string (decimal)", required: true, description: "TAX-EXCLUSIVE unit price as decimal string, e.g. `\"1500.00\"`: the line's GST is added on top. For an item whose SALE price includes GST (`taxInclusive: true`) send the price without the GST: 118.00 at 18% is `\"100.00\"` (11800 x 100 / 118 paise, half-up), or the customer is taxed twice. Purchase prices are always tax-exclusive." },
         { name: "lineItems[].taxPercent", type: "string (decimal)", required: false, description: "Tax rate percentage (0–56), e.g. `\"18.00\"`", default: "0" },
         { name: "lineItems[].discountPercent", type: "string (decimal)", required: false, description: "Line-level discount percentage (0–100), e.g. `\"5.00\"`", default: "0" },
         { name: "lineItems[].itemId", type: "string (UUID)", required: false, description: "Linked item catalog entry (updates stock)" },

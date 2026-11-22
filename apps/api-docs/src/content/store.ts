@@ -180,6 +180,7 @@ resp = httpx.post(
         { name: "search", type: "string", required: false, description: "Search by item name (case-insensitive)" },
         { name: "category", type: "string", required: false, description: "Filter by item category" },
         { name: "storeEnabled", type: "boolean", required: false, description: "Filter by store visibility (true = shown, false = hidden)" },
+        { name: "selectedFirst", type: "boolean", required: false, description: "List the items already on the store first, then the rest, each group in the usual order (`storeSortOrder`, name, id). Applied before paging, so a selected item on a later page still comes first. Follows what is SAVED. The Manage Store Items picker sets it.", default: "false" },
         { name: "page", type: "number", required: false, description: "Page number (1-indexed)", default: "1" },
         { name: "limit", type: "number", required: false, description: "Items per page (1-100)", default: "20" },
       ],

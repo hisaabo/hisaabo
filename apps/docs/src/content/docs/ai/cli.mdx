@@ -233,6 +233,17 @@ Where `invoice.json` follows the format:
 }
 ```
 
+**Update saved item prices from the invoice.** Add `--update-item-prices` and, after the invoice is saved, Hisaabo also updates the saved price of every linked item whose **explicit** `--rate` differs from the item's current price (the selling price on a sale, the purchase price with `--type purchase`):
+
+```bash
+hisaabo invoice create --party "Montu Arora" --item "Basmati Rice" --qty 2 --rate 480 --update-item-prices --json
+# {"invoiceNumber": "INV-00042", ..., "itemPriceUpdate": {"status": "updated", "updated": [{"label": "Basmati Rice", "side": "sale", "oldPrice": "450.00", "newPrice": "480.00"}], "skipped": []}}
+```
+
+There is nobody to ask, so the flag is the confirmation. Only a rate you typed counts: a price defaulted from the catalog (no `--rate`) never changes the catalog. The invoice is created whatever happens to the price update: with no permission to edit items, an item deleted meanwhile or a network error, `itemPriceUpdate.status` is `failed` with a message, the exit code stays 0 and the invoice stands. The same rules as the web and mobile prompt apply: the rate is compared, never a discounted net; a tax-exclusive `--rate` for an item whose sale price includes GST is converted back to the inclusive price; invoices only. The CLI has no `invoice update` command (use the web or MCP `invoice_update`).
+
+**Rates are tax-exclusive.** `--rate` is the taxable rate; GST is added on top. For an item marked "Price includes tax" the default rate (no `--rate`) is converted for you: ₹118.00 including 18% bills at ₹100.00.
+
 #### `hisaabo invoice pdf`
 
 ```bash
