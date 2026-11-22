@@ -8,7 +8,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import postgres from "postgres";
 import { randomBytes } from "node:crypto";
-import { provisionTenantDatabase, scramSha256Verifier } from "@hisaabo/db";
+import { provisionTenantDatabase, scramSha256Verifier, generateTenantDbNames } from "@hisaabo/db";
 
 const adminUrl = new URL(process.env.CONTROL_DATABASE_URL!);
 adminUrl.pathname = "/postgres";
@@ -75,29 +75,26 @@ describe("scramSha256Verifier", () => {
 
 describe("provisionTenantDatabase failure safety", () => {
   it("does not drop a pre-existing database when CREATE DATABASE fails", async () => {
-    const slug = `pre${suffix}`;
-    const dbName = `tenant_${slug}`;
-    await admin.unsafe(`CREATE DATABASE "${dbName}"`);
+    const names = generateTenantDbNames();
+    await admin.unsafe(`CREATE DATABASE "${names.dbName}"`);
     try {
-      await expect(provisionTenantDatabase("t1", slug)).rejects.toThrow();
-      expect(await dbExists(dbName)).toBe(true);
-      expect(await roleExists(`${dbName}_user`)).toBe(false);
+      await expect(provisionTenantDatabase(names)).rejects.toThrow();
+      expect(await dbExists(names.dbName)).toBe(true);
+      expect(await roleExists(names.dbUser)).toBe(false);
     } finally {
-      await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${names.dbName}"`);
     }
   });
 
   it("does not drop a pre-existing role when CREATE USER fails, but removes the DB it created", async () => {
-    const slug = `rol${suffix}`;
-    const dbName = `tenant_${slug}`;
-    const user = `${dbName}_user`;
-    await admin.unsafe(`CREATE USER "${user}" WITH PASSWORD 'x'`);
+    const names = generateTenantDbNames();
+    await admin.unsafe(`CREATE USER "${names.dbUser}" WITH PASSWORD 'x'`);
     try {
-      await expect(provisionTenantDatabase("t2", slug)).rejects.toThrow();
-      expect(await roleExists(user)).toBe(true);
-      expect(await dbExists(dbName)).toBe(false);
+      await expect(provisionTenantDatabase(names)).rejects.toThrow();
+      expect(await roleExists(names.dbUser)).toBe(true);
+      expect(await dbExists(names.dbName)).toBe(false);
     } finally {
-      await admin.unsafe(`DROP USER IF EXISTS "${user}"`);
+      await admin.unsafe(`DROP USER IF EXISTS "${names.dbUser}"`);
     }
   });
 
@@ -105,8 +102,15 @@ describe("provisionTenantDatabase failure safety", () => {
     process.env.MULTI_TENANT = "true";
     delete process.env.ENCRYPTION_KEY;
     delete process.env.DB_ENCRYPTION_KEY;
-    const slug = `nok${suffix}`;
-    await expect(provisionTenantDatabase("t3", slug)).rejects.toThrow(/ENCRYPTION_KEY/);
-    expect(await dbExists(`tenant_${slug}`)).toBe(false);
+    const names = generateTenantDbNames();
+    await expect(provisionTenantDatabase(names)).rejects.toThrow(/ENCRYPTION_KEY/);
+    expect(await dbExists(names.dbName)).toBe(false);
+  });
+
+  it("refuses names that are not generated-style identifiers before touching the cluster", async () => {
+    await expect(provisionTenantDatabase({ dbName: "tenant_x", dbUser: "tenant_x_user" })).rejects.toThrow(/Invalid tenant database/);
+    await expect(
+      provisionTenantDatabase({ dbName: 'x"; DROP DATABASE postgres; --', dbUser: "t_" + "a".repeat(32) + "_u" }),
+    ).rejects.toThrow(/Invalid tenant database/);
   });
 });

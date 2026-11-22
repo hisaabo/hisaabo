@@ -12,6 +12,9 @@
  *   1. Applies drizzle-control/ migrations to CONTROL_DATABASE_URL
  *   2. Discovers all active tenants from the control DB
  *   3. Applies drizzle-tenant/ migrations to each tenant DB
+ *   4. Closes every tenant DB to PUBLIC (tenant-db-access.ts), idempotent
+ *
+ *   pnpm --filter @hisaabo/db migrate -- --restrict-tenant-db-access   # step 4 alone
  */
 
 import { config } from "dotenv";
@@ -28,6 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { backfillStoreSlugRegistry, formatBackfillReport } from "./backfill-store-slugs.js";
 import { installQueueSchema } from "./queue-schema.js";
+import { restrictExistingTenantDatabases, type TenantDbAccessReport } from "./tenant-db-access.js";
 
 // ── Path resolution ──────────────────────────────────────────
 //
@@ -492,7 +496,52 @@ async function migrateMultiTenant(): Promise<boolean> {
     });
   }
 
+  // Step 4: close every tenant database to PUBLIC (see tenant-db-access.ts).
+  // Databases provisioned before 0.10.1 still let any tenant role connect.
+  // Idempotent and cheap (one statement per tenant), so it runs on every
+  // migrate and also catches tenants created by an older replica mid-deploy.
+  // Never fails boot; the per-tenant errors are logged and `--restrict-tenant-db-access`
+  // re-runs it on its own.
+  try {
+    await restrictTenantDbAccess(controlUrl);
+  } catch (err) {
+    log("error", "Tenant database access restriction failed — continuing startup (retried on next boot)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return true; // control DB succeeded, which is what matters for startup
+}
+
+async function restrictTenantDbAccess(controlUrl: string): Promise<TenantDbAccessReport> {
+  const report = await restrictExistingTenantDatabases({ controlUrl, logger: log });
+  log(report.failed > 0 ? "warn" : "info", "Tenant database access: closed to PUBLIC", {
+    total: report.total,
+    restricted: report.restricted,
+    missing: report.missing,
+    skipped: report.skipped,
+    failed: report.failed,
+  });
+  return report;
+}
+
+/**
+ * `--restrict-tenant-db-access`: multi-tenant only, runs no schema migrations.
+ * The same pass the migrate step runs after tenant migrations; exits 1 if any
+ * tenant database could not be restricted.
+ */
+async function restrictTenantDbAccessCommand(): Promise<boolean> {
+  if (process.env.MULTI_TENANT !== "true") {
+    log("error", "--restrict-tenant-db-access is only available in multi-tenant mode (MULTI_TENANT=true)");
+    return false;
+  }
+  const controlUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  if (!controlUrl) {
+    log("error", "CONTROL_DATABASE_URL or DATABASE_URL is not set");
+    return false;
+  }
+  const report = await restrictTenantDbAccess(controlUrl);
+  return report.failed === 0;
 }
 
 /**
@@ -711,6 +760,11 @@ export function assertMigrationsPresent(): string[] {
 export async function main(argv: string[] = process.argv.slice(2)) {
   if (argv.includes("--reconcile-store-slugs")) {
     const ok = await reconcileStoreSlugs(argv);
+    if (!ok) process.exit(1);
+    return;
+  }
+  if (argv.includes("--restrict-tenant-db-access")) {
+    const ok = await restrictTenantDbAccessCommand();
     if (!ok) process.exit(1);
     return;
   }

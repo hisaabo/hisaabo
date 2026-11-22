@@ -153,8 +153,9 @@ export const tenantRouter = router({
       // Phase 1 (outside any tx): provision the physical DB + role + schema.
       // CREATE DATABASE is non-transactional, so it MUST happen outside the
       // control-DB transaction. If it throws, provisionTenantDatabase's own
-      // internal catch already cleaned up.
-      const dbConfig = await provisionTenantDatabase(nanoid(), slug);
+      // internal catch already cleaned up. The database and role names are
+      // random, independent of the slug.
+      const dbConfig = await provisionTenantDatabase();
 
       // Phase 2 (inside tx): insert tenants row + owner membership atomically.
       // If this tx fails (constraint violation, connection drop, COMMIT
