@@ -1,11 +1,15 @@
 import { eq, and, ilike, sql, desc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
-import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, partialWithoutDefaults, money } from "@hisaabo/shared";
+import {
+  createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, unitVariantSchema,
+  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis,
+  type ItemPriceUpdate,
+} from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
-import { logAudit } from "../lib/audit.js";
+import { logAudit, logAuditInTransaction } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 
 // ── Price-history / stock-movement helpers ───────────────────────────────────
@@ -448,6 +452,194 @@ export const itemRouter = router({
       });
 
       return item;
+    }),
+
+  /**
+   * "Update saved prices?" — apply the rates typed on a bill to the catalog.
+   *
+   * The bill is saved by its own call first (invoice.create / invoice.update);
+   * this is a second, independent write, so a failure here can never block or
+   * roll back the bill. Each update names ONE price slot: the item's base price,
+   * one alternate unit's own price (`unit`), or one variant's price (`variantId`).
+   *
+   * All-or-nothing in one transaction (item rows locked in id order), idempotent
+   * (a slot already at the new price is reported `unchanged` and writes nothing,
+   * so a retry or a second tab is harmless). Validation is the item router's own:
+   * the same Item:update permission, the same price schema, and the patch is run
+   * through `updateItemSchema` / `unitVariantSchema` before it is written.
+   *
+   * Price history: item.priceHistory / priceSummary are derived from the invoice
+   * lines themselves, so the bill already records the price it was made at; there
+   * is no history table to write. What a catalog change needs is its own trail,
+   * so every changed slot gets an audit_log row (old -> new, side, and the source
+   * bill's id and number) written in the same transaction as the change.
+   */
+  updatePricesFromDocument: memberProcedure
+    .input(updatePricesFromDocumentSchema)
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+
+      const seen = new Set<string>();
+      for (const u of input.updates) {
+        const key = priceUpdateKey(u);
+        if (seen.has(key)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The same price is updated more than once in one request" });
+        }
+        seen.add(key);
+      }
+
+      type Slot = {
+        itemId: string; variantId?: string; unit?: string; side: "sale" | "purchase";
+        itemName: string; label: string; oldPrice: string | null; newPrice: string;
+      };
+
+      return ctx.db.transaction(async (tx) => {
+        // The bill the prices came from: same business, a document that sets prices,
+        // and the side of every update matches the side of the bill.
+        let doc: { id: string; invoiceNumber: string; documentType: string } | null = null;
+        if (input.documentId) {
+          const [row] = await tx.select({
+            id: invoices.id, invoiceNumber: invoices.invoiceNumber, type: invoices.type, documentType: invoices.documentType,
+          }).from(invoices).where(and(
+            eq(invoices.id, input.documentId),
+            eq(invoices.businessId, ctx.businessId),
+            isNull(invoices.deletedAt),
+          )).limit(1);
+          if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
+          if (!supportsPricePropagation(row.documentType)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Item prices cannot be updated from this kind of document" });
+          }
+          if (input.updates.some((u) => u.side !== row.type)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `A ${row.type} document can only update ${row.type} prices` });
+          }
+          doc = row;
+        }
+
+        // Lock the item rows (id order: two requests can never deadlock) and make
+        // sure every one is an active item of THIS business.
+        const itemIds = [...new Set(input.updates.map((u) => u.itemId))].sort();
+        const itemRows = await tx.select().from(items)
+          .where(and(inArray(items.id, itemIds), eq(items.businessId, ctx.businessId), isNull(items.deletedAt)))
+          .orderBy(items.id)
+          .for("update");
+        if (itemRows.length !== itemIds.length) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "One or more items were not found in this business" });
+        }
+        const itemById = new Map(itemRows.map((i) => [i.id, i]));
+
+        const variantIds = [...new Set(input.updates.map((u) => u.variantId).filter((v): v is string => !!v))].sort();
+        const variantRows = variantIds.length === 0 ? [] : await tx.select().from(itemVariants)
+          .where(and(inArray(itemVariants.id, variantIds), isNull(itemVariants.deletedAt)))
+          .orderBy(itemVariants.id)
+          .for("update");
+        const variantById = new Map(variantRows.map((v) => [v.id, v]));
+
+        type UnitVariantRow = NonNullable<typeof items.$inferSelect["unitVariants"]>[number];
+        type ItemPatch = { salePrice?: string; purchasePrice?: string; unitVariants?: UnitVariantRow[] };
+        const itemPatches = new Map<string, ItemPatch>();
+        const variantPatches = new Map<string, { salePrice?: string; purchasePrice?: string }>();
+        const changed: Slot[] = [];
+        const unchanged: Slot[] = [];
+
+        for (const u of input.updates as ItemPriceUpdate[]) {
+          const item = itemById.get(u.itemId)!;
+          const field = u.side === "sale" ? "salePrice" : "purchasePrice";
+
+          // Stated in the other tax basis than the item stores its prices in? Convert
+          // at the item's own GST rate; omitted = already the item's basis.
+          let newPrice = u.newPrice;
+          if (u.priceIncludesTax !== undefined && u.priceIncludesTax !== item.taxInclusive) {
+            newPrice = convertPriceBasis(newPrice, item.taxPercent, u.priceIncludesTax);
+          }
+          newPrice = money.add(newPrice, "0");
+          if (!money.isPositive(newPrice)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `The new price for "${item.name}" must be greater than zero` });
+          }
+
+          let oldPrice: string | null;
+          let label = item.name;
+          let variantId: string | undefined;
+          let unit: string | undefined;
+
+          if (u.variantId) {
+            const variant = variantById.get(u.variantId);
+            if (!variant || variant.itemId !== item.id || item.itemMode !== "variants") {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+            }
+            variantId = variant.id;
+            oldPrice = variant[field] ?? null;
+            const attrs = Object.values(variant.attributeValues as Record<string, string>).join(" / ");
+            if (attrs) label = `${item.name} (${attrs})`;
+          } else if (item.itemMode === "variants") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `"${item.name}" has variants: choose the variant whose price changes` });
+          } else if (u.unit && u.unit !== item.unit) {
+            const current: UnitVariantRow[] = itemPatches.get(item.id)?.unitVariants ?? item.unitVariants ?? [];
+            const at = current.findIndex((v) => v.unit === u.unit);
+            if (at < 0) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: `"${u.unit}" is not a unit of "${item.name}"` });
+            }
+            unit = u.unit;
+            label = `${item.name} (${u.unit})`;
+            oldPrice = current[at]![field] ?? null;
+            if (oldPrice === null || money.compare(oldPrice, newPrice) !== 0) {
+              const next = current.map((v, i) => (i === at ? { ...v, [field]: newPrice } : v));
+              // the same validation item.create / item.update apply to alternate units
+              const parsed = unitVariantSchema.array().safeParse(next);
+              if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error.issues[0]?.message ?? "Invalid unit price" });
+              itemPatches.set(item.id, { ...itemPatches.get(item.id), unitVariants: next });
+            }
+          } else {
+            oldPrice = item[field] ?? null;
+            if (oldPrice === null || money.compare(oldPrice, newPrice) !== 0) {
+              const patch = updateItemSchema.safeParse({ [field]: newPrice });
+              if (!patch.success) throw new TRPCError({ code: "BAD_REQUEST", message: patch.error.issues[0]?.message ?? "Invalid price" });
+              itemPatches.set(item.id, { ...itemPatches.get(item.id), [field]: newPrice });
+            }
+          }
+
+          const slot: Slot = { itemId: item.id, variantId, unit, side: u.side, itemName: item.name, label, oldPrice, newPrice };
+          if (oldPrice !== null && money.compare(oldPrice, newPrice) === 0) {
+            unchanged.push(slot);
+          } else {
+            if (variantId) variantPatches.set(variantId, { ...variantPatches.get(variantId), [field]: newPrice });
+            changed.push(slot);
+          }
+        }
+
+        const now = new Date();
+        for (const [id, patch] of itemPatches) {
+          await tx.update(items).set({ ...patch, updatedAt: now })
+            .where(and(eq(items.id, id), eq(items.businessId, ctx.businessId)));
+        }
+        for (const [id, patch] of variantPatches) {
+          await tx.update(itemVariants).set({ ...patch, updatedAt: now }).where(eq(itemVariants.id, id));
+        }
+
+        // Same transaction as the change: a catalog price can never move without its audit row.
+        for (const s of changed) {
+          await logAuditInTransaction(tx, {
+            businessId: ctx.businessId,
+            userId: ctx.user.id,
+            action: "item.updatePriceFromDocument",
+            entityType: s.variantId ? "itemVariant" : "item",
+            entityId: s.variantId ?? s.itemId,
+            metadata: {
+              itemId: s.itemId,
+              name: s.itemName,
+              side: s.side,
+              ...(s.variantId ? { variantId: s.variantId } : {}),
+              ...(s.unit ? { unit: s.unit } : {}),
+              oldPrice: s.oldPrice,
+              newPrice: s.newPrice,
+              ...(doc ? { documentId: doc.id, documentNumber: doc.invoiceNumber, documentType: doc.documentType } : {}),
+            },
+            ipAddress: ctx.ipAddress,
+            source: ctx.source,
+          });
+        }
+
+        return { documentId: doc?.id ?? null, updated: changed, unchanged };
+      });
     }),
 
   renameUnit: adminProcedure
