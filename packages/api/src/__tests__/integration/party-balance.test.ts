@@ -9,6 +9,8 @@
  * ledger statements are debit-minus-credit, so a supplier we owe is NEGATIVE.
  */
 import { describe, it, expect, beforeAll } from "vitest";
+import { getTenantTestDb } from "../helpers/test-db.js";
+import { buildPartyLedgerStatement } from "../../lib/party-ledger.js";
 import {
   useGoldenDb,
   createGoldenWorld,
@@ -83,39 +85,58 @@ describe("a supplier: purchase, purchase return, purchase-side debit note, payme
 
   beforeAll(async () => {
     w = await createGoldenWorld();
-    supplierId = (await addParty(w, "supplier", "MH")).id;
+    supplierId = (await addParty(w, "supplier", "MH", { openingBalance: "2000.00" })).id;
     const purchase = await addInvoice(w, "purchase", supplierId, GOODS("10"), { date: D(3) }); // 11800.00
     await addAdjustmentDoc(w, "purchaseReturn", "purchase", supplierId, GOODS("2"), { date: D(10) }); // 2360.00
     await addAdjustmentDoc(w, "debitNote", "purchase", supplierId, GOODS("1", "500.00"), { date: D(12) }); // 590.00
     await addPayment(w, { partyId: supplierId, invoiceId: purchase.id, amount: "5000.00", mode: "cash", date: D(15) });
   });
 
-  it("outstanding: 11800 - 2360 - 590 - 5000 paid = 3850.00 owed", async () => {
+  it("outstanding: 2000 opening + 11800 - 2360 - 590 - 5000 paid = 5850.00 owed", async () => {
     const b = await balances(w, supplierId, "supplier");
-    expect(b.byId).toBe("3850.00");
-    expect(b.inList).toBe("3850.00");
+    expect(b.byId).toBe("5850.00");
+    expect(b.inList).toBe("5850.00");
   });
 
-  it("the ledger tab and report agree: debit-minus-credit, so -3850.00 (purchase -11800, return +2360, DN +590, payment +5000)", async () => {
+  it("every ledger statement agrees: debit-minus-credit, so -5850.00 (opening -2000, purchase -11800, return +2360, DN +590, payment +5000)", async () => {
     const b = await balances(w, supplierId, "supplier");
-    expect(b.report).toBe("-3850.00");
-    expect(b.tabClosing).toBe("-3850.00");
+    expect(b.report).toBe("-5850.00");
+    expect(b.tabClosing).toBe("-5850.00");
   });
 
-  it("the ledger report rows: purchase credit, return and debit note debit, payment debit", async () => {
+  it("the ledger report rows: purchase credit, return and debit note debit, payment debit, opening -2000", async () => {
     const r = await w.caller.party.ledgerReport({ partyId: supplierId });
     expect(r?.entries.map((e) => [e.description, e.debit, e.credit, e.runningBalance])).toEqual([
-      ["Purchase Invoice", "0", "11800.00", "-11800.00"],
-      ["Purchase Return", "2360.00", "0", "-9440.00"],
-      ["Debit Note", "590.00", "0", "-8850.00"],
-      ["Payment (cash)", "5000.00", "0", "-3850.00"],
+      ["Purchase Invoice", "0", "11800.00", "-13800.00"],
+      ["Purchase Return", "2360.00", "0", "-11440.00"],
+      ["Debit Note", "590.00", "0", "-10850.00"],
+      ["Payment (cash)", "5000.00", "0", "-5850.00"],
     ]);
-    expect(r?.summary).toEqual({ totalDebit: "7950.00", totalCredit: "11800.00", closingBalance: "-3850.00" });
+    expect(r?.summary).toEqual({ totalDebit: "7950.00", totalCredit: "11800.00", closingBalance: "-5850.00" });
   });
 
-  it("the CSV ledger ends on the same closing balance", async () => {
+  it("the CSV ledger starts from the signed opening balance too", async () => {
     const csv = (await w.caller.party.ledgerReportCSV({ partyId: supplierId }))?.csv ?? "";
-    expect(csv.split("\n").at(-1)).toMatch(/-3850\.00"$/);
+    const lines = csv.split("\n");
+    expect(lines[1]).toMatch(/"Opening Balance","","","","-2000\.00"$/);
+    expect(lines.at(-1)).toMatch(/-5850\.00"$/);
+  });
+
+  it("the party statement report and the ledger PDF statement start from the signed opening too", async () => {
+    // These two list invoices and payments only (no returns / notes): opening -2000,
+    // purchase -11800, payment +5000 = -8800.
+    const st = await w.caller.reports.partyStatement({ partyId: supplierId });
+    expect(st?.summary.closingBalance).toBe("-8800.00");
+    expect(st?.summary.isDebit).toBe(false);
+
+    const db = getTenantTestDb() as unknown as Parameters<typeof buildPartyLedgerStatement>[0];
+    const pdf = await buildPartyLedgerStatement(db, w.businessId, {
+      id: supplierId,
+      type: "supplier",
+      openingBalance: "2000.00",
+    });
+    expect(pdf.openingBalance).toBe("-2000.00");
+    expect(pdf.summary.closingBalance).toBe("-8800.00");
   });
 
   it("a deleted payment leaves the ledger tab and re-opens the payable", async () => {

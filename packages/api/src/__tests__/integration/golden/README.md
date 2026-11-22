@@ -33,7 +33,7 @@ test itself.
 | `07-manual-journals` | Capital, equipment, depreciation journals; void nets to zero | pass |
 | `08-itc-utilisation` | `itc.recordUtilization` system journal | pass + 1 bug |
 | `09-bank-movements-not-ledgered` | Bank transfer and manual "interest" deposit | **documented gap** |
-| `10-opening-balances` | Party and bank opening balances | **documented gap** + 1 bug |
+| `10-opening-balances` | Party and bank opening balances | **documented gap** |
 | `11-financial-year-boundary` | 31 Mar / 1 Apr, TB per FY, default FY derivation | pass (+ documented gaps) |
 | `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass |
@@ -140,5 +140,4 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 | Where | What |
 | --- | --- |
-| `party.ts:450-458`, `:490` | `ledgerReport` applies the opposite sign convention to a supplier's opening balance than `getById` (10) |
 | `itc.ts:389-414`, `:536-579` | Re-recording a period's utilisation upserts the row but posts a second journal; Input GST goes negative (08) |

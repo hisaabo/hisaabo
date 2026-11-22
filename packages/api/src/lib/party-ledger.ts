@@ -12,6 +12,7 @@ import { invoices, payments, type TenantDatabase } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { paymentLedgerLeg, paymentTdsSql } from "./payment-settlement.js";
+import { signedOpeningBalance } from "./party-balance.js";
 
 export interface PartyLedgerEntry {
   date: Date;
@@ -26,6 +27,8 @@ export interface PartyLedgerEntry {
 export interface PartyLedgerStatement {
   entries: PartyLedgerEntry[];
   summary: { totalDebit: string; totalCredit: string; closingBalance: string };
+  /** The balance the statement starts from, signed like the running balance (supplier: negative). */
+  openingBalance: string;
 }
 
 export async function buildPartyLedgerStatement(
@@ -84,7 +87,9 @@ export async function buildPartyLedgerStatement(
     }),
   ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  let runningBalance = party.openingBalance;
+  // Debit-minus-credit: a supplier's opening balance (what we owe them) starts negative.
+  const openingBalance = signedOpeningBalance(party.type, party.openingBalance);
+  let runningBalance = openingBalance;
   const entries = rows.map((e) => {
     runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
     return { ...e, runningBalance };
@@ -92,7 +97,7 @@ export async function buildPartyLedgerStatement(
 
   const totalDebit = money.sum(rows.map((e) => e.debit));
   const totalCredit = money.sum(rows.map((e) => e.credit));
-  const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+  const closingBalance = money.add(money.sub(openingBalance, totalCredit), totalDebit);
 
-  return { entries, summary: { totalDebit, totalCredit, closingBalance } };
+  return { entries, summary: { totalDebit, totalCredit, closingBalance }, openingBalance };
 }

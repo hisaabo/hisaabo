@@ -9,7 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
-import { documentLedgerSide, invoiceBalanceSql, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
+import { documentLedgerSide, invoiceBalanceSql, signedOpeningBalance, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
 
 
 export const partyRouter = router({
@@ -480,8 +480,11 @@ export const partyRouter = router({
         }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      // Compute running balance and summary using the money module
-      let runningBalance = party.openingBalance;
+      // Compute running balance and summary using the money module. The statement is
+      // debit-minus-credit, so a supplier's opening balance (what we owe them) starts NEGATIVE,
+      // on the same side their purchase invoices post to.
+      const openingBalance = signedOpeningBalance(party.type, party.openingBalance);
+      let runningBalance = openingBalance;
       const entriesWithBalance = entries.map(e => {
         runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
         return { ...e, runningBalance };
@@ -489,7 +492,7 @@ export const partyRouter = router({
 
       const totalDebit = money.sum(entries.map(e => e.debit));
       const totalCredit = money.sum(entries.map(e => e.credit));
-      const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+      const closingBalance = money.add(money.sub(openingBalance, totalCredit), totalDebit);
 
       return {
         party: {
@@ -594,7 +597,7 @@ export const partyRouter = router({
         const yyyy = d.getFullYear();
         return `${dd}/${mm}/${yyyy}`;
       }
-      let runningBalance = party.openingBalance;
+      let runningBalance = signedOpeningBalance(party.type, party.openingBalance);
       const rows: string[] = [];
 
       // Opening balance row
@@ -811,7 +814,8 @@ export const partyRouter = router({
       const paymentDebit = party.type === "supplier" ? paymentSettledSql() : sql`0::numeric`;
       const paymentCredit = party.type === "supplier" ? sql`0::numeric` : paymentSettledSql();
 
-      const openingBalanceNum = money.toNumber(party.openingBalance);
+      // Debit-minus-credit running balance: a supplier's opening balance (what we owe) starts negative.
+      const openingBalanceNum = money.toNumber(signedOpeningBalance(party.type, party.openingBalance));
 
       // Build date filter conditions inline
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;

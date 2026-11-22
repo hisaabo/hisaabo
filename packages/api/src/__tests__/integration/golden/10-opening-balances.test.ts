@@ -129,7 +129,9 @@ describe("golden 10: opening balances are not in the ledger (documented gap)", (
   // convention (purchase invoice = credit) to the same number, so the opening is
   // netted against the purchase: 10000 - 4000 = 6000. In the ledgerReport's own
   // convention a 14000 payable would be reported as -14000.00.
-  it.fails("supplier closing balance agrees between party.getById (14000 owed) and party.ledgerReport (-14000.00)", async () => {
+  it("supplier closing balance agrees between party.getById (14000 owed) and party.ledgerReport (-14000.00)", async () => {
+    // getById is positive in the party's natural direction (we owe 14000); the ledger is
+    // debit-minus-credit, so a supplier we owe is negative: opening -10000, purchase -4000.
     const ledger = await w.caller.party.ledgerReport({ partyId: supplierId });
     expect(ledger?.summary.closingBalance).toBe("-14000.00");
   });

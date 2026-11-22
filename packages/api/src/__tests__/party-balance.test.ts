@@ -9,6 +9,7 @@ import {
   documentLedgerSide,
   invoiceBalanceSql,
   isBalanceReduction,
+  signedOpeningBalance,
 } from "../lib/party-balance.js";
 
 describe("isBalanceReduction", () => {
@@ -47,6 +48,26 @@ describe("documentLedgerSide (debit-minus-credit statement)", () => {
     expect([...BALANCE_DOCUMENT_TYPES].sort()).toEqual(
       ["credit_note", "debit_note", "invoice", "purchase_return", "sales_return"],
     );
+  });
+});
+
+describe("signedOpeningBalance", () => {
+  it("a customer's opening balance (they owe us) is a debit: positive", () => {
+    expect(signedOpeningBalance("customer", "25000.00")).toBe("25000.00");
+  });
+
+  it("a supplier's opening balance (we owe them) is a credit: negative", () => {
+    expect(signedOpeningBalance("supplier", "10000.00")).toBe("-10000.00");
+  });
+
+  it("zero stays zero, with no negative zero", () => {
+    expect(signedOpeningBalance("supplier", "0")).toBe("0.00");
+    expect(signedOpeningBalance("supplier", "0.00")).toBe("0.00");
+    expect(signedOpeningBalance("customer", "0")).toBe("0.00");
+  });
+
+  it("an opening balance that is already negative flips for a supplier", () => {
+    expect(signedOpeningBalance("supplier", "-500.00")).toBe("500.00");
   });
 });
 

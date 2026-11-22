@@ -16,8 +16,9 @@
  *  2. "Ledger statement" (`party.ledger`, `party.ledgerReport`,
  *     `reports.partyStatement`, the PDF): debit-minus-credit running balance, the
  *     way the books see the party. A customer who owes us is positive, a
- *     supplier we owe is NEGATIVE (`documentLedgerSide` says which side a
- *     document lands on).
+ *     supplier we owe is NEGATIVE. The opening balance therefore enters as
+ *     `+opening` for a customer and `-opening` for a supplier
+ *     (`signedOpeningBalance`).
  *
  * Which documents move the books is the same set the ledger posts
  * (derive-ledger.ts): invoice, credit_note, sales_return, purchase_return,
@@ -26,6 +27,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { invoices } from "@hisaabo/db";
+import { money } from "@hisaabo/shared";
 
 /** Document types that move a party's balance; everything else never posts. */
 export const BALANCE_DOCUMENT_TYPES = [
@@ -62,6 +64,16 @@ export function documentLedgerSide(documentType: string, type: string): "debit" 
   const sale = type === "sale";
   const reduces = isBalanceReduction(documentType, type);
   return (sale && !reduces) || (!sale && reduces) ? "debit" : "credit";
+}
+
+/**
+ * The opening balance as the debit-minus-credit statements start it. The stored
+ * value is "what they owe us" for a customer and "what we owe them" for a
+ * supplier, both positive, so a supplier's opening is a CREDIT: negative.
+ */
+export function signedOpeningBalance(partyType: string, openingBalance: string): string {
+  const opening = money.add(openingBalance, "0");
+  return partyType === "supplier" ? money.sub("0", opening) : opening;
 }
 
 /**
