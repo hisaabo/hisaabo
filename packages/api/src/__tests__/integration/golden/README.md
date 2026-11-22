@@ -140,7 +140,6 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 | Where | What |
 | --- | --- |
-| `reports.ts:1548-1555` | `grossProfit` looks for 4010 Sales Returns among the expense items (it is seeded as income) and ignores 5010 Purchase Returns (05A, 05B) |
 | `gst-reports.ts:468-474` | GSTR-3B output tax is not netted by credit notes / returns / debit notes (05A) |
 | `gst-reports.ts:415-429` | GSTR-3B ITC query has no `documentType = 'invoice'` filter: purchase returns and purchase debit notes are *added* to ITC (05B) |
 | `gst-reports.ts:9-11`, `:226-227`, `:459-462` | `splitTax` rounds the odd paisa up for both CGST and SGST: +0.01 on odd-paisa GST (12A, 12C) |

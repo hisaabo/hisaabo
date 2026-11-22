@@ -25,8 +25,6 @@
  *   Payable = 11800 - 2360 - 590 = 8850.
  *
  * Bugs documented here (it.fails = the CORRECT expectation, currently failing):
- *   - reports.profitAndLoss grossProfit ignores sales returns (4010) and
- *     purchase returns (5010).
  *   - GSTR-3B output tax ignores credit/debit notes; GSTR-3B ITC ADDS purchase
  *     returns / purchase-side debit notes (no documentType filter).
  *   - party balance treats a PURCHASE-side debit note as increasing the payable.
@@ -122,9 +120,7 @@ describe("golden 05A: credit note, sales return and sale-side debit note", () =>
     expect(s.netProfit).toBe("7500.00");
   });
 
-  // BUG: reports.ts looks for 4010 among the EXPENSE items, but coa-seed.ts types
-  // it as income, so the sales-returns deduction is never applied.
-  it.fails("P&L gross profit is net of sales returns: 10500 - 3000 = 7500", () => {
+  it("P&L gross profit is net of sales returns: 10500 - 3000 = 7500", () => {
     expect(b.pl.grossProfit).toBe("7500.00");
   });
 
@@ -238,8 +234,7 @@ describe("golden 05B: purchase return and purchase-side debit note", () => {
     expect(s.netProfit).toBe("-7500.00");
   });
 
-  // BUG: gross profit only deducts 5000 and 5100; purchase returns (5010) are ignored.
-  it.fails("P&L gross profit is net of purchase returns: 0 - (10000 - 2500) = -7500", () => {
+  it("P&L gross profit is net of purchase returns: 0 - (10000 - 2500) = -7500", () => {
     expect(b.pl.grossProfit).toBe("-7500.00");
   });
 
