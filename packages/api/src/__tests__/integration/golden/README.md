@@ -40,6 +40,7 @@ test itself.
 | `14-purchase-side-reversals` | Credit note / sales return raised from a purchase invoice (`type = purchase`) | pass |
 | `15-tax-inclusive-items` | Items priced including tax: POS tile rates, an intra-/inter-state bill, purchase side, every document type, 40 random bills tied across invoice, ledger, GSTR-3B and the PDF table | pass |
 | `16-store-order-inclusive-items` | An online-store order of tax-inclusive items: the invoice line holds the exclusive rate, the order total is unchanged, and editing a quantity does not tax the price twice | pass |
+| `17-inclusive-shelf-price-round-off` | A tax-inclusive shelf price that does not bill to the paisa (₹10 incl. 18% = 9.99, ₹41 = 41.01): the invoice round-off brings it back to the shelf total; ledger, GSTR-3B and party balance all at the shelf price | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

@@ -55,7 +55,10 @@ const box = {
   id: "item-5", name: "Box Inclusive", unit: "pcs", itemMode: "alt_units", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true,
   unitVariants: [{ unit: "box", conversionFactor: 5, salePrice: "590.00" }], variants: [],
 };
-const catalog = [steel, cement, rice, atta, box];
+// shelf prices that do NOT bill to the paisa on a tax-exclusive line (shared/inclusive-price.ts)
+const ten = { id: "item-6", name: "Tea Ten", unit: "pcs", itemMode: "simple", salePrice: "10.00", purchasePrice: "8.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] };
+const fortyOne = { id: "item-7", name: "Biscuits FortyOne", unit: "pcs", itemMode: "simple", salePrice: "41.00", purchasePrice: "30.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] };
+const catalog = [steel, cement, rice, atta, box, ten, fortyOne];
 
 const SHEET = "Update saved prices?";
 const UPDATE = "Update item prices";
@@ -375,5 +378,78 @@ describe("items whose sale price includes GST are billed at the tax-exclusive ra
     // the GST % edit re-derives here too
     fireEvent.changeText(screen.getByDisplayValue("18.00"), "12");
     expect(screen.getByDisplayValue("105.36")).toBeTruthy();
+  });
+});
+
+describe("a shelf price that does not bill to the paisa is brought back by the round-off (mobile)", () => {
+  const hintText = () => {
+    const children = screen.getByTestId("inclusive-hint").props.children as unknown;
+    return Array.isArray(children) ? children.join("") : String(children);
+  };
+
+  it("invoice: ₹10.00 incl. 18% - the hint shows 8.47 + 1.52 = 9.99 and the document carries round-off +0.01 (total 10.00)", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Tea Ten");
+    // 1000p x 100 / 118 = 847.46 -> 847; GST 847 x 18% = 152.46 -> 152; 8.47 + 1.52 = 9.99
+    expect(screen.getByDisplayValue("8.47")).toBeTruthy();
+    expect(hintText()).toBe("₹10 incl. GST → ₹8.47 + ₹1.52 = ₹9.99");
+    expect(screen.getByText("Round off")).toBeTruthy();
+    fireEvent.press(screen.getByText("Create Invoice"));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(created()[0]).toMatchObject({ roundOff: "0.01" });
+  });
+
+  it("invoice: ₹41.00 incl. 18% bills 41.01 (a paisa over): round-off -0.01", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Biscuits FortyOne");
+    // 4100p x 100 / 118 = 3474.58 -> 3475; GST 3475 x 18% = 625.5 -> 626 (half up); 34.75 + 6.26 = 41.01
+    expect(hintText()).toBe("₹41 incl. GST → ₹34.75 + ₹6.26 = ₹41.01");
+    fireEvent.press(screen.getByText("Create Invoice"));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(created()[0]).toMatchObject({ roundOff: "-0.01" });
+  });
+
+  it("invoice: a price that does tie (₹118.00 incl. 18%) needs no round-off and shows no extra row", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Atta Inclusive");
+    expect(screen.queryByText("Round off")).toBeNull();
+    fireEvent.press(screen.getByText("Create Invoice"));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(Number((created()[0] as { roundOff: string }).roundOff)).toBe(0);
+  });
+
+  it("invoice: typing your own Rate ends the shelf-price round-off", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Tea Ten");
+    setRate("8.47", "9");
+    expect(screen.queryByText("Round off")).toBeNull();
+    fireEvent.press(screen.getByText("Create Invoice"));
+    fireEvent.press(await screen.findByText(JUST_BILL)); // a typed rate is a price edit: answer the prompt
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(Number((created()[0] as { roundOff: string }).roundOff)).toBe(0);
+  });
+
+  it.each([
+    ["quotation", QuotationCreateScreen, "quotation.create", "Create Quotation"],
+    ["credit note", CreditNoteCreateScreen, "creditNote.create", "Create Credit Note"],
+    ["proforma invoice", ProformaCreateScreen, "proforma.create", "Create Proforma Invoice"],
+    ["delivery challan", DeliveryChallanCreateScreen, "deliveryChallan.create", "Create Delivery Challan"],
+  ] as const)("%s: ₹10.00 incl. 18% shows 9.99 + round-off 0.01 and is saved with roundOff 0.01", async (_name, Screen, key, button) => {
+    stub.mutationResults[key] = { id: "doc-1" };
+    renderScreen("admin", Screen);
+    // the party placeholder differs: "Select party..." (credit note) or "Select customer..." (the others)
+    fireEvent.press(screen.queryByText("Select party...") ?? screen.getByText("Select customer..."));
+    fireEvent.press(await screen.findByText("Ramesh Traders"));
+    fireEvent.press(screen.getAllByText("Tap to select item...")[0]!);
+    fireEvent.press(await screen.findByText("Tea Ten"));
+    expect(hintText()).toBe("₹10 incl. GST → ₹8.47 + ₹1.52 = ₹9.99");
+    expect(screen.getByText("Round off")).toBeTruthy();
+    fireEvent.press(screen.getByText(button));
+    await waitFor(() => expect(stub.mutations[key] ?? []).toHaveLength(1));
+    expect(stub.mutations[key]![0]).toMatchObject({ roundOff: "0.01" });
   });
 });

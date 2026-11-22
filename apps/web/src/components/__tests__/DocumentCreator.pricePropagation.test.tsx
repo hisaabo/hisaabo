@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 
 const h = vi.hoisted(() => ({
   role: { current: "admin" as string },
+  roundDown: { current: false },
   createCalls: [] as unknown[],
   quotationCalls: [] as unknown[],
   updateCalls: [] as unknown[],
@@ -29,6 +30,9 @@ const catalog = vi.hoisted(() => ({
   cement: { id: "item-2", name: "Cement Bag", unit: "bag", itemMode: "simple", salePrice: "350.00", purchasePrice: "300.00", taxPercent: "5.00", taxInclusive: false, unitVariants: [], variants: [] },
   // sale price ₹118.00 INCLUDING 18% GST (bill rate 100.00); purchase price ₹90.00 (tax-exclusive)
   atta: { id: "item-4", name: "Atta Inclusive", unit: "pcs", itemMode: "simple", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] },
+  // shelf prices that do NOT bill to the paisa on a tax-exclusive line (shared/inclusive-price.ts)
+  ten: { id: "item-6", name: "Tea Ten", unit: "pcs", itemMode: "simple", salePrice: "10.00", purchasePrice: "8.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] },
+  fortyOne: { id: "item-7", name: "Biscuits FortyOne", unit: "pcs", itemMode: "simple", salePrice: "41.00", purchasePrice: "30.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] },
   // base ₹118.00 incl. 18%; a 5-unit "box" at ₹590.00 incl. 18% (bill rate 500.00)
   box: {
     id: "item-5", name: "Box Inclusive", unit: "pcs", itemMode: "alt_units", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true,
@@ -53,13 +57,13 @@ vi.mock("@/lib/trpc", () => {
     getBusinessId: () => "biz-1",
     trpc: {
       auth: { me: { useQuery: () => ({ data: { role: h.role.current }, isLoading: false }) } },
-      business: { list: { useQuery: () => ({ data: [{ id: "biz-1", name: "Biz", defaultRoundOff: false, defaultTermsAndConditions: null }] }) } },
+      business: { list: { useQuery: () => ({ data: [{ id: "biz-1", name: "Biz", defaultRoundOff: h.roundDown.current, defaultTermsAndConditions: null }] }) } },
       party: {
         list: { useQuery: () => ({ data: { data: [{ id: "party-1", name: "Ramesh Traders", type: "customer", creditPeriodDays: 7 }] }, isFetching: false }) },
         create: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
       },
       item: {
-        list: { useQuery: () => ({ data: { data: [catalog.steel, catalog.cement, catalog.rice, catalog.atta, catalog.box] }, isFetching: false }) },
+        list: { useQuery: () => ({ data: { data: [catalog.steel, catalog.cement, catalog.rice, catalog.atta, catalog.box, catalog.ten, catalog.fortyOne] }, isFetching: false }) },
         create: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
         updatePricesFromDocument: { useMutation: () => ({ mutateAsync: h.updateMutate, isPending: false }) },
       },
@@ -121,6 +125,7 @@ async function save(user: ReturnType<typeof userEvent.setup>, label = /create in
 
 beforeEach(() => {
   h.role.current = "admin";
+  h.roundDown.current = false;
   h.createCalls.length = 0;
   h.quotationCalls.length = 0;
   h.updateCalls.length = 0;
@@ -545,5 +550,98 @@ describe("DocumentCreator: items whose sale price includes GST are billed at the
     await user.click(screen.getByText("Ramesh Traders"));
     await pickItem(user, /atta inclusive/i);
     expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe(rate);
+  });
+});
+
+describe("DocumentCreator: a shelf price that does not bill to the paisa is brought back by the round-off", () => {
+  const hint = () => screen.queryByTestId("inclusive-hint");
+  const roundOffInput = () => screen.getByText("Round Off").parentElement!.parentElement!.querySelector("input") as HTMLInputElement;
+
+  it("₹10.00 incl. 18%: the hint shows what is billed (8.47 + 1.52 = 9.99), the round-off +0.01 makes the total 10.00", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    // 1000p x 100 / 118 = 847.46 -> 847; GST 847 x 18% = 152.46 -> 152; 8.47 + 1.52 = 9.99
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("8.47");
+    expect(hint()).toHaveTextContent("₹10.00 incl. GST → ₹8.47 + ₹1.52 = ₹9.99");
+    expect(roundOffInput().value).toBe("0.01");
+    expect(screen.getAllByText("₹10.00").length).toBeGreaterThan(0); // the total: 9.99 + 0.01
+
+    await save(user);
+    await waitFor(() => expect(h.createCalls).toHaveLength(1));
+    expect(h.createCalls[0]).toMatchObject({ roundOff: "0.01" });
+  });
+
+  it("₹41.00 incl. 18% bills 41.01 (a paisa OVER): the hint says so and the round-off is -0.01", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /biscuits fortyone/i);
+    // 4100p x 100 / 118 = 3474.58 -> 3475; GST 3475 x 18% = 625.5 -> 626 (half up); 34.75 + 6.26 = 41.01
+    expect(hint()).toHaveTextContent("₹41.00 incl. GST → ₹34.75 + ₹6.26 = ₹41.01");
+    expect(roundOffInput().value).toBe("-0.01");
+    await save(user);
+    await waitFor(() => expect(h.createCalls).toHaveLength(1));
+    expect(h.createCalls[0]).toMatchObject({ roundOff: "-0.01" });
+  });
+
+  it("a price that does tie (₹118.00 incl. 18%) shows the plain split and needs no round-off", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+    expect(hint()?.textContent).toBe("₹118.00 incl. GST → ₹100.00 + ₹18.00");
+    expect(roundOffInput().value).toBe("0");
+  });
+
+  it("two paisa-short lines add up: ₹10 + ₹10 -> round-off +0.02, total 20.00", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    await user.click(screen.getByRole("button", { name: /add (line|item)/i }));
+    await pickItem(user, /tea ten/i, 1);
+    expect(roundOffInput().value).toBe("0.02"); // 9.99 + 9.99 = 19.98; shelf 20.00
+  });
+
+  it("quantity changes the tie-out: 3 x ₹10.00 bills 3 x 8.47 = 25.41 + GST 4.57 = 29.98, round-off +0.02", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "3" } });
+    // 3 x 847p = 2541p; GST 2541 x 18 / 100 = 457.38 -> 457 (4.57); 2541 + 457 = 2998; shelf 3 x 1000 = 3000 -> +0.02
+    expect(roundOffInput().value).toBe("0.02");
+  });
+
+  it("with 'round down to a whole rupee' on, the shelf tie-out comes first: still +0.01 (10.00 is already whole)", async () => {
+    h.roundDown.current = true;
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    expect(roundOffInput().value).toBe("0.01");
+  });
+
+  it("typing your own rate ends the shelf-price round-off: back to nothing", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    expect(roundOffInput().value).toBe("0.01");
+    setPrice("9");
+    expect(hint()).toBeNull();
+    expect(Number(roundOffInput().value)).toBe(0); // "0.00": nothing left to tie out
+  });
+
+  it("an explicit round-off typed by the user is never overridden", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /tea ten/i);
+    fireEvent.change(roundOffInput(), { target: { value: "0.50" } });
+    fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "2" } });
+    expect(roundOffInput().value).toBe("0.50");
   });
 });

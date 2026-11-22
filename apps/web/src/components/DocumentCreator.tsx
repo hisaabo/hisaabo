@@ -11,6 +11,7 @@ import { useCan } from "@/hooks/useCan";
 import { usePricePropagation } from "@/hooks/usePricePropagation";
 import {
   calcLineItem, calcInvoiceTotals, money, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  inclusiveTieOut, autoRoundOff,
   type PriceUpdateProposal,
 } from "@hisaabo/shared";
 import { QuickPartyCreate } from "@/components/QuickPartyCreate";
@@ -462,23 +463,41 @@ export function DocumentCreator({
     };
   }, [items, charges, invoiceDiscount, invoiceDiscountType, roundOff]);
 
-  // Auto-fill round-off so the grand total floors to a whole rupee, when the
-  // business has "round down to integer" enabled. Stops as soon as the user
-  // edits the field manually (`roundOffOverridden`) so we never silently
-  // override their explicit number.  Edit mode preserves whatever round-off
-  // was saved with the original document.
+  // The document's total before any round-off, and the round-off that brings the lines derived from a
+  // tax-inclusive price back to their shelf total (a bill is tax-exclusive, so a price like ₹10.00 incl. 18%
+  // bills at 9.99; see shared/inclusive-price.ts). Exact integer-paise maths.
+  const rawTotal = useMemo(() => {
+    const activeCharges = charges.filter((c) => c.amount && parseFloat(c.amount) > 0);
+    return calcInvoiceTotals({
+      lineItems: items.map((li) => ({
+        quantity: li.quantity || "0",
+        unitPrice: li.unitPrice || "0",
+        taxPercent: li.taxPercent || "0",
+        discountPercent: li.discountPercent || "0",
+      })),
+      charges: activeCharges.map((c) => ({ amount: c.amount })),
+      invoiceDiscount: invoiceDiscount || "0",
+      invoiceDiscountType,
+      roundOff: "0",
+    }).total;
+  }, [items, charges, invoiceDiscount, invoiceDiscountType]);
+  const tieOut = useMemo(
+    () => inclusiveTieOut(items.map((li) => ({ ...li, quantity: li.quantity || "0", discountPercent: li.discountPercent || "0" }))),
+    [items],
+  );
+  const autoRoundOffValue = autoRoundOff(rawTotal, tieOut, bizDefaultRoundOff);
+
+  // AUTO round-off of a NEW document: brings tax-inclusive lines back to their shelf total, and floors the
+  // grand total to a whole rupee when the business has "round down to integer" on. Stops as soon as the user
+  // edits the field (`roundOffOverridden`) so we never override their explicit number. Edit mode preserves
+  // whatever round-off was saved with the original document.
   useEffect(() => {
     if (isEditing) return;
     if (roundOffOverridden) return;
-    if (!bizDefaultRoundOff) return;
-    const current = parseFloat(roundOff || "0");
-    const rawTotal = totals.total - current;
-    if (!Number.isFinite(rawTotal)) return;
-    const target = (Math.floor(rawTotal) - rawTotal).toFixed(2);
-    if (target !== current.toFixed(2)) {
-      setRoundOff(target);
+    if (money.compare(autoRoundOffValue, roundOff || "0") !== 0) {
+      setRoundOff(autoRoundOffValue);
     }
-  }, [bizDefaultRoundOff, isEditing, roundOffOverridden, totals.total, roundOff]);
+  }, [isEditing, roundOffOverridden, autoRoundOffValue, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {
     // applyLineEdit keeps an inclusive-derived rate honest (see shared/inclusive-price.ts)
@@ -974,6 +993,7 @@ export function DocumentCreator({
                   return hint ? (
                     <p className="text-[11px] text-text-tertiary tabular-nums" data-testid="inclusive-hint">
                       {formatCurrency(hint.inclusive)} incl. GST → {formatCurrency(hint.base)} + {formatCurrency(hint.tax)}
+                      {!hint.ties && ` = ${formatCurrency(hint.total)}`}
                     </p>
                   ) : null;
                 })()}
@@ -1174,10 +1194,10 @@ export function DocumentCreator({
             <div className="flex justify-between items-center text-sm">
               <div className="flex items-center gap-1.5">
                 <span className="text-text-secondary">Round Off</span>
-                {bizDefaultRoundOff && !isEditing && !roundOffOverridden && (
+                {!isEditing && !roundOffOverridden && (bizDefaultRoundOff || !money.isZero(tieOut)) && (
                   <span
                     className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded text-brand-700 dark:text-brand-400 bg-brand-600/[0.1]"
-                    title="Auto-rounded down to nearest integer (per Settings → Documents). Edit to override."
+                    title="Set automatically: rounded down to a whole rupee when Settings → Documents says so, and brings tax-inclusive prices back to their shelf total. Edit to override."
                   >
                     Auto
                   </span>

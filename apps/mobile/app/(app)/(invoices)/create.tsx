@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import {
-  calcInvoiceTotals, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  calcTotalsWithShelfTieOut, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
   type PriceUpdateProposal,
 } from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
@@ -1432,7 +1432,7 @@ function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem,
         const hint = inclusiveBreakdown(item);
         return hint ? (
           <Text style={styles.fieldLabel} testID="inclusive-hint">
-            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}`}
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}${hint.ties ? "" : ` = ${formatCurrency(hint.total)}`}`}
           </Text>
         ) : null;
       })()}
@@ -1731,14 +1731,17 @@ function InvoiceCreateForm() {
     if (validItems.length === 0) {
       return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
     }
-    return calcInvoiceTotals({
-      lineItems: validItems.map((li) => ({
+    // A tax-inclusive price (₹10.00 incl. 18%) bills at 9.99 on a tax-exclusive line: the round-off brings the
+    // invoice back to its shelf total (this screen has no round-off field of its own).
+    return calcTotalsWithShelfTieOut(
+      validItems.map((li) => ({
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        inclusivePrice: li.inclusivePrice,
       })),
-    });
+    );
   }, [lineItems]);
 
   const handleLineChange = useCallback(
@@ -1942,7 +1945,7 @@ function InvoiceCreateForm() {
       additionalCharges: "0",
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
-      roundOff: "0",
+      roundOff: totals.roundOff,
       // Bug B: itemName is the required name snapshot and description is
       // the optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
@@ -2128,6 +2131,12 @@ function InvoiceCreateForm() {
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Tax</Text>
                 <Text style={styles.totalValue}>{formatCurrency(totals.taxTotal)}</Text>
+              </View>
+            )}
+            {parseFloat(totals.roundOff) !== 0 && (
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Round off</Text>
+                <Text style={styles.totalValue}>{formatCurrency(totals.roundOff)}</Text>
               </View>
             )}
             <View style={styles.totalDivider} />

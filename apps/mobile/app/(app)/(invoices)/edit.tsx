@@ -342,7 +342,7 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
         const hint = inclusiveBreakdown(item);
         return hint ? (
           <Text style={styles.fieldLabel} testID="inclusive-hint">
-            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}`}
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}${hint.ties ? "" : ` = ${formatCurrency(hint.total)}`}`}
           </Text>
         ) : null;
       })()}

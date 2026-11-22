@@ -177,7 +177,7 @@ describe("converting an inclusive price to a bill rate and back", () => {
     }
   });
 
-  it("for ONE unit the bill ties to the inclusive price within a paisa", () => {
+  it("for ONE unit the bill is within a paisa of the shelf price: it does NOT always tie (inclusive-price.sweep.test.ts pins how often)", () => {
     const r = rng(0x0001);
     for (let i = 0; i < N; i++) {
       const c = { ...randomCase(r), qty: "1" };

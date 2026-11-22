@@ -16,6 +16,8 @@ import {
   calcLineItem,
   exclusiveRateFromInclusive,
   inclusiveBreakdown,
+  inclusiveTieOut,
+  autoRoundOff,
   inclusiveFromExclusive,
   lineFieldsFromItemPrice,
   money,
@@ -193,7 +195,7 @@ describe("the exclusive bill path from a derived rate (what the forms send)", ()
     expect(bill("118.00", "1", "18")).toMatchObject({ taxAmount: "21.24", total: "139.24" });
   });
 
-  it("₹99 incl. 18%: rate 83.90 -> 83.90 + 15.10 = 99.00 for one unit", () => {
+  it("₹99 incl. 18%: rate 83.90 -> 83.90 + 15.10 = 99.00 (one of the prices that does tie; ₹10 does not, see below)", () => {
     expect(billRateFromItemPrice({ price: "99.00", inclusive: true, taxPercent: "18" }).rate).toBe("83.90");
     expect(bill("83.90", "1", "18")).toMatchObject({ taxAmount: "15.10", total: "99.00" });
   });
@@ -217,16 +219,16 @@ describe("priceIsTaxInclusive: sale prices only", () => {
 
 describe("billRateFromItemPrice", () => {
   it("passes tax-exclusive prices, empty prices and 0% lines through unchanged", () => {
-    expect(billRateFromItemPrice({ price: "450.00", inclusive: false, taxPercent: "18" })).toEqual({ rate: "450.00", inclusivePrice: null, unitTax: null });
-    expect(billRateFromItemPrice({ price: null, inclusive: true, taxPercent: "18" })).toEqual({ rate: "", inclusivePrice: null, unitTax: null });
+    expect(billRateFromItemPrice({ price: "450.00", inclusive: false, taxPercent: "18" })).toEqual({ rate: "450.00", inclusivePrice: null });
+    expect(billRateFromItemPrice({ price: null, inclusive: true, taxPercent: "18" })).toEqual({ rate: "", inclusivePrice: null });
     expect(billRateFromItemPrice({ price: "118.00", inclusive: true, taxPercent: "0" }).rate).toBe("118.00");
     expect(billRateFromItemPrice({ price: "not a price", inclusive: true, taxPercent: "18" }).rate).toBe("not a price");
   });
 
-  it("converts at the LINE's rate and reports the GST inside", () => {
-    expect(billRateFromItemPrice({ price: "118.00", inclusive: true, taxPercent: "18" })).toEqual({ rate: "100.00", inclusivePrice: "118.00", unitTax: "18.00" });
+  it("converts at the LINE's rate", () => {
+    expect(billRateFromItemPrice({ price: "118.00", inclusive: true, taxPercent: "18" })).toEqual({ rate: "100.00", inclusivePrice: "118.00" });
     // same shelf price, 12% line: 11800 x 100 / 112 = 10535.71 -> 10536 (105.36), GST 12.64
-    expect(billRateFromItemPrice({ price: "118.00", inclusive: true, taxPercent: "12" })).toEqual({ rate: "105.36", inclusivePrice: "118.00", unitTax: "12.64" });
+    expect(billRateFromItemPrice({ price: "118.00", inclusive: true, taxPercent: "12" })).toEqual({ rate: "105.36", inclusivePrice: "118.00" });
   });
 });
 
@@ -239,7 +241,7 @@ describe("bill-line behaviour (web and mobile forms)", () => {
   it("picking an inclusive item starts the line at the exclusive rate, remembers the shelf price and shows the hint", () => {
     const li = picked();
     expect(li).toMatchObject({ unitPrice: "100.00", originalUnitPrice: "100.00", inclusivePrice: "118.00", itemPriceIncludesTax: true });
-    expect(inclusiveBreakdown(li)).toEqual({ inclusive: "118.00", base: "100.00", tax: "18.00" });
+    expect(inclusiveBreakdown(li)).toEqual({ inclusive: "118.00", base: "100.00", tax: "18.00", total: "118.00", ties: true });
   });
 
   it("an exclusive item has no derivation and no hint", () => {
@@ -252,7 +254,8 @@ describe("bill-line behaviour (web and mobile forms)", () => {
     // ₹118 incl.; GST 18 -> 12: 11800 x 100 / 112 = 10535.71 -> 10536 -> rate 105.36 (105.36 + 12.64 = 118.00)
     const li = applyLineEdit(picked(), "taxPercent", "12");
     expect(li).toMatchObject({ taxPercent: "12", unitPrice: "105.36", originalUnitPrice: "105.36", inclusivePrice: "118.00" });
-    expect(inclusiveBreakdown(li)).toEqual({ inclusive: "118.00", base: "105.36", tax: "12.64" });
+    // what the bill computes for 105.36: GST = round(105.36 x 12%) = 12.6432 -> 12.64, total 118.00
+    expect(inclusiveBreakdown(li)).toEqual({ inclusive: "118.00", base: "105.36", tax: "12.64", total: "118.00", ties: true });
     // and back to 18: 100.00 again
     expect(applyLineEdit(li, "taxPercent", "18")).toMatchObject({ unitPrice: "100.00", originalUnitPrice: "100.00" });
   });
@@ -272,5 +275,97 @@ describe("bill-line behaviour (web and mobile forms)", () => {
 
   it("any other field is set as is", () => {
     expect(applyLineEdit(picked(), "quantity" as never, "3")).toMatchObject({ quantity: "3", unitPrice: "100.00" });
+  });
+});
+
+describe("the hint shows what the BILL computes, not a promise", () => {
+  const pick = (price: string, tax: string): InclusiveLine => ({
+    taxPercent: tax,
+    ...lineFieldsFromItemPrice({ price, inclusive: true, taxPercent: tax }),
+  });
+
+  it("₹10.00 incl. 18%: rate 8.47 + GST 1.52 = ₹9.99, one paisa short of the shelf price, and it says so", () => {
+    // 1000p x 100 / 118 = 847.46 -> 847 (8.47); the bill takes 8.47 x 18% = 1.5246 -> 1.52; 8.47 + 1.52 = 9.99
+    const li = pick("10.00", "18");
+    expect(li.unitPrice).toBe("8.47");
+    expect(inclusiveBreakdown(li)).toEqual({ inclusive: "10.00", base: "8.47", tax: "1.52", total: "9.99", ties: false });
+  });
+
+  it("₹41 incl. 18%: 34.75 + 6.26 = 41.01 (a paisa OVER); ₹2: 1.69 + 0.30 = 1.99", () => {
+    // 4100p x 100 / 118 = 3474.58 -> 3475; 34.75 x 18% = 6.255 -> 6.26 (half up)
+    expect(inclusiveBreakdown(pick("41.00", "18"))).toMatchObject({ base: "34.75", tax: "6.26", total: "41.01", ties: false });
+    // 200p x 100 / 118 = 169.49 -> 169; 1.69 x 18% = 0.3042 -> 0.30
+    expect(inclusiveBreakdown(pick("2.00", "18"))).toMatchObject({ base: "1.69", tax: "0.30", total: "1.99", ties: false });
+  });
+
+  it("a price that ties says nothing extra", () => {
+    expect(inclusiveBreakdown(pick("118.00", "18"))).toMatchObject({ ties: true });
+    expect(inclusiveBreakdown(pick("99.00", "18"))).toMatchObject({ base: "83.90", tax: "15.10", total: "99.00", ties: true });
+  });
+});
+
+describe("inclusiveTieOut: the round-off that brings tax-inclusive lines back to their shelf total", () => {
+  const line = (price: string, tax: string, quantity = "1", discountPercent = "0") => {
+    const f = lineFieldsFromItemPrice({ price, inclusive: true, taxPercent: tax });
+    return { ...f, taxPercent: tax, quantity, discountPercent };
+  };
+
+  it.each([
+    // price, GST, qty, disc, billed total vs shelf total, tie-out
+    ["10.00", "18", "1", "0", "billed 9.99, shelf 10.00", "0.01"],
+    ["41.00", "18", "1", "0", "billed 41.01, shelf 41.00", "-0.01"],
+    ["2.00", "18", "1", "0", "billed 1.99, shelf 2.00", "0.01"],
+    ["99.00", "18", "1", "0", "billed 99.00, shelf 99.00", "0.00"],
+    ["99.00", "18", "3", "0", "rate 83.90: 251.70 + 45.31 = 297.01, shelf 297.00", "-0.01"],
+    ["99.00", "18", "10", "0", "839.00 + 151.02 = 990.02, shelf 990.00", "-0.02"],
+    ["99.00", "18", "3", "10", "251.70 - 25.17 = 226.53 + 40.78 = 267.31, shelf 267.30", "-0.01"],
+  ])("%s incl. %s%% x %s (disc %s%%): %s -> %s", (price, tax, qty, disc, _why, tie) => {
+    expect(inclusiveTieOut([line(price, tax, qty, disc)])).toBe(tie);
+  });
+
+  it("sums over the lines derived from an inclusive price and ignores the others", () => {
+    const exclusive = { unitPrice: "100.00", taxPercent: "18", quantity: "1", discountPercent: "0" }; // no inclusivePrice
+    // +0.01 (₹10) + -0.01 (₹41) + 0.01 (₹2) = +0.01
+    expect(inclusiveTieOut([line("10.00", "18"), line("41.00", "18"), line("2.00", "18"), exclusive])).toBe("0.01");
+    expect(inclusiveTieOut([exclusive])).toBe("0.00");
+    expect(inclusiveTieOut([])).toBe("0.00");
+  });
+
+  it("a typed rate ends the derivation: that line no longer ties out to a shelf price", () => {
+    const typed = applyLineEdit({ ...line("10.00", "18") } as InclusiveLine & { quantity: string; discountPercent: string }, "unitPrice", "9");
+    expect(inclusiveTieOut([typed])).toBe("0.00");
+  });
+
+  it("a half-typed quantity is skipped rather than thrown", () => {
+    expect(inclusiveTieOut([line("10.00", "18", "2.")])).toBe("0.00");
+  });
+});
+
+describe("autoRoundOff: exact, within the server's +/- 1.00 bound", () => {
+  it("₹10.00 incl. 18% x 1: raw 9.99 + tie-out 0.01 -> round-off +0.01, total 10.00 (with or without 'round down')", () => {
+    expect(autoRoundOff("9.99", "0.01", false)).toBe("0.01");
+    expect(autoRoundOff("9.99", "0.01", true)).toBe("0.01"); // desired 10.00 is already a whole rupee
+  });
+
+  it("₹41: raw 41.01, tie-out -0.01 -> -0.01, total 41.00", () => {
+    expect(autoRoundOff("41.01", "-0.01", false)).toBe("-0.01");
+    expect(autoRoundOff("41.01", "-0.01", true)).toBe("-0.01");
+  });
+
+  it("without tax-inclusive lines it is the plain business rule: nothing, or round down to the rupee", () => {
+    expect(autoRoundOff("10.37", "0.00", false)).toBe("0.00");
+    expect(autoRoundOff("10.37", "0.00", true)).toBe("-0.37"); // 10.37 -> 10.00
+    expect(autoRoundOff("10.00", "0.00", true)).toBe("0.00");
+    expect(autoRoundOff("0.99", "0.00", true)).toBe("-0.99");
+  });
+
+  it("round down applies on top of the shelf tie-out: raw 20.35 + 0.01 = 20.36 -> 20.00", () => {
+    expect(autoRoundOff("20.35", "0.01", true)).toBe("-0.35");
+    expect(autoRoundOff("20.35", "0.01", false)).toBe("0.01");
+  });
+
+  it("a tie-out beyond the server's bound falls back to the plain rule instead of a bill that cannot be saved", () => {
+    expect(autoRoundOff("10.00", "1.50", false)).toBe("0.00");
+    expect(autoRoundOff("10.40", "-1.50", true)).toBe("-0.40");
   });
 });

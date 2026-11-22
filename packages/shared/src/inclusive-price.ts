@@ -11,11 +11,19 @@
  *   split:      base = round(gross × 100 / (100 + t)),  tax = gross − base
  *   back:       gross = round(base × (100 + t) / 100)
  *
- * `tax` is always gross − base, so base + tax equals the inclusive price to the
- * paisa. A rate that cannot be written in two decimals (₹99 incl. 18% is
- * ₹83.8983…) is rounded to 83.90; for one unit the bill then totals exactly ₹99.00
- * (83.90 + 15.10), for several units the rate × quantity can differ from
- * quantity × inclusive price by a paisa or two (see PRICE_INCLUSIVE_ROUNDING).
+ * THE ROUNDING MISS (be precise about it): the BILL computes its tax as
+ * round(rate × t%), not as gross − base, and a two-decimal rate cannot always reach
+ * the shelf price. So even for ONE unit the bill can miss the shelf price by a paisa:
+ * ₹10.00 incl. 18% is rate 8.47 + GST 1.52 = ₹9.99; ₹41 is 41.01; ₹2 is 1.99. Over
+ * whole-rupee prices ₹1–₹5000 the single-unit bill misses the shelf price for about
+ * 4.8% of prices at 5%, never at 12%, 15.2% at 18% (both directions), 12.5% at 28% and
+ * 28.6% at 40% (see inclusive-price.sweep.test.ts, which pins the counts). The miss is
+ * a paisa for small quantities and grows with quantity (PRICE_INCLUSIVE_ROUNDING).
+ * The forms show the real figure on the line (`inclusiveBreakdown`) and bring a bill
+ * back to its shelf total with the invoice's round-off (`inclusiveTieOut`,
+ * `autoRoundOff`). A per-line "inclusive" flag, tax = gross − base, would remove the miss
+ * at the source: planned with the invoice-line snapshot in 0.11.0 (compliance-audit.md,
+ * Appendix C, design note).
  *
  * WHICH PRICES: the flag is documented, and honoured by the online store, as
  * "the SALE price includes GST". Purchase prices stay tax-exclusive (the buyer
@@ -26,8 +34,10 @@
 import { divRoundHalfUp, formatPaise, parseDecimal, pow10, toPaiseExact, type Decimal } from "./decimal.js";
 
 export const PRICE_INCLUSIVE_ROUNDING =
-  "The tax-exclusive rate is rounded half-up to the paisa. One unit ties to the inclusive price exactly; " +
-  "for quantity > 1 the bill total can differ from quantity × inclusive price by at most a paisa per unit of quantity.";
+  "The tax-exclusive rate is rounded half-up to the paisa and the bill takes GST = round(rate x GST%) on it, so a bill " +
+  "can miss quantity x shelf price by a paisa even for one unit (₹10.00 incl. 18% bills at 9.99); for quantity q the miss is " +
+  "at most (0.5 + 0.5 x q) x (1 + GST%) + 0.5 paise (3 x ₹99.00 at 18%: 297.01; 10 x ₹99.00: 990.02). " +
+  "Invoice round-off brings the bill back to the shelf total.";
 
 /** Does an item's saved price on this side already include GST? Sale only: purchase prices are tax-exclusive. */
 export function priceIsTaxInclusive(item: { taxInclusive?: boolean | null }, side: "sale" | "purchase"): boolean {
@@ -77,8 +87,6 @@ export interface BillRate {
   rate: string;
   /** The item's saved inclusive price the rate was derived from; null when no conversion happened. */
   inclusivePrice: string | null;
-  /** The GST inside that price (per unit), for the "₹118 incl. GST → ₹100.00 + ₹18.00" hint; null with inclusivePrice. */
-  unitTax: string | null;
 }
 
 /**
@@ -94,73 +102,10 @@ export function billRateFromItemPrice(input: {
   taxPercent: string | number | null | undefined;
 }): BillRate {
   const price = input.price ?? "";
-  if (!input.inclusive || price === "") return { rate: price, inclusivePrice: null, unitTax: null };
+  if (!input.inclusive || price === "") return { rate: price, inclusivePrice: null };
   const gross = toPaiseExact(price);
   const t = taxDecimal(input.taxPercent ?? "0");
-  if (gross === null || t === null || t.int === 0n) return { rate: price, inclusivePrice: null, unitTax: null };
-  const { base, tax } = splitInclusivePaise(gross, t);
-  return { rate: formatPaise(base), inclusivePrice: formatPaise(gross), unitTax: formatPaise(tax) };
-}
-
-// ── Bill-line behaviour shared by the web and mobile forms ───────────────────
-
-/** The fields of a bill line that the inclusive-price behaviour reads and writes. */
-export interface InclusiveLine {
-  /** The tax-exclusive rate. */
-  unitPrice: string;
-  taxPercent: string;
-  /** What the rate field held when the line was picked / re-derived (see price-propagation.ts). */
-  originalUnitPrice?: string;
-  /** The saved price WITH tax the rate was derived from; undefined once the user states the rate themselves. */
-  inclusivePrice?: string;
-  /** The picked item's sale price includes tax, so a unit / variant picked later is converted the same way. */
-  itemPriceIncludesTax?: boolean;
-}
-
-/**
- * The price fields for a line that has just had an item's saved `price` put on it
- * (item pick, unit pick, variant pick). Spread the result into the line.
- */
-export function lineFieldsFromItemPrice(input: {
-  price: string | null | undefined;
-  /** `priceIsTaxInclusive(item, side)` */
-  inclusive: boolean;
-  taxPercent: string | number | null | undefined;
-}): Pick<InclusiveLine, "unitPrice" | "originalUnitPrice" | "inclusivePrice" | "itemPriceIncludesTax"> {
-  const r = billRateFromItemPrice(input);
-  return {
-    unitPrice: r.rate,
-    originalUnitPrice: r.rate,
-    inclusivePrice: r.inclusivePrice ?? undefined,
-    itemPriceIncludesTax: input.inclusive,
-  };
-}
-
-/**
- * Apply an edit of one field of a bill line.
- *  - the RATE: the user is now stating the tax-exclusive rate, so it is no longer derived
- *    from the shelf price (`inclusivePrice` cleared) and later GST edits leave it alone;
- *  - the GST %: for a line derived from an inclusive price the shelf price stays what it is and the
- *    taxable rate follows (₹118 incl. at 12% is 105.36 + 12.64, not 100 + 12). The re-derived rate
- *    is also the new `originalUnitPrice`, so it is not mistaken for a price edit;
- *  - anything else: set as is.
- */
-export function applyLineEdit<T extends InclusiveLine>(li: T, field: keyof T & string, value: string): T {
-  if (field === "unitPrice") return { ...li, unitPrice: value, inclusivePrice: undefined };
-  if (field === "taxPercent" && li.inclusivePrice) {
-    const derived = billRateFromItemPrice({ price: li.inclusivePrice, inclusive: true, taxPercent: value || "0" });
-    return { ...li, taxPercent: value, unitPrice: derived.rate, originalUnitPrice: derived.rate };
-  }
-  return { ...li, [field]: value };
-}
-
-/** "₹118.00 incl. GST -> ₹100.00 + ₹18.00" as numbers, or null when the line is not derived from an inclusive price (or has no GST). */
-export function inclusiveBreakdown(li: Pick<InclusiveLine, "inclusivePrice" | "taxPercent">): { inclusive: string; base: string; tax: string } | null {
-  if (!li.inclusivePrice) return null;
-  try {
-    const { base, tax } = splitInclusive(li.inclusivePrice, li.taxPercent || "0");
-    return tax === "0.00" ? null : { inclusive: li.inclusivePrice, base, tax };
-  } catch {
-    return null;
-  }
+  if (gross === null || t === null || t.int === 0n) return { rate: price, inclusivePrice: null };
+  const { base } = splitInclusivePaise(gross, t);
+  return { rate: formatPaise(base), inclusivePrice: formatPaise(gross) };
 }

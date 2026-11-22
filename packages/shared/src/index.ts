@@ -3,6 +3,7 @@ export { auditSources } from "./audit-source.js";
 export type { AuditSource } from "./audit-source.js";
 export * from "./money.js";
 export * from "./inclusive-price.js";
+export * from "./bill-line.js";
 export { parseDecimal, toPaiseExact, formatPaise, divRoundHalfUp } from "./decimal.js";
 export type { Decimal } from "./decimal.js";
 export * from "./price-propagation.js";
