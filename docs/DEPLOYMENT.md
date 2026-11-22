@@ -68,7 +68,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 
 The desktop installers, the Android APK and the CLI and MCP packages build alongside steps 3 to 5 and only attach files to the release from step 2.
 
-**The workflow does not deploy the API.** It runs on its own server (Docker Compose behind nginx, `HISAABO_API_IMAGE` pinned to a tag), and the operator upgrades it by hand. That is why step 4 only waits: a new frontend must not go live before the API it was built against, and in 0.10.0 it did. The wait polls with backoff (10 s growing to 60 s) and logs the version production reports next to the one it expects. It fails after 350 minutes (GitHub stops a hosted job at 360); upgrade the API, then **Re-run failed jobs** on the workflow run. Nothing is rebuilt (the finished `docker` job is kept), and the deploys follow.
+**The workflow does not deploy the API.** It runs on its own server (Docker Compose behind nginx, `HISAABO_API_IMAGE` pinned to a tag), and the operator upgrades it by hand. That is why step 4 only waits: a new frontend must not go live before the API it was built against, and in 0.10.0 it did. The wait polls with backoff (10 s growing to 60 s) and logs the version production reports next to the one it expects. It fails after 350 minutes (GitHub stops a hosted job at 360); upgrade the API, then **Re-run failed jobs** on the workflow run. Nothing is rebuilt (the finished `docker` job is kept), and the deploys follow. Until then the GitHub release stays a **draft**: after a failed or timed-out wait the notes are updated but the release is not published, so the desktop installers and the Android APK do not go public while production runs the old API. The re-run publishes it.
 
 #### Release runbook
 
@@ -77,7 +77,7 @@ The desktop installers, the Android APK and the CLI and MCP packages build along
 3. **Operator upgrades the API.** Back up first (see [UPGRADING.md](UPGRADING.md)), set `HISAABO_API_IMAGE=ghcr.io/<owner>/hisaabo-api:vX.Y.Z` in `.env.prod` (or the digest-pinned form), then `pull api` and `up -d api` as in [Upgrading a pinned install](#upgrading-a-pinned-install).
 4. **The workflow detects the version.** Check by hand with `curl https://api.hisaabo.in/api/version`, which returns `{"version":"X.Y.Z"}`. When it matches, `wait-for-api` logs `MATCH` and finishes, and the web, store and API-reference deploys queue.
 5. **A reviewer approves.** Open the workflow run, choose **Review deployments**, tick `production` and approve. The deploys run only now. Add required reviewers under Settings → Environments → production; without them nothing holds the deploys after the API check.
-6. **Web and store deploy** to Cloudflare Pages production, and the release is published with its notes.
+6. **Web and store deploy** to Cloudflare Pages production, and the release is published with its notes (only because the API check passed; see above).
 7. **Purge `/store/*` on the CDN** in front of the store domain (Cloudflare → Caching → Purge Cache → by prefix `<store-host>/store/`; purge everything if your plan has no prefix purge). The catalog, meta, logo and image responses are cached for up to a minute and the new store build may change their shape.
 8. **Check** the release notes table (every row green, `API in production` reports the version), and the version in the web sidebar footer.
 

@@ -989,8 +989,12 @@ jobs:
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
       # Updates the release prepare-release made (draft, or a hand-made one it
-      # reused) with the final notes and publishes it. It never creates a
-      # release: it patches by id, so a re-run is idempotent. (Why not
+      # reused) with the final notes and, when the production API wait
+      # succeeded or was not needed, publishes it (scripts/publish-release.sh).
+      # After a failed or timed-out wait the notes are updated but the release
+      # stays a draft, so the installers do not go public while production runs
+      # the old API; a re-run of the failed jobs publishes it. It never creates
+      # a release: it patches by id, so a re-run is idempotent. (Why not
       # softprops/action-gh-release: the releases-by-tag API never returns
       # drafts, so v2.6.2 did not see the Tauri draft, made a second one and
       # published the placeholder body for v0.9.0.)
@@ -1001,30 +1005,5 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           BODY_PATH: ${{ steps.notes.outputs.body_path }}
-        run: |
-          set -euo pipefail
-          # A "-" in the version marks a pre-release (-beta.1, -rc.1): flagged
-          # as such and never "Latest". Stable uses GitHub's own ordering.
-          if [[ "$REF_NAME" == *-* ]]; then
-            PRERELEASE=true
-            MAKE_LATEST=false
-          else
-            PRERELEASE=false
-            MAKE_LATEST=legacy
-          fi
-
-          # A second release for the tag (made by hand mid-run) must not be
-          # papered over: fail and name it instead of publishing next to it.
-          others=$(bash scripts/find-release.sh "$REF_NAME" | cut -f1 | grep -vxF "$RELEASE_ID" || true)
-          if [ -n "$others" ]; then
-            echo "::error title=Duplicate releases::${REF_NAME} has another release besides ${RELEASE_ID} (ids: $(tr '\n' ' ' <<<"$others")). Keep one, delete the others in the GitHub UI, and re-run this job."
-            exit 1
-          fi
-
-          gh api --method PATCH "repos/${REPOSITORY}/releases/${RELEASE_ID}" \
-            -f name="Hisaabo ${REF_NAME}" \
-            -F body=@"$BODY_PATH" \
-            -F draft=false \
-            -F prerelease="$PRERELEASE" \
-            -f make_latest="$MAKE_LATEST" \
-            --jq '"Published " + .html_url'
+          WAIT_RESULT: ${{ needs.wait-for-api.result }}
+        run: bash scripts/publish-release.sh

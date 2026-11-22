@@ -40,6 +40,7 @@ before(() => {
 echo "$*" >> "$FAKE_GH_CALLS"
 if [ -n "\${FAKE_GH_FAIL:-}" ]; then echo "gh: not logged in" >&2; exit 4; fi
 if [[ " $* " == *" --method POST "* ]]; then echo "\${FAKE_GH_NEW_ID:-9001}"; exit 0; fi
+if [[ " $* " == *" --method PATCH "* ]]; then echo "patched"; exit 0; fi
 cat "$FAKE_GH_PAGES"
 `,
   );
@@ -310,4 +311,54 @@ test("check-existing-images: fails closed on a registry error or an unreadable d
   const bad = images({ api: "baddigest", once: "exists" });
   assert.equal(bad.status, 1);
   assert.match(bad.stdout, /digest could not be read/);
+});
+
+// ── publish-release.sh: publish only when the production API wait allows it ──
+
+function publish(waitResult: string, pages: Release[][] = [[release(77, "v1.2.3", true)]], tag = "v1.2.3") {
+  const body = join(work, "notes.md");
+  writeFileSync(body, "notes");
+  const r = sh(
+    "publish-release.sh",
+    [],
+    env(pages, { REPOSITORY: "o/r", RELEASE_ID: "77", REF_NAME: tag, BODY_PATH: body, WAIT_RESULT: waitResult }),
+  );
+  const patch = ghCalls().split("\n").find((l) => l.includes("--method PATCH")) ?? "";
+  return { ...r, patch };
+}
+
+test("publish-release publishes (draft=false, make_latest) when the API wait succeeded or was not needed", () => {
+  for (const result of ["success", "skipped"]) {
+    const r = publish(result);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.patch, /releases\/77/);
+    assert.match(r.patch, /draft=false/);
+    assert.match(r.patch, /make_latest=legacy/);
+    assert.match(r.patch, /prerelease=false/);
+  }
+});
+
+test("publish-release keeps the release a draft when the API wait failed, timed out or was cancelled", () => {
+  for (const result of ["failure", "cancelled", ""]) {
+    const r = publish(result);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.patch, /releases\/77/, "notes are still updated");
+    assert.match(r.patch, /body=@/);
+    assert.doesNotMatch(r.patch, /draft=/, `wait '${result}' must not touch the draft flag`);
+    assert.doesNotMatch(r.patch, /make_latest/);
+    assert.match(r.stdout, /::warning title=Release not published::/);
+  }
+});
+
+test("publish-release marks a pre-release and never makes it latest", () => {
+  const r = publish("success", [[release(77, "v1.3.0-rc.1", true)]], "v1.3.0-rc.1");
+  assert.match(r.patch, /prerelease=true/);
+  assert.match(r.patch, /make_latest=false/);
+});
+
+test("publish-release refuses to publish next to a second release for the tag", () => {
+  const r = publish("success", [[release(77, "v1.2.3", true), release(78, "v1.2.3", false, true)]]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /::error title=Duplicate releases::.*ids: 78/);
+  assert.equal(r.patch, "");
 });

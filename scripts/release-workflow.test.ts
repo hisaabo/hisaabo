@@ -72,8 +72,10 @@ test("exactly one job creates the GitHub release", () => {
     assert.ok(needs(job(release, name)).includes("prepare-release"), `${name} must need prepare-release`);
   }
   assert.match(job(release, "prepare-release"), /scripts\/ensure-release\.sh/);
-  // The notes job patches the prepared release by id; it never creates one.
-  assert.match(job(release, "release-notes"), /releases\/\$\{RELEASE_ID\}/);
+  // The notes job patches the prepared release by id (in publish-release.sh); it never creates one.
+  assert.match(step(job(release, "release-notes"), "Publish release"), /RELEASE_ID: \$\{\{ needs\.prepare-release\.outputs\.release_id \}\}/);
+  assert.match(readFileSync(new URL("./publish-release.sh", import.meta.url), "utf8"), /releases\/\$\{RELEASE_ID\}/);
+  assert.doesNotMatch(readFileSync(new URL("./publish-release.sh", import.meta.url), "utf8"), /--method POST/);
 });
 
 test("production Pages deploys happen only for a release tag; main goes to the preview alias", () => {
@@ -132,4 +134,14 @@ test("a second run on the tag reuses the published images instead of failing, an
   // The job outputs carry the existing digests when nothing was built.
   assert.match(docker, /api_digest: \$\{\{ steps\.build_api\.outputs\.digest \|\| steps\.existing\.outputs\.api_digest \}\}/);
   assert.match(docker, /once_digest: \$\{\{ steps\.build_once\.outputs\.digest \|\| steps\.existing\.outputs\.once_digest \}\}/);
+});
+
+test("a timed-out API wait cannot publish the release", () => {
+  const notes = job(release, "release-notes");
+  // The decision is in the script and receives the wait result ...
+  assert.match(step(notes, "Publish release"), /WAIT_RESULT: \$\{\{ needs\.wait-for-api\.result \}\}/);
+  assert.match(step(notes, "Publish release"), /scripts\/publish-release\.sh/);
+  // ... and the script publishes only for success / skipped.
+  const script = readFileSync(new URL("./publish-release.sh", import.meta.url), "utf8");
+  assert.match(script, /success \| skipped\)\n\s+args\+=\(-F draft=false/);
 });
