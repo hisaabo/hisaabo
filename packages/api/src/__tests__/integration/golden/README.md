@@ -28,7 +28,7 @@ test itself.
 | `02-inter-state-sale-partial` | Inter-state IGST sale, partial UPI then cash | pass |
 | `03-purchase-input-gst` | Purchase with input GST, payment made | pass |
 | `04-sale-with-tds` | Customer TDS on receipt (TDS receivable 1600) | pass |
-| `05-credit-debit-notes` | Credit note, sales return, sale/purchase debit notes, purchase return | pass + 6 bugs (`it.fails`) |
+| `05-credit-debit-notes` | Credit note, sales return, sale/purchase debit notes, purchase return | pass |
 | `06-expenses` | 12 expense categories, keyword-mapped, cash and bank | pass |
 | `07-manual-journals` | Capital, equipment, depreciation journals; void nets to zero | pass |
 | `08-itc-utilisation` | `itc.recordUtilization` system journal | pass + 1 bug |
@@ -36,7 +36,7 @@ test itself.
 | `10-opening-balances` | Party and bank opening balances | **documented gap** + 1 bug |
 | `11-financial-year-boundary` | 31 Mar / 1 Apr, TB per FY, default FY derivation | pass (+ documented gaps) |
 | `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
-| `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass + 1 bug |
+| `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation
@@ -140,6 +140,5 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 | Where | What |
 | --- | --- |
-| `party.ts:164-178` (and `list` at `:70-73`) | Party balance includes quotations / proformas / challans, and adds a purchase-side debit note instead of subtracting it (05B, 13) |
 | `party.ts:450-458`, `:490` | `ledgerReport` applies the opposite sign convention to a supplier's opening balance than `getById` (10) |
 | `itc.ts:389-414`, `:536-579` | Re-recording a period's utilisation upserts the row but posts a second journal; Input GST goes negative (08) |

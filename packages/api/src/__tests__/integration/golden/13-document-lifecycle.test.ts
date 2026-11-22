@@ -16,7 +16,7 @@
  *   inv3  sale 1 x  2000.00        DRAFT        2000.00
  *   quo   quotation 1 x 99999.00                (never posts)
  *
- * Bug documented here (it.fails): party.getById's balance includes the quotation.
+ * The party balance ignores the quotation (99999.00): it matches the ledger receivable.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import {
@@ -129,11 +129,9 @@ describe("golden 13: drafts post, quotations do not, cancel and payment delete r
     expect((await w.caller.party.ledgerReport({ partyId }))?.summary.closingBalance).toBe("7000.00");
   });
 
-  // BUG: party.getById (and party.list's balance) sum EVERY non-cancelled invoices-table
-  // row for the party, including quotations, proformas and delivery challans, so the
-  // 99999.00 quotation inflates the customer's balance: actual today is 106999.00.
-  // party.ledgerReport filters by documentType and correctly shows 7000.00.
-  it.fails("party balance equals the ledger receivable (7000.00); quotations do not count", async () => {
+  it("party balance equals the ledger receivable (7000.00); quotations do not count", async () => {
     expect((await w.caller.party.getById({ id: partyId }))?.balance).toBe("7000.00");
+    const list = await w.caller.party.list({ type: "customer", page: 1, limit: 10 });
+    expect(list.data.find((p) => p.id === partyId)?.balance).toBe("7000.00");
   });
 });
