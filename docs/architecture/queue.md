@@ -581,7 +581,19 @@ order:
    removes the `setInterval` and the every-tenant scan on every tick. (The
    double generation was already fixed in place in 0.10.1: the claim and the
    generation now share one transaction, so the job only needs to keep that
-   shape.)
+   shape.) Known items carried
+   into this step from 0.10.1:
+   - The monthly plan limit (5 runs per business on the free plan) is counted
+     per template inside that template's transaction, so two replicas working
+     on two templates of the same business at once can both pass the check and
+     exceed the limit. Needs a per-business lock or a counter row.
+   - The month boundary for that limit is computed from the API process's
+     local clock and time zone (`setDate(1)`, `setHours(0)`), not the
+     business's time zone or the database clock, so the window can differ
+     from the business's calendar month near midnight.
+   - A template that cannot generate stays due and is retried every tick; 0.10.1
+     records the failure once per distinct error. An auto-pause after N
+     consecutive failures, with a notification, is still open.
 2. E-invoice submission and retry: durable, with automatic retry and
    backoff. Also fix the IRP rate limiter hang and add fetch timeouts.
 3. Self-export and self-import as jobs, with progress and a download link
