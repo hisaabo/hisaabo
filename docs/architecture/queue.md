@@ -15,8 +15,13 @@ Today every piece of work runs inside the single API process:
   full-history reports. CPU-bound parts block the event loop for every
   tenant.
 - Background work is ad hoc and in memory:
-  - a 60 s `setInterval` scheduler for recurring invoices, whose row lock is
-    released before generation, so two replicas can double-generate;
+  - a 60 s `setInterval` scheduler for recurring invoices. Before 0.10.1 its
+    row lock was released before generation, so two replicas could
+    double-generate; it now claims and generates each template under one
+    row lock (`FOR UPDATE SKIP LOCKED`, with a unique index on the occurrence
+    as backstop) and visits each tenant with its own short-lived
+    connection instead of the shared pool cache. It still scans every
+    tenant and every due template on every tick, in the API process;
   - fire-and-forget `setTimeout` e-invoice submission that is lost on restart
     and never retried automatically;
   - a per-request PDF worker thread with no timeout.
@@ -573,7 +578,22 @@ because TOTP secrets are encrypted with it.
 order:
 
 1. Recurring invoices: cron schedule plus per-tenant fan-out jobs. This
-   removes the `setInterval` and fixes the double generation.
+   removes the `setInterval` and the every-tenant scan on every tick. (The
+   double generation was already fixed in place in 0.10.1: the claim and the
+   generation now share one transaction, so the job only needs to keep that
+   shape.) Known items carried
+   into this step from 0.10.1:
+   - The monthly plan limit (5 runs per business on the free plan) is counted
+     per template inside that template's transaction, so two replicas working
+     on two templates of the same business at once can both pass the check and
+     exceed the limit. Needs a per-business lock or a counter row.
+   - The month boundary for that limit is computed from the API process's
+     local clock and time zone (`setDate(1)`, `setHours(0)`), not the
+     business's time zone or the database clock, so the window can differ
+     from the business's calendar month near midnight.
+   - A template that cannot generate stays due and is retried every tick; 0.10.1
+     records the failure once per distinct error. An auto-pause after N
+     consecutive failures, with a notification, is still open.
 2. E-invoice submission and retry: durable, with automatic retry and
    backoff. Also fix the IRP rate limiter hang and add fetch timeouts.
 3. Self-export and self-import as jobs, with progress and a download link

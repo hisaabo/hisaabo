@@ -157,7 +157,7 @@ Emergencies and recovery:
 | `OPS_IP_ALLOWLIST` | No (recommended with `/ops`) | Comma-separated CIDRs (IPv4/IPv6) allowed to reach `/ops`; others get a plain 404. Uses the same client-IP rules as rate limiting (`TRUST_PROXY_HOPS`) | `203.0.113.0/24` |
 | `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | No | `/ops` session idle timeout, absolute lifetime, and how long a TOTP step-up covers destructive actions (defaults 15 / 8 / 5) | `15` |
 | `QUEUE_HEARTBEAT_FILE` | No | Worker only. File the worker touches every 10 seconds to prove liveness (default `/tmp/worker-heartbeat`; the bundled compose healthcheck reads that path, so change it only together with the healthcheck) | `/tmp/worker-heartbeat` |
-| `NOTIFICATIONS_WORKER` | No | The in-process notification dispatcher (outbox delivery plus the hourly collections sweep) that runs inside the **API** process. `true` = on, `false` = off (case-insensitive; any other value is ignored with a warning and the default applies). **Unset: on for single-tenant / self-hosted installs, off when `MULTI_TENANT=true`.** A multi-tenant operator who wants notifications dispatched sets `NOTIFICATIONS_WORKER=true`; until then nothing is dispatched and events queue in `notification_outbox`. Once it is enabled they are delivered, except events older than 72 hours, which are expired instead (so enable it before you need notifications, not after a long pause). With it on, a multi-tenant deployment scans **every** tenant database each `NOTIFICATIONS_FULL_SWEEP_SECONDS`, which churns the tenant connection pool (`TENANT_POOL_MAX`) when there are many tenants. Set `false` on replicas that should only serve requests (claiming from the outbox is safe across replicas) | `true` |
+| `NOTIFICATIONS_WORKER` | No | The in-process notification dispatcher (outbox delivery plus the hourly collections sweep) that runs inside the **API** process. `true` = on, `false` = off (case-insensitive; any other value is ignored with a warning and the default applies). **Unset: on for single-tenant / self-hosted installs, off when `MULTI_TENANT=true`.** A multi-tenant operator who wants notifications dispatched sets `NOTIFICATIONS_WORKER=true`; until then nothing is dispatched and events queue in `notification_outbox`. Once it is enabled they are delivered, except events older than 72 hours, which are expired instead (so enable it before you need notifications, not after a long pause). With it on, a multi-tenant deployment scans **every** tenant database each `NOTIFICATIONS_FULL_SWEEP_SECONDS`, which opens one short-lived connection per tenant (not the shared tenant pools) and takes time and load when there are many tenants. Set `false` on replicas that should only serve requests (claiming from the outbox is safe across replicas) | `true` |
 | `NOTIFICATIONS_FULL_SWEEP_SECONDS` | No | Multi-tenant only, and only where the dispatcher is on: how often every active tenant is scanned for pending notification events (default 60, minimum 5; smaller or invalid values fall back to 60). Raise it on large installs | `60` |
 | `PUSH_PROVIDER` | No | Mobile push transport: `none` (default; the inbox and email copies still work) or `gorush`. `gorush` needs `GORUSH_URL` and your own app build with Apple/Firebase credentials; any other value logs a warning and disables push | `gorush` |
 | `GORUSH_URL` | With `PUSH_PROVIDER=gorush` | Base URL of the Gorush sidecar. Gorush's push endpoint has no authentication, so use a private-network address (a compose service name) and never publish its port | `http://gorush:8088` |
@@ -168,7 +168,8 @@ Emergencies and recovery:
 | `STORAGE_DRIVER` | No | Where uploaded item images are stored: `local` (default) or `s3` (Cloudflare R2, AWS S3, MinIO). An unknown value falls back to `local` with a warning | `s3` |
 | `STORAGE_LOCAL_DIR` | No | Directory for `STORAGE_DRIVER=local`. The images set it to `/storage/objects` and `docker-compose.prod.yml` pins it there (the `api_storage` volume), so a value in `.env.prod` has no effect with that compose file. Without it the default is `./.storage/objects` relative to the working directory | `/storage/objects` |
 | `STORAGE_S3_ENDPOINT` / `STORAGE_S3_BUCKET` / `STORAGE_S3_ACCESS_KEY_ID` / `STORAGE_S3_SECRET_ACCESS_KEY` | With `STORAGE_DRIVER=s3` | S3-compatible endpoint, bucket and credentials. The driver is created the first time storage is used (for example an item image upload), and fails with a configuration error if any of the four is missing. `STORAGE_S3_REGION` is optional (default `auto`) | `https://<account>.r2.cloudflarestorage.com` |
-| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU eviction, default 50) and connections per tenant pool (default 5) | `50` |
+| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU, default 50) and connections per tenant pool (default 5). Together with `TENANT_POOL_DRAINING_MAX` they bound the tenant connections one process can hold: `(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX`, which is 500 with the defaults, five times Postgres' default `max_connections`. Size them together; see [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `10` / `2` |
+| `TENANT_POOL_DRAINING_MAX` | No | Multi-tenant only. How many pools that were evicted from the cache may still hold open connections at once (default: `TENANT_POOL_MAX`; `0` closes every evicted pool at once). Past it the oldest is closed, which can fail a request still using it in a storm. See [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `10` |
 | `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
 | `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
 | `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
@@ -178,6 +179,46 @@ Emergencies and recovery:
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
 When the online store is enabled for a business, its public catalog (including the business phone, email and address) can be read by any website a visitor's browser loads, so an intranet-only self-hosted install must not treat network position as protection for store data.
+
+### Tenant connection budget (multi-tenant)
+
+With `MULTI_TENANT=true` each API process keeps an LRU of tenant database pools (`TENANT_POOL_MAX`), and each pool may open up to `TENANT_POOL_PER_DB_MAX` connections. A connection that sits idle for 20 seconds is closed, so an idle pool holds **no** connections, but a burst across many tenants can reach the ceiling.
+
+When a pool is evicted from the cache it is **not** closed (since 0.10.1): a request that already holds it finishes normally, and the pool's connections close by themselves after 20 idle seconds. Those evicted pools are "draining", and `TENANT_POOL_DRAINING_MAX` (default: the same as `TENANT_POOL_MAX`) caps how many may drain at once. When the cap is passed, the oldest draining pool is closed (waiting up to 30 seconds for the queries already running on it), so the number of tenant connections a process holds has a hard bound:
+
+```
+tenant connections per process  <=  (TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX
+```
+
+plus one for each background visit in progress (the recurring-invoice scheduler, the notification dispatcher and the like each visit one tenant at a time through their own single connection, closed afterwards; none of them uses the shared pools). Add everything that connects to the server and keep the total below Postgres' `max_connections`:
+
+```
+(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX     tenant pools, per API process
++ about 15 per API process      control pool, LISTEN and watchdog, queue client
++ about 25 per worker           queue client and control pool (conservative: today the worker only runs
+                                the system ping job and opens no tenant pools; this grows with 0.11.0 jobs)
++ about 5 per process           background tenant visits
++ about 10 in total             operators: psql, backups, the admin dashboard, migrations
++ 3                             superuser_reserved_connections
+<= max_connections
+```
+
+The defaults (`50`, `50`, `5`) allow 500 tenant connections from one API process, so they only fit a server with `max_connections` of several hundred; a second API replica doubles the figure. **Never raise `TENANT_POOL_MAX` alone**: it raises the bound twice (once for live pools, once for draining ones) and `TENANT_POOL_PER_DB_MAX` multiplies both.
+
+Starting points for about 230 tenants, one API process and one worker:
+
+| `max_connections` | `TENANT_POOL_MAX` | `TENANT_POOL_DRAINING_MAX` | `TENANT_POOL_PER_DB_MAX` | Tenant connections (at most) | Spare |
+|---|---|---|---|---|---|
+| 100 (Postgres default) | 10 | 10 (default) | 2 | 40 | 2 |
+| 300 | 50 | 50 (default) | 2 | 200 | 42 |
+
+The spare column is `max_connections` minus the tenant bound minus the other consumers in the list above (15 + 25 + 5 + 10 + 3 = 58).
+
+At 100 connections the budget is tight (a second API replica does not fit: raise `max_connections` first). Only the tenants active within the last few seconds need a pool, so 10 cached pools serve a quiet period well, but a busy period with more than about 20 distinct tenants inside 20 seconds exceeds the draining cap and starts closing draining pools. The API logs a `[tenant-pool] ... ended the oldest` warning (at most once a minute) when that happens; it is the signal to raise `max_connections` and then `TENANT_POOL_MAX`, not a reason to raise `TENANT_POOL_MAX` on its own.
+
+**What the cap can cost.** Closing the oldest draining pool is the only place a request can still see `CONNECTION_ENDED`, and only in such a storm: a request that holds that pool keeps any query or transaction already running on it (up to 30 seconds), but a new query or transaction it starts afterwards fails. If you would rather spend connections than risk that, raise `max_connections` and `TENANT_POOL_DRAINING_MAX`; if connections matter more, lower `TENANT_POOL_DRAINING_MAX` (`0` closes every evicted pool as soon as its running queries finish, which is the pre-0.10.1 behaviour apart from letting those queries complete).
+
+Keep `TENANT_POOL_PER_DB_MAX` at 2 or more: a request that opens a transaction holds one connection and may still run a query beside it. To see who holds connections: `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
 ### GitHub Actions Secrets
 

@@ -3,7 +3,7 @@
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
 **Last updated**: 2026-11-22
-**Applies to**: self-hosted migrations 0000 through 0022 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0009) migration sets; the equivalents for 0014-0022 are listed in section 3.
+**Applies to**: self-hosted migrations 0000 through 0023 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0010) migration sets; the equivalents for 0014-0023 are listed in section 3.
 
 Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
 
@@ -13,6 +13,7 @@ Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Do
 
 | Migration | Name | Risk | Data Loss | Recommended Strategy |
 |-----------|------|------|-----------|---------------------|
+| 0023 | `recurring_invoice_runs.scheduled_for` and its partial unique index (v0.10.1) | Low | That column's values | Leave in place (older code ignores it) |
 | 0022 | Notifications (inbox, outbox, preferences, push devices, push quotas) | Low | Notification inbox and outbox rows, preferences, registered push devices | Leave in place (older code ignores them) |
 | 0021 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
 | 0020 | TDS on payment receipts | Low | TDS section configs, party TANs, TDS amounts on payment allocations | Leave in place (see the TDS note in section 3) |
@@ -883,7 +884,7 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 
 ---
 
-### Migrations 0014-0022: Released after v0.9.0
+### Migrations 0014-0023: Released after v0.9.0
 
 | Self-hosted | Control DB | Tenant DB | Change |
 |---|---|---|---|
@@ -896,6 +897,7 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 | 0020 | - | 0008 (`tds`) | `tds_section_configs`, `parties.tan`, `payment_allocations.tds_amount` / `tds_section_code` / `tds_rate`, and a system `1600 TDS Receivable` row in `chart_of_accounts` for every business that did not have one |
 | 0021 | 0007 (`queue_and_ops`) | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
 | 0022 | 0008 (`notifications`: `notification_preferences`, `push_devices`, `push_quota_usage`, `user_notification_settings`) | 0009 (`notifications`: `notification_inbox`, `notification_outbox`) | The six notification tables (all six in the self-hosted database) |
+| 0023 (v0.10.1) | - | 0010 (`recurring_run_occurrence`) | `recurring_invoice_runs.scheduled_for` and the partial unique index `recurring_run_occurrence_uniq` |
 
 The migration step also tries to install the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`. If the install fails (for example the role lacks `CREATE` on the database) the step logs `job queue schema NOT installed` and continues; nothing in this release depends on the queue yet.
 
@@ -922,6 +924,9 @@ Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (mark
 
 ```sql
 BEGIN;
+-- 0023 / tenant 0010 (v0.10.1; older code ignores both, so this is optional)
+DROP INDEX IF EXISTS recurring_run_occurrence_uniq;
+ALTER TABLE recurring_invoice_runs DROP COLUMN IF EXISTS scheduled_for;
 -- 0022 / control 0008 (preferences, devices, quotas, settings), tenant 0009 (inbox, outbox)
 -- Destructive: deletes all notifications, preferences and registered push devices.
 DROP TABLE IF EXISTS notification_inbox, notification_outbox, notification_preferences,

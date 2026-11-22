@@ -15,6 +15,7 @@
 import {
   controlDb,
   getTenantDb,
+  withDedicatedTenantDb,
   tenants,
   tenantMembers,
   users,
@@ -534,9 +535,12 @@ async function tick(): Promise<void> {
       }
       for (const id of ids) {
         try {
-          const db = await getTenantDb(id);
-          await dispatchPending(db);
-          if (prune) await pruneNotifications(db);
+          // One-connection client per visit: a full sweep touches every tenant
+          // and must not cycle them all through the shared pool cache.
+          await withDedicatedTenantDb(id, async (db) => {
+            await dispatchPending(db);
+            if (prune) await pruneNotifications(db);
+          });
         } catch (err) {
           logger.error({ err, tenantId: id }, "[notifications] tenant dispatch error");
         }
