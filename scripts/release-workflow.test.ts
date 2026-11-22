@@ -43,6 +43,17 @@ test("web, store and API docs deploy only after wait-for-api", () => {
   }
 });
 
+test("the CLI and MCP npm publishes (irreversible API clients) wait for the API too", () => {
+  const wait = job(release, "wait-for-api");
+  for (const name of ["cli", "mcp"]) {
+    const block = job(release, name);
+    assert.ok(needs(block).includes("wait-for-api"), `${name} must need wait-for-api`);
+    assert.doesNotMatch(block, /always\(\)/);
+    // wait-for-api must run when only this client changed, or the publish would be skipped.
+    assert.match(wait, new RegExp(`needs\\.changes\\.outputs\\.${name} == 'true'`));
+  }
+});
+
 test("wait-for-api starts only after the images are built, pushed and signed", () => {
   const wait = job(release, "wait-for-api");
   assert.ok(needs(wait).includes("docker"), "wait-for-api must need docker");

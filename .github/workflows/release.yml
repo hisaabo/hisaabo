@@ -10,12 +10,14 @@ name: Release
 #                       upgraded by the operator (HISAABO_API_IMAGE pinned to
 #                       the new tag), so this job only POLLS
 #                       <api>/api/version until it reports the tagged version
-#   5. deploy-web / deploy-store / deploy-api-docs
-#                       need wait-for-api, and run in the `production`
-#                       environment, so its required reviewers approve here
+#   5. deploy-web / deploy-store / deploy-api-docs, and the CLI and MCP npm
+#      publishes
+#                       need wait-for-api; the Pages deploys run in the
+#                       `production` environment, so its required reviewers
+#                       approve here
 #   6. release-notes    fills in and publishes the release
-# Desktop, Android, CLI and MCP build in parallel with all of that and only
-# attach assets to the release from step 2.
+# Desktop and Android build in parallel with all of that and only attach assets
+# to the release from step 2.
 on:
   push:
     tags:
@@ -403,17 +405,20 @@ jobs:
   #
   # `needs: docker` (default success() semantics): it starts only after both
   # images are pushed, signed and verified, i.e. once the operator CAN upgrade.
-  # Skipped, along with everything that needs it, when no Cloudflare Pages app
+  # What waits for it: the Cloudflare Pages deploys AND the CLI and MCP npm
+  # publishes, which are API clients too (npm publishes cannot be undone, and a
+  # CLI/MCP that calls procedures the production API lacks fails in users'
+  # hands). Skipped, along with everything that needs it, when none of those
   # changed in this release.
   #
   # Emergencies: dispatch this workflow on the tag with skip_api_wait=true (the
   # job still runs, logs a loud warning and records the bypass in the release
-  # notes). A bare redeploy or rollback goes through deploy-web.yml /
-  # deploy-store.yml directly and never waits for the API.
+  # notes). A manual redeploy or rollback goes through deploy-web.yml /
+  # deploy-store.yml directly, where the API-version check applies instead.
   wait-for-api:
     name: Wait for production API
     needs: [changes, docker]
-    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.store == 'true' || needs.changes.outputs.api_docs == 'true'
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.store == 'true' || needs.changes.outputs.api_docs == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     # 355 = the script's 350-minute poll cap + checkout/setup. GitHub stops a
     # hosted job at 360 minutes, so a longer wait is not possible in one job;
@@ -716,7 +721,7 @@ jobs:
   # ── CLI (npm publish) ──────────────────────────────────────────
   cli:
     name: Publish CLI
-    needs: changes
+    needs: [changes, wait-for-api]
     if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -762,7 +767,7 @@ jobs:
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
     name: Publish MCP
-    needs: changes
+    needs: [changes, wait-for-api]
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

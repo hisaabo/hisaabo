@@ -66,7 +66,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 5. `deploy-web`, `deploy-store` and `deploy-api-docs` deploy the tagged commit (only the apps that changed since the previous tag). Each runs in the `production` GitHub environment, so its required reviewers approve it.
 6. `release-notes` fills in the notes, including the result of each step above, and publishes the release.
 
-The desktop installers, the Android APK and the CLI and MCP packages build alongside steps 3 to 5 and only attach files to the release from step 2.
+The `@hisaabo/cli` and `@hisaabo/mcp` npm publishes (API clients, and npm cannot unpublish) also wait for step 4, so they never ship before the API they talk to. The desktop installers and the Android APK build alongside steps 3 to 5 and only attach files to the release from step 2.
 
 **The workflow does not deploy the API.** It runs on its own server (Docker Compose behind nginx, `HISAABO_API_IMAGE` pinned to a tag), and the operator upgrades it by hand. That is why step 4 only waits: a new frontend must not go live before the API it was built against, and in 0.10.0 it did. The wait polls with backoff (10 s growing to 60 s) and logs the version production reports next to the one it expects. It fails after 350 minutes (GitHub stops a hosted job at 360); upgrade the API, then **Re-run failed jobs** on the workflow run. Nothing is rebuilt (the finished `docker` job is kept), and the deploys follow. Until then the GitHub release stays a **draft**: after a failed or timed-out wait the notes are updated but the release is not published, so the desktop installers and the Android APK do not go public while production runs the old API. The re-run publishes it.
 
