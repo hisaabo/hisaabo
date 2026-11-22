@@ -71,6 +71,13 @@
       "when": 1795338477498,
       "tag": "0009_tenant_webmcp_disabled",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795347272909,
+      "tag": "0010_webmcp_cache_invalidation_triggers",
+      "breakpoints": true
     }
   ]
 }

@@ -56,6 +56,8 @@ export interface UseWebMcpInput {
   pathname: string;
   navigate: (to: string, search?: Record<string, string>) => void;
   invalidate: () => Promise<void> | void;
+  /** The API reported the organization's agent switch is off: refresh the session policy (auth.me). */
+  onAgentsDisabled?: () => void;
 }
 
 export interface UseWebMcpResult {
@@ -115,6 +117,12 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
       },
       navigate: (to, search) => latest.current.navigate(to, search),
       invalidate: () => latest.current.invalidate(),
+      onAgentsDisabled: () => {
+        // Withdraw this registration's tools immediately (fail closed), then let the
+        // app refetch the policy; if it turns out the switch is on again, a reload re-offers them.
+        controller.abort();
+        latest.current.onAgentsDisabled?.();
+      },
     };
 
     let live = true;

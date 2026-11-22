@@ -3,7 +3,8 @@
  * (tRPC middlewares, REST handlers, role gates).
  *
  *   cache        key                    value                    tags                    TTL / max
- *   membership   tenantId:userId        {role, status:"active"}  tenant:T, user:U        60s / 10000
+ *   membership   tenantId:userId        {role, status:"active", webmcpDisabled}
+ *                                                                tenant:T, user:U        60s / 10000
  *   business     tenantId:businessId    {createdByUserId}        tenant:T, business:B    5min / 5000
  *
  * Rules (the "EVER" guarantee):
@@ -28,6 +29,13 @@ import { cacheBus } from "./cache/bus.js";
 export interface Membership {
   role: string;
   status: string;
+  /**
+   * The owner's switch for browser AI agents (tenants.webmcp_disabled). It rides in
+   * this entry because it is a fact about the tenant read on the same path, and it
+   * is dropped by the same `tenant` event: the tenants cache trigger watches
+   * status, plan AND webmcp_disabled (see db/src/cache-triggers.ts).
+   */
+  webmcpDisabled: boolean;
 }
 
 export const membershipCache = new TtlCache<Membership>({ name: "authz.membership", max: 10_000, ttlMs: 60_000 });
@@ -66,7 +74,7 @@ export async function getMembership(tenantId: string, userId: string): Promise<M
     key,
     async () => {
       const [row] = await controlDb
-        .select({ role: tenantMembers.role, status: tenants.status })
+        .select({ role: tenantMembers.role, status: tenants.status, webmcpDisabled: tenants.webmcpDisabled })
         .from(tenantMembers)
         .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
         .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, userId)))

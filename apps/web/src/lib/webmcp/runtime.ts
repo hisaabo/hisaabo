@@ -14,7 +14,7 @@
  * could safely say out loud.
  */
 
-import { defineAbilityFor, stripControlChars } from "@hisaabo/shared";
+import { WEBMCP_ORG_DISABLED_MESSAGE, defineAbilityFor, stripControlChars } from "@hisaabo/shared";
 import { isDesktop } from "@/lib/isDesktop";
 import {
   describeSummary,
@@ -226,7 +226,16 @@ function formatValidation(fields: Record<string, string[] | undefined>): string 
   return lines.length > 0 ? `Validation failed:\n${lines.join("\n")}` : "Validation failed: the input was rejected.";
 }
 
+/** The API refused because the organization's owner turned browser agents off. */
+export function isOrgDisabledError(err: unknown): boolean {
+  const trpcErr = asTrpcError(err);
+  return trpcErr?.data?.code === "FORBIDDEN" && trpcErr.message.includes(WEBMCP_ORG_DISABLED_MESSAGE);
+}
+
 function formatAgentError(err: unknown): string {
+  if (isOrgDisabledError(err)) {
+    return "Browser AI agent access was turned off for this organization by its owner. Nothing was changed. Stop using Hisaabo tools and tell the user.";
+  }
   const trpcErr = asTrpcError(err);
   // The API's rate limiter answers 429 before tRPC, so the client sees a parse
   // error with the response attached rather than a TOO_MANY_REQUESTS code.
@@ -463,6 +472,8 @@ export function buildBrowserTool(
         const value = await def.execute(input ?? {}, ctx);
         return toToolResult(value);
       } catch (err) {
+        // The owner switched agents off while this tab still had tools registered: withdraw them now.
+        if (isOrgDisabledError(err)) ctx.onAgentsDisabled?.();
         return toErrorResult(err);
       }
     },

@@ -13,17 +13,17 @@ A bug-fix release. Take the usual backup, then **upgrade the API first**: set `H
 
 ### Migrations
 
-Three additive migrations for the browser agent (WebMCP) hardening, applied by the same migration step (the ledger and recurring-invoice fixes ship their own, listed below). All are expand-only, and old code ignores them, so rolling back needs no reverse SQL.
+Three additive schema migrations for the browser agent (WebMCP) hardening, plus a re-install of the cache-invalidation triggers, applied by the same migration step (the ledger and recurring-invoice fixes ship their own, listed below). All are expand-only, and old code ignores them, so rolling back needs no reverse SQL.
 
 | Mode | Directory | Migration | What it adds |
 |---|---|---|---|
-| Self-hosted (unified) | `packages/db/drizzle` | `0025_webmcp_audit_source`, `0026_idempotency_keys`, `0027_tenant_webmcp_disabled` | all three below |
+| Self-hosted (unified) | `packages/db/drizzle` | `0025_webmcp_audit_source`, `0026_idempotency_keys`, `0027_tenant_webmcp_disabled`, `0028_webmcp_cache_invalidation_triggers` | the three below, plus the trigger re-install |
 | Multi-tenant, each tenant database | `packages/db/drizzle-tenant` | `0012_webmcp_audit_source`, `0013_idempotency_keys` | the audit column and the idempotency table |
-| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled` | the organization switch |
+| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled`, `0010_webmcp_cache_invalidation_triggers` | the organization switch, plus the trigger re-install |
 
 - `audit_log.source` (nullable text): where a change came from when it was not a person at the UI. `webmcp` for a browser AI agent, `mcp` for the MCP server (it already sent `x-client-type: mcp`), null for everything else, including every existing row. The web Activity Log labels these entries. It is attribution, not authorisation. Mobile and the CLI are unaffected (the extra field is ignored; the CLI's `--json` output now includes it), and self-export files written before the column existed still validate.
 - `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Idempotency is strictly opt-in: clients that do not send a key behave exactly as before, and nothing derives a key. Repeating the identical request with the same key within 15 minutes creates nothing and answers with the live record flagged `idempotentReplay: true` (a keyed call that did create the record is flagged `false`; a deleted record is a `CONFLICT`). The table keeps only the record id and a hash of the request, never a copy of the response, and expired rows are purged by the next keyed write and by an hourly sweep.
-- `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me`.
+- `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me` and enforced by the API for agent-marked calls (FORBIDDEN). It rides in the cached membership entry, so the `hisaabo_cache_tenants` cache-invalidation trigger now also fires on changes to this column: the `*_webmcp_cache_invalidation_triggers` migrations re-install the (idempotent) cache triggers with the new column list; nothing else about them changes.
 
 The recurring-invoice fix adds its own:
 

@@ -87,6 +87,12 @@ export interface WebMcpToolContext {
   navigate: (to: string, search?: Record<string, string>) => void;
   /** Invalidate every react-query cache entry so the UI reflects agent writes. */
   invalidate: () => Promise<void> | void;
+  /**
+   * The API said this organization's owner turned browser agents off (FORBIDDEN with
+   * WEBMCP_ORG_DISABLED_MESSAGE). The hook withdraws this registration's tools at once
+   * and refreshes the session so the app learns the new policy.
+   */
+  onAgentsDisabled?: () => void;
 }
 
 /** One field of an update, as the person reads it: "Status: draft → sent". */

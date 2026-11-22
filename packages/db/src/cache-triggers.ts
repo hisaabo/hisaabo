@@ -77,10 +77,10 @@ export const expectedCacheTriggers: readonly CacheTriggerSpec[] = [
     body: `AFTER INSERT OR UPDATE OR DELETE ON tenant_members FOR EACH ROW ${fn("tenant_id", "user_id")}`,
   },
   {
-    // authz bundle (status), plan cache
+    // authz bundle (status, and the owner's browser-agent switch), plan cache
     table: "tenants",
     trigger: "hisaabo_cache_tenants",
-    body: `AFTER UPDATE OF status, plan OR DELETE ON tenants FOR EACH ROW ${fn("id")}`,
+    body: `AFTER UPDATE OF status, plan, webmcp_disabled OR DELETE ON tenants FOR EACH ROW ${fn("id")}`,
   },
   {
     // Deleting an already-expired session (hourly cleanup) cannot change any

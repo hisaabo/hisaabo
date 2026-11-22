@@ -17,6 +17,7 @@ import { createTestWorld, createUser, addMember, type TestWorld } from "../helpe
 import { createTestCaller, createUnauthenticatedCaller } from "../helpers/create-test-caller.js";
 import { getControlDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
 import { isWebMcpDisabledByOperator, shouldRefuseAgentRequest, WEBMCP_DISABLED_MESSAGE } from "../../lib/webmcp-policy.js";
+import { WEBMCP_ORG_DISABLED_MESSAGE } from "@hisaabo/shared";
 
 let world: TestWorld;
 
@@ -95,6 +96,75 @@ describe("system.config (the operator kill switch, public)", () => {
     // The existing fields are untouched.
     expect(typeof config.multiTenant).toBe("boolean");
     expect(typeof config.signupOpen).toBe("boolean");
+  });
+});
+
+describe("the owner's switch is enforced by the API for agent-marked calls", () => {
+  const AGENT = { "x-hisaabo-agent": "webmcp" };
+  const agentOwner = () =>
+    createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+      headers: AGENT,
+    });
+  const refused = (p: Promise<unknown>) =>
+    expect(p).rejects.toMatchObject({ code: "FORBIDDEN", message: WEBMCP_ORG_DISABLED_MESSAGE });
+
+  afterEach(async () => {
+    await owner().tenant.setWebMcpDisabled({ disabled: false });
+  });
+
+  it("lets marked calls through while agents are allowed", async () => {
+    await expect(agentOwner().party.list({ page: 1, limit: 5 })).resolves.toBeTruthy();
+  });
+
+  it("refuses marked reads and writes the very next call after the owner turns agents off, writing nothing", async () => {
+    // Warm every cache first: the point is that a cached 'allowed' cannot outlive the switch.
+    await agentOwner().party.list({ page: 1, limit: 5 });
+    const name = `Blocked by org switch ${Date.now()}`;
+
+    await owner().tenant.setWebMcpDisabled({ disabled: true });
+
+    await refused(agentOwner().party.list({ page: 1, limit: 5 }));
+    await refused(agentOwner().party.create({ type: "customer", name }));
+    const parties = await owner().party.list({ page: 1, limit: 25, search: name });
+    expect(parties.data).toHaveLength(0);
+  });
+
+  it("never touches calls that do not carry the marker: the owner's own dashboard keeps working", async () => {
+    await owner().tenant.setWebMcpDisabled({ disabled: true });
+    await expect(owner().party.list({ page: 1, limit: 5 })).resolves.toBeTruthy();
+    const name = `Human during switch ${Date.now()}`;
+    await expect(owner().party.create({ type: "customer", name })).resolves.toBeTruthy();
+  });
+
+  it("does not let a marked call turn the switch back on", async () => {
+    await owner().tenant.setWebMcpDisabled({ disabled: true });
+    await refused(agentOwner().tenant.setWebMcpDisabled({ disabled: false }));
+    expect((await owner().auth.me()).webmcpDisabled).toBe(true);
+  });
+
+  it("allows marked calls again once the owner turns agents back on", async () => {
+    await owner().tenant.setWebMcpDisabled({ disabled: true });
+    await refused(agentOwner().party.list({ page: 1, limit: 5 }));
+    await owner().tenant.setWebMcpDisabled({ disabled: false });
+    await expect(agentOwner().party.list({ page: 1, limit: 5 })).resolves.toBeTruthy();
+  });
+
+  it("is per organization: another organization's agent calls are unaffected", async () => {
+    await owner().tenant.setWebMcpDisabled({ disabled: true });
+    const other = createTestCaller({
+      userId: world.kiran.id,
+      email: world.kiran.email,
+      name: world.kiran.name,
+      tenantId: world.tenant2.id,
+      businessId: world.business2.id,
+      headers: AGENT,
+    });
+    await expect(other.party.list({ page: 1, limit: 5 })).resolves.toBeTruthy();
   });
 });
 

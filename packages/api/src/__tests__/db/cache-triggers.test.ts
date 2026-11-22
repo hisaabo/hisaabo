@@ -10,8 +10,11 @@ import { createScratchControlDb, applyMigrationFile, DB_PKG, migrationFiles, typ
 
 describe("cache triggers: migration drift", () => {
   for (const dir of ["drizzle", "drizzle-control"] as const) {
-    it(`${dir}/ cache trigger migration matches cache-triggers.ts`, () => {
-      const f = migrationFiles(dir).find((n) => n.endsWith("_cache_invalidation_triggers.sql"));
+    it(`${dir}/ newest cache trigger migration matches cache-triggers.ts`, () => {
+      // Every change to the trigger spec ships as a new full, idempotent re-install migration;
+      // the older ones are history and are not edited.
+      const all = migrationFiles(dir).filter((n) => n.endsWith("_cache_invalidation_triggers.sql"));
+      const f = all[all.length - 1];
       expect(f).toBeDefined();
       expect(readFileSync(resolve(DB_PKG, dir, f!), "utf-8")).toBe(renderCacheTriggerMigration());
     });

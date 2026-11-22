@@ -543,6 +543,10 @@ function RootLayout() {
     pathname,
     navigate: (to, search) => navigate({ to, search } as any), // eslint-disable-line @typescript-eslint/no-explicit-any
     invalidate: () => queryClient.invalidateQueries(),
+    // The API says the owner switched agents off: refetch auth.me so the app (and Settings) show it.
+    onAgentsDisabled: () => {
+      void utils.auth.me.invalidate();
+    },
   });
 
   // ── Render logic (NO early returns before here — all hooks are above) ──

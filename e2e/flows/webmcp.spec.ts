@@ -673,6 +673,26 @@ test.describe("WebMCP: organization and operator switches", () => {
     }
   });
 
+  test("a tab that has not refreshed is stopped by the server and withdraws its tools", async ({ page }) => {
+    try {
+      await openApp(page, { path: "/parties" });
+      await expect.poll(() => registeredToolNames(page)).toEqual(TOOLS_BY_ROLE.owner);
+
+      // The owner turns agents off from somewhere else; this tab is not told.
+      await api().mutate("tenant.setWebMcpDisabled", { disabled: true });
+
+      const result = await startToolCall(page, "party_list", {});
+      expect(result.isError).toBe(true);
+      expect(envelope<{ error: string }>(result).error).toMatch(/turned off for this organization by its owner/);
+      await expect(dialog(page)).toHaveCount(0);
+
+      // The refusal is the server's, and the tab reacts: every tool is withdrawn.
+      await expect.poll(() => registeredToolNames(page)).toEqual([]);
+    } finally {
+      await api().mutate("tenant.setWebMcpDisabled", { disabled: false });
+    }
+  });
+
   test("a member cannot see or change the organization switch", async ({ browser }) => {
     const member = await createRoleMember(owner.tenantId, "admin");
     const context = await newContext(browser, { storageState: sessionStorageState(member.sessionToken) });

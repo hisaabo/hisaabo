@@ -136,10 +136,10 @@ Three switches control browser AI agents, from the broadest to the narrowest. A 
 | Switch | Who | Where | Effect |
 |---|---|---|---|
 | `WEBMCP_DISABLED=true` | Server operator | API environment variable (see [Self-Hosting](/self-hosting/)) | The web app registers nothing for anyone on the server, and the API refuses requests marked as browser-agent calls with 403. Settings says the administrator turned it off. Read at request time, so restart the API after changing it. It does not affect the MCP server or the CLI |
-| Organization switch | Organization **owner** only | Settings → Account → *Browser AI agents for your organization* | The web app registers nothing for anyone in the organization. Admins and everyone else cannot change it, and the API refuses them |
+| Organization switch | Organization **owner** only | Settings → Account → *Browser AI agents for your organization* | The web app registers nothing for anyone in the organization, and the API refuses agent-marked calls from it. Admins and everyone else cannot change it, and the API refuses them |
 | Personal switch | Each person | Settings → Account → *Browser AI agents* | Off by default; stored in the browser per user and organization |
 
-The organization switch is enforced by the web app, because that is where WebMCP lives: it controls whether Hisaabo is offered to a browser agent at all. It is not a substitute for permissions — an agent, like any signed-in user, can only do what the session's role allows.
+The organization switch is enforced twice. The web app registers nothing while it is on, and the API refuses every call that carries the browser-agent marker (`X-Hisaabo-Agent: webmcp`) from that organization with FORBIDDEN, on the very next call, even from a tab that has not refreshed and still has tools registered; the tab then withdraws its tools. It is not a substitute for permissions — the marker is attribution, an agent like any signed-in user can only do what the session's role allows, and a call that does not carry the marker is an ordinary call.
 
 Upgrading adds a nullable `source` column to `audit_log` and an `idempotency_keys` table to every tenant database, and a `webmcp_disabled` column to the organizations table. Nothing needs configuring. See the [upgrade guide](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md).
 

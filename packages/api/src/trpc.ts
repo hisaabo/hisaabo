@@ -7,6 +7,7 @@ import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.
 import { getMaintenanceStatus } from "./lib/maintenance-cache.js";
 import { assertActiveMembership } from "./lib/tenant-access.js";
 import { getBusinessAccess, getMembership, authzDenialError } from "./lib/authz.js";
+import { WEBMCP_ORG_DISABLED_MESSAGE } from "@hisaabo/shared";
 
 // ── Middleware context shape interfaces ────────────────────────
 // These represent the enriched context after each middleware runs.
@@ -141,6 +142,20 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
   // The session/API key remembers a tenantId from when it was issued; make sure
   // the user is still a member of an active tenant.
   await assertActiveMembership(ctx.tenantId, ctx.user.id);
+
+  // The owner's switch for browser AI agents. Enforced here, for every tenant and
+  // business procedure, so a tab that has not refreshed (and still has tools
+  // registered) is stopped by the server rather than trusted to hide them. It acts
+  // only on calls that identify themselves as browser-agent calls: the marker is
+  // client-supplied, so this is the second layer behind the web app not registering
+  // tools, never the permission boundary (roles are). The membership read is the
+  // cached one the call already makes, so it costs no query when warm.
+  if (ctx.source === "webmcp") {
+    const membership = await getMembership(ctx.tenantId, ctx.user.id);
+    if (membership?.webmcpDisabled) {
+      throw new TRPCError({ code: "FORBIDDEN", message: WEBMCP_ORG_DISABLED_MESSAGE });
+    }
+  }
 
   return next({
     ctx: {

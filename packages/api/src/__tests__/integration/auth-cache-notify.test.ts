@@ -108,6 +108,29 @@ describe("external writes invalidate caches via NOTIFY (no in-process call)", ()
     await expect((await as({ cookie: session })).party.list({ page: 1, limit: 5 })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("tenants.webmcp_disabled UPDATE by another process -> agent-marked calls refused on the next call", async () => {
+    const { session } = await member("admin");
+    const asAgent = async () => {
+      const headers = new Headers({
+        "x-requested-with": "hisaabo",
+        "x-business-id": biz.id,
+        cookie: `session_id=${session}`,
+        "x-hisaabo-agent": "webmcp",
+      });
+      const req = new Request("http://localhost:3000/api/trpc/x", { method: "POST", headers });
+      return factory(await createContext({ req, resHeaders: new Headers(), info: {} as never }));
+    };
+    await expect((await asAgent()).party.create(partyInput)).resolves.toBeTruthy(); // warm: allowed and cached
+
+    await external`update tenants set webmcp_disabled = true where id = ${tenant.id}`;
+    await eventually(async () => rejectsWith((await asAgent()).party.create(partyInput), "FORBIDDEN"));
+    // An ordinary (unmarked) call from the same member is untouched.
+    await expect((await as({ cookie: session })).party.create(partyInput)).resolves.toBeTruthy();
+
+    await external`update tenants set webmcp_disabled = false where id = ${tenant.id}`;
+    await eventually(async () => !(await rejectsWith((await asAgent()).party.create(partyInput), "FORBIDDEN")));
+  });
+
   it("tenants.status UPDATE -> 'Organization is not active'", async () => {
     const t = await createTenant({ plan: "business" });
     const u = await createUser();

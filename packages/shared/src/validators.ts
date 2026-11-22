@@ -427,6 +427,13 @@ export const paymentAllocationSchema = z.object({
 });
 
 /**
+ * What the API answers (FORBIDDEN) to a browser-agent call (x-hisaabo-agent: webmcp)
+ * once the organization's owner has turned agents off. The web app recognises it to
+ * withdraw its tools at once instead of waiting for its next session refresh.
+ */
+export const WEBMCP_ORG_DISABLED_MESSAGE = "Browser AI agents are turned off for this organization";
+
+/**
  * Optional client-supplied idempotency key for create mutations (invoice.create,
  * payment.create). Strictly opt-in: without a key every call creates a record.
  * Reusing a key with the SAME input is a replay: nothing new is created and the
