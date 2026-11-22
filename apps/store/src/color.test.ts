@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { accentInk, accentTokens, contrastRatio, parseHex, textOnAccent, type Rgb } from "./color";
 
 const WHITE: Rgb = [255, 255, 255];
+const PAGE: Rgb = [245, 245, 242];
+const DARKEST_SURFACE: Rgb = [235, 235, 230];
 
 describe("parseHex", () => {
   it("reads 6- and 3-digit hex and rejects the rest", () => {
@@ -19,10 +21,12 @@ describe("accent tokens", () => {
     expect(textOnAccent(parseHex("#1e3a8a")!)).toBe("#ffffff");
   });
 
-  it("makes the accent readable as text on white for any accent", () => {
+  it("makes the accent readable as text on every neutral surface, for any accent", () => {
     for (const hex of ["#f5c518", "#ffd166", "#7dd3fc", "#5b5bd6", "#2f7d4f", "#e11d48", "#00ff00"]) {
       const ink = parseHex(accentInk(parseHex(hex)!))!;
-      expect(contrastRatio(ink, WHITE), hex).toBeGreaterThanOrEqual(4.5);
+      for (const surface of [WHITE, PAGE, DARKEST_SURFACE]) {
+        expect(contrastRatio(ink, surface), hex).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 

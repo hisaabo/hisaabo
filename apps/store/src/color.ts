@@ -7,6 +7,8 @@
 export type Rgb = [number, number, number];
 
 const WHITE: Rgb = [255, 255, 255];
+/** The darkest neutral surface the accent is ever used as text on (`--store-bg-alt`). */
+const DARKEST_SURFACE: Rgb = [235, 235, 230];
 const INK: Rgb = [24, 24, 27];
 
 export function parseHex(hex: string | null | undefined): Rgb | null {
@@ -47,11 +49,14 @@ export function textOnAccent(accent: Rgb): string {
   return contrastRatio(accent, WHITE) >= contrastRatio(accent, INK) ? "#ffffff" : toHex(INK);
 }
 
-/** The accent, darkened only as far as needed to read as text on white (>= 4.5:1). */
+/**
+ * The accent, darkened only as far as needed to read as text (>= 4.5:1) on every
+ * neutral surface of the store, the darkest of which is a little darker than white.
+ */
 export function accentInk(accent: Rgb): string {
   let rgb = accent;
   // Each pass mixes 8% more black in; 40 passes is far past what any hue needs.
-  for (let pass = 0; pass < 40 && contrastRatio(rgb, WHITE) < 4.5; pass++) rgb = shade(rgb, 0.08);
+  for (let pass = 0; pass < 40 && contrastRatio(rgb, DARKEST_SURFACE) < 4.5; pass++) rgb = shade(rgb, 0.08);
   return toHex(rgb);
 }
 

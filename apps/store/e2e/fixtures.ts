@@ -35,6 +35,8 @@ export interface FixtureOptions {
   photoLed?: boolean;
   /** Report real stock: items track inventory and none is low. */
   trackStock?: boolean;
+  /** The business's accent colour (default: a green). */
+  accent?: string;
 }
 
 export function buildItems(opts: FixtureOptions = {}): StoreItem[] {
@@ -96,7 +98,7 @@ export function buildCatalog(opts: FixtureOptions = {}): CatalogPage {
     business: {
       name: "Jaisa Organics",
       tagline: "Farm-fresh spices, honey and staples from our family farm",
-      accentColor: "#2f7d4f",
+      accentColor: opts.accent ?? "#2f7d4f",
       minOrderAmount: "1000.00",
       deliveryNote:
         "We hold no inventory: everything is packed fresh after you order. Delivery in 3 to 5 days across India.",
