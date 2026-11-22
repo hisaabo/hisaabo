@@ -172,6 +172,8 @@ Emergencies and recovery:
 | `TENANT_POOL_DRAINING_MAX` | No | Multi-tenant only. How many pools that were evicted from the cache may still hold open connections at once (default: `TENANT_POOL_MAX`; `0` closes every evicted pool at once). Past it the oldest is closed, which can fail a request still using it in a storm. See [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `10` |
 | `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
 | `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
+| `IRP_PUBLIC_KEY_PEM` / `IRP_PUBLIC_KEY_PATH` | To use e-invoicing against the real IRP | The NIC e-invoice **production** public key: the PEM text itself (`IRP_PUBLIC_KEY_PEM`, newlines may be written as a literal `\n`) or the path of a PEM file (`IRP_PUBLIC_KEY_PATH`, preferred in Docker). `_PEM` wins if both are set. Used for businesses whose e-invoice settings have sandbox mode off. Without a valid key e-invoice generation, retry and cancel are refused with "E-invoicing is not configured: the NIC public key is missing or invalid". See [E-invoicing (IRP)](#e-invoicing-irp) | `/run/secrets/irp_public_key` |
+| `IRP_SANDBOX_PUBLIC_KEY_PEM` / `IRP_SANDBOX_PUBLIC_KEY_PATH` | To use e-invoicing in sandbox mode | The same for the NIC e-invoice **sandbox**. NIC issues a different key for the sandbox; the sandbox and production keys are never substituted for each other | `/run/secrets/irp_sandbox_public_key` |
 | `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
 | `MIGRATION_LOCK_TIMEOUT` | No | Migrations set a Postgres `lock_timeout` so DDL that cannot get its table lock gives up instead of queueing every other query behind it (a full outage of that table). A number with an optional `ms`, `s` or `min` suffix (a bare number is milliseconds); `0` disables the timeout. Default `5s`; an invalid value logs a warning and uses the default | `5s` |
 | `MIGRATION_LOCK_RETRIES` | No | How many times a migration that hit that lock timeout is retried, with exponential backoff (1 s, 2 s, 4 s, ... capped at 30 s, plus jitter), after the first attempt. Default 5; an invalid value logs a warning and uses the default. Raise both on a busy database if an upgrade logs `lock timeout - retrying` and finally `could not acquire a lock` | `5` |
@@ -455,6 +457,67 @@ On the ONCE all-in-one image the same command works inside the container (`docke
 A login-link proves nothing about the mailbox. Before issuing one for an account that has never signed in by email link (for example an invited address), check that the account was created by that person: the address may have been registered with a password by someone else under v0.9.0 or through the legacy API, and that password stays valid after an operator link. If in doubt, delete the user and re-invite them.
 
 Each issued link leaves a row in `magic_link_tokens` with `ip_address = 'admin-cli'` (issue time in `created_at`, redemption time in `used_at`) and a line on stderr. There is no platform-level audit table; the per-business audit log is not used. After signing in, fix `RESEND_API_KEY` / `EMAIL_FROM` so normal sign-in works.
+
+## E-invoicing (IRP)
+
+E-invoicing has two kinds of configuration:
+
+- **Per business, in the app** (E-Invoicing, Settings): the business's IRP API GSTIN, client id and secret, username and password, and sandbox on/off. These are stored encrypted with `ENCRYPTION_KEY`.
+- **Per server, in the environment:** the **NIC public key**. The IRP only accepts a sign-in request that is RSA-encrypted with NIC's public key, and NIC issues a different key for the sandbox and for production, so no key is bundled in Hisaabo. Before v0.10.1 a key was bundled and it was not a valid key: e-invoicing never signed in to the IRP (see [UPGRADING.md](UPGRADING.md#e-invoicing-never-signed-in-to-the-irp)).
+
+### Getting the key
+
+Download the public key from the NIC e-invoice portal you are connecting to, after logging in with that portal's API credentials: the **sandbox** portal for the sandbox key, the **production** portal for the production key. The two keys are different files. Use the portal's own API documentation to find the download for your account (portal menus and addresses change, so follow the documentation NIC gives you rather than a link copied from here). The file is a PEM public key (it starts with `-----BEGIN PUBLIC KEY-----`) or a PEM certificate containing one; it must be an RSA key. Treat it as configuration, not a secret, but do not edit it.
+
+### Configuring it
+
+| Variable | Used when | Holds |
+|---|---|---|
+| `IRP_SANDBOX_PUBLIC_KEY_PATH` or `IRP_SANDBOX_PUBLIC_KEY_PEM` | a business has sandbox mode **on** | the sandbox key |
+| `IRP_PUBLIC_KEY_PATH` or `IRP_PUBLIC_KEY_PEM` | a business has sandbox mode **off** | the production key |
+
+Prefer a file (`*_PATH`). With Docker Compose, mount it as a file-based secret and point the variable at the mounted path. In `docker-compose.prod.yml` (or an override file):
+
+```yaml
+secrets:
+  irp_public_key:
+    file: ./irp-public-key.pem            # the production key
+  irp_sandbox_public_key:
+    file: ./irp-sandbox-public-key.pem    # the sandbox key (only if you use sandbox mode)
+
+services:
+  api:
+    secrets:
+      - irp_public_key
+      - irp_sandbox_public_key
+```
+
+and in `.env.prod`:
+
+```bash
+IRP_PUBLIC_KEY_PATH=/run/secrets/irp_public_key
+IRP_SANDBOX_PUBLIC_KEY_PATH=/run/secrets/irp_sandbox_public_key
+```
+
+To put the PEM text in the environment instead (a `.env` value cannot contain real newlines), write the newlines as a literal `\n`: `IRP_PUBLIC_KEY_PEM=-----BEGIN PUBLIC KEY-----\nMIIB...\n-----END PUBLIC KEY-----`. Restart the API after changing any of these. The key is read once and cached, and a key file that changes on disk is picked up on the next request.
+
+Only the sandbox key is used in sandbox mode and only the production key in production mode: there is no fallback from one to the other, because a wrong key only shows up as the IRP rejecting the sign-in, which is much harder to diagnose than "not configured".
+
+### Checking it
+
+In the app, open **E-Invoicing, Settings** and press **Test Connection** (`eInvoice.testConnection`). It reports which step failed:
+
+- **Server setup: the NIC public key is missing or invalid.** The variable for that mode is not set, the file cannot be read, or the value is not an RSA PEM public key. The message names the variable. Fix the environment and restart.
+- **Network.** The IRP could not be reached or did not answer within 30 seconds.
+- **Sign-in.** The IRP answered and rejected the credentials (client id/secret, username, password, GSTIN, or a key for the wrong environment).
+
+At startup the API logs a warning (`E-invoicing is not configured: ...`) if a key variable is set but does not hold a valid key. With no key set, nothing is logged, because e-invoicing is optional.
+
+If the key is missing or invalid, generating, retrying or cancelling an e-invoice is refused up front with a precondition error and **nothing is changed**: an invoice is never marked `failed` because of server configuration, and it works again as soon as the key is configured. Finishing a half-done cancel (the IRN is already cancelled, only the invoice is left) needs no IRP and works without a key.
+
+:::note
+The sign-in request follows NIC's published e-invoice documentation (see the e-invoicing entries in [compliance-audit.md](compliance-audit.md)). It has not been verified against NIC's live sandbox in this release: run **Test Connection** in sandbox mode with real sandbox credentials before relying on it, and report what it says.
+:::
 
 ## Kamal / Once.com Compatibility
 

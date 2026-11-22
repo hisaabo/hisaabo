@@ -35,6 +35,7 @@ const WEB_ONLY: Set<string> = new Set([
   // GST compliance (desktop-only)
   "gst/index.mdx",
   "gst/gstr1.mdx",
+  "gst/e-invoicing.mdx",
 
   // Online store admin (desktop-only)
   "online-store/index.mdx",
