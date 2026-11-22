@@ -716,7 +716,14 @@ describe("eInvoice.cancel also cancels the invoice", () => {
         conversionFactor: "1",
       }],
     });
-    await caller.eInvoice.generate({ invoiceId: invoice.id });
+    // invoice.create already submits a B2B sale of an e-invoicing business to the (mocked) IRP in a
+    // background task that runs after the response. Calling eInvoice.generate here used to race it
+    // (whichever lost either threw "IRN already generated" or overwrote what the test had just set,
+    // e.g. irnAckDate), which made the cancel tests flaky. Wait for that task to finish instead:
+    // from "generated" on it writes nothing more.
+    await vi.waitFor(async () => {
+      expect((await row(invoice.id)).eInvoiceStatus).toBe("generated");
+    }, { timeout: 5000, interval: 20 });
     return { caller, item, invoice };
   }
 
