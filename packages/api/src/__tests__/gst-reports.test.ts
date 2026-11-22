@@ -39,7 +39,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { gstr1ToCSV, gstr1ToPortalJson, type GSTR1Report } from "../lib/gst-reports.js";
+import { gstr1ToCSV, gstr1ToPortalJson, toUqc, type GSTR1Report } from "../lib/gst-reports.js";
+import { units } from "@hisaabo/shared";
 
 // =============================================================================
 // Pure functions — extracted verbatim from lib/gst-reports.ts
@@ -1414,7 +1415,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1434,7 +1435,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1453,15 +1454,15 @@ describe("gstr1ToPortalJson — HSN section", () => {
     expect(entry.qty).toBe(10);
     expect(entry.txval).toBe(100000);
     expect(entry.num).toBe(1);
-    expect(entry.uqc).toBe("NOS"); // default UQC when unit not known
+    expect(entry.uqc).toBe("NOS"); // the row's UQC is passed through
   });
 
   it("assigns sequential num starting from 1", () => {
     const json = gstr1ToPortalJson(
       makePortalReport({
         hsn: [
-          { hsn: "8471", description: "Computers", quantity: 5, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, totalValue: 59000 },
-          { hsn: "7306", description: "Steel Pipes", quantity: 20, taxableValue: 20000, cgst: 1800, sgst: 1800, igst: 0, totalValue: 23600 },
+          { hsn: "8471", description: "Computers", uqc: "NOS", taxRate: 18, quantity: 5, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, totalValue: 59000 },
+          { hsn: "7306", description: "Steel Pipes", uqc: "NOS", taxRate: 18, quantity: 20, taxableValue: 20000, cgst: 1800, sgst: 1800, igst: 0, totalValue: 23600 },
         ],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1478,7 +1479,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1577,5 +1578,56 @@ describe("gstr1ToCSV — formula injection", () => {
     expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
     expect(csv).toContain(`"'@SUM(1+1)"`);
     for (const line of csv.split("\n")) expect(line.startsWith("=")).toBe(false);
+  });
+});
+
+// =============================================================================
+// Section 7: GSTR-1 Table 12 (HSN summary) — rate and UQC per row (0.10.1)
+// =============================================================================
+
+describe("toUqc — every unit Hisaabo offers maps to a GST UQC code", () => {
+  // The GST UQC list has no inch, jar or pouch: those are OTH. "pcs" stays NOS (numbers).
+  const expected: Record<(typeof units)[number], string> = {
+    pcs: "NOS", kg: "KGS", g: "GMS", l: "LTR", ml: "MLT", m: "MTR", cm: "CMS", ft: "FTS",
+    in: "OTH", box: "BOX", dozen: "DOZ", pair: "PRS", set: "SET", pkt: "PAC", bun: "BUN",
+    pouch: "OTH", jar: "OTH", btl: "BTL", bag: "BAG", ton: "TON", pack: "PAC", pet: "NOS",
+    person: "NOS", other: "OTH",
+  };
+
+  it.each(units.map((u) => [u, expected[u]] as const))("%s -> %s", (unit, uqc) => {
+    expect(toUqc(unit)).toBe(uqc);
+  });
+
+  it("is case-insensitive; an unknown or missing unit is NOS (numbers)", () => {
+    expect(toUqc("KG")).toBe("KGS");
+    expect(toUqc("Case")).toBe("NOS");
+    expect(toUqc(null)).toBe("NOS");
+    expect(toUqc(undefined)).toBe("NOS");
+  });
+});
+
+describe("Table 12 rows in the portal JSON and the CSV", () => {
+  const rows: GSTR1Report["hsn"] = [
+    { hsn: "730890", description: "Steel Rods", uqc: "KGS", taxRate: 5, quantity: 12.5, taxableValue: 1250, cgst: 31.25, sgst: 31.25, igst: 0, totalValue: 1312.5 },
+    { hsn: "730890", description: "Steel Rods", uqc: "KGS", taxRate: 18, quantity: 5, taxableValue: 1100, cgst: 90, sgst: 90, igst: 18, totalValue: 1298 },
+  ];
+
+  it("the same HSN at two rates is two JSON rows, each with its own rt and the row's UQC", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ hsn: rows }), "27AABCA0000R1ZM", "2025-26", "012026");
+    const data = (json.hsn as { data: Array<Record<string, unknown>> }).data;
+    expect(data).toEqual([
+      { num: 1, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 12.5, rt: 5, txval: 1250, iamt: 0, camt: 31.25, samt: 31.25, csamt: 0 },
+      { num: 2, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 5, rt: 18, txval: 1100, iamt: 18, camt: 90, samt: 90, csamt: 0 },
+    ]);
+  });
+
+  it("the CSV lists each row with UQC and rate, and neutralises a formula in the description", () => {
+    const csv = gstr1ToCSV(makeReport({ hsn: [{ ...rows[0]!, description: "=1+1" }, rows[1]!] }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(at).toBeGreaterThan(-1);
+    expect(lines[at + 1]).toBe("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value");
+    expect(lines[at + 2]).toBe(`"730890","'=1+1","KGS","12.5","5","1250.00","31.25","31.25","0.00","0.00","1312.50"`);
+    expect(lines[at + 3]).toBe(`"730890","Steel Rods","KGS","5","18","1100.00","90.00","90.00","18.00","0.00","1298.00"`);
   });
 });

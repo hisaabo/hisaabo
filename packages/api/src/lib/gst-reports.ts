@@ -60,10 +60,15 @@ export interface GSTR1Report {
     sgst: number;
     igst: number;
   }>;
-  // HSN summary
+  // HSN summary (Table 12): one row per (HSN, UQC, GST rate). The same HSN sold at 5% and at 18%
+  // is two rows, and quantities in different units are never added together.
   hsn: Array<{
     hsn: string;
     description: string;
+    /** UQC (unit quantity code) of the unit `quantity` is in, e.g. "KGS", "NOS" */
+    uqc: string;
+    /** GST rate of the lines in this row, in percent, e.g. 18 */
+    taxRate: number;
     quantity: number;
     taxableValue: number;
     cgst: number;
@@ -123,6 +128,21 @@ export interface GSTR3BReport {
     sgst: number;
     total: number;
   };
+}
+
+// ── Table 12 helpers ───────────────────────────────────────────
+
+/** Key of one Table 12 row: the same HSN at another rate, or in another unit, is another row. */
+function hsnRowKey(hsn: string, uqc: string, taxRate: number): string {
+  return `${hsn}|${uqc}|${taxRate}`;
+}
+
+/** A stored quantity ("12.500", at most 3 decimals) as integer thousandths, by digits. */
+function quantityToMilli(quantity: string): bigint {
+  const m = /^(-?)(\d+)(?:\.(\d*))?$/.exec(quantity.trim());
+  if (!m) return 0n;
+  const milli = BigInt(m[2]! + (m[3] ?? "").padEnd(3, "0").slice(0, 3));
+  return m[1] ? -milli : milli;
 }
 
 // ── Generator ──────────────────────────────────────────────────
@@ -185,12 +205,16 @@ export async function generateGSTR1(
   for (const li of allLineItems) {
     if (li.itemId) allItemIds.add(li.itemId);
   }
+  //
+  // The HSN is the item's CURRENT one: invoice lines carry no HSN snapshot until 0.11.0, so
+  // editing an item's HSN also moves its past invoices in this summary.
   const itemHsnData = allItemIds.size > 0
-    ? await db.select({ id: itemsTable.id, hsn: itemsTable.hsn })
+    ? await db.select({ id: itemsTable.id, hsn: itemsTable.hsn, unit: itemsTable.unit })
         .from(itemsTable)
         .where(inArray(itemsTable.id, [...allItemIds]))
     : [];
   const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, i.hsn || "0000"]));
+  const itemUnitLookup = new Map(itemHsnData.map((i) => [i.id, i.unit as string | null]));
 
   // Fix 3: State comparison using stateCode (preferred) with text fallback
   const isSameState = (partyState: string | null, partyStateCode: string | null) =>
@@ -207,8 +231,10 @@ export async function generateGSTR1(
   const b2cSmallMap = new Map<number, {
     taxRate: number; taxable: string; cgst: string; sgst: string; igst: string;
   }>();
+  // Table 12 rows keyed by HSN + UQC + GST rate (see `hsnRowKey`); the quantity is summed in
+  // integer thousandths (stored quantities have three decimals), never as JS floats.
   const hsnSummaryMap = new Map<string, {
-    hsn: string; description: string; quantity: number;
+    hsn: string; description: string; uqc: string; taxRate: number; quantityMilli: bigint;
     taxable: string; totalValue: string; cgst: string; sgst: string; igst: string;
   }>();
   /** One line's tax as [cgst, sgst, igst]: split in half (odd paisa to CGST) intra-state, IGST otherwise. */
@@ -278,27 +304,31 @@ export async function generateGSTR1(
       }
     }
 
-    // Fix 1: HSN summary using actual HSN from items table
+    // Table 12 (HSN summary): the item's HSN, the unit the quantity is in, and the GST rate.
     for (const li of lineItems) {
       const itemHsn = li.itemId
         ? (itemHsnLookup.get(li.itemId) || "0000")
         : "0000";
-      const existing = hsnSummaryMap.get(itemHsn) || {
+      // The quantity is in the unit the line was billed in (the base unit when none was chosen).
+      const uqc = toUqc(li.selectedUnit ?? (li.itemId ? itemUnitLookup.get(li.itemId) : null));
+      const taxRate = parseFloat(li.taxPercent);
+      const key = hsnRowKey(itemHsn, uqc, taxRate);
+      const existing = hsnSummaryMap.get(key) || {
         // HSN summary description is a human-readable label for the HSN
         // group — use itemName (required snapshot), not the optional notes
         // column.
-        hsn: itemHsn, description: li.itemName, quantity: 0,
+        hsn: itemHsn, description: li.itemName, uqc, taxRate, quantityMilli: 0n,
         taxable: "0.00", totalValue: "0.00", cgst: "0.00", sgst: "0.00", igst: "0.00",
       };
       const itemTax = money.add(li.taxAmount, "0");
       const [lCgst, lSgst, lIgst] = lineTaxHeads(itemTax, !!sameState);
-      existing.quantity += parseFloat(li.quantity);
+      existing.quantityMilli += quantityToMilli(li.quantity);
       existing.taxable = money.add(existing.taxable, money.sub(li.totalAmount, itemTax));
       existing.totalValue = money.add(existing.totalValue, li.totalAmount);
       existing.cgst = money.add(existing.cgst, lCgst);
       existing.sgst = money.add(existing.sgst, lSgst);
       existing.igst = money.add(existing.igst, lIgst);
-      hsnSummaryMap.set(itemHsn, existing);
+      hsnSummaryMap.set(key, existing);
     }
   }
 
@@ -404,10 +434,14 @@ export async function generateGSTR1(
       sgst: money.toNumber(e.sgst),
       igst: money.toNumber(e.igst),
     })),
-    hsn: Array.from(hsnSummaryMap.values()).map((e) => ({
+    hsn: Array.from(hsnSummaryMap.values())
+      .sort((a, b) => a.hsn.localeCompare(b.hsn) || a.taxRate - b.taxRate || a.uqc.localeCompare(b.uqc))
+      .map((e) => ({
       hsn: e.hsn,
       description: e.description,
-      quantity: e.quantity,
+      uqc: e.uqc,
+      taxRate: e.taxRate,
+      quantity: Number(e.quantityMilli) / 1000,
       taxableValue: money.toNumber(e.taxable),
       cgst: money.toNumber(e.cgst),
       sgst: money.toNumber(e.sgst),
@@ -594,6 +628,11 @@ function stateNameToCode(state: string): string {
 
 // UQC (Unit Quantity Code) mapping — GST portal codes
 const UQC_MAP: Record<string, string> = {
+  // Hisaabo's own unit keys (the `units` list in @hisaabo/shared). The GST UQC list has no
+  // code for inches, jars or pouches, so those are "OTH" (others).
+  "g": "GMS", "l": "LTR", "m": "MTR", "cm": "CMS", "ft": "FTS", "in": "OTH",
+  "pair": "PRS", "pkt": "PAC", "bun": "BUN", "pouch": "OTH", "jar": "OTH",
+  "btl": "BTL", "pet": "NOS", "person": "NOS", "other": "OTH",
   "pcs": "NOS", "nos": "NOS", "piece": "NOS", "pieces": "NOS",
   "unit": "NOS", "units": "NOS", "number": "NOS",
   "kg": "KGS", "kgs": "KGS", "kilogram": "KGS", "kilograms": "KGS",
@@ -614,7 +653,7 @@ const UQC_MAP: Record<string, string> = {
   "mlt": "MLT", "ml": "MLT", "millilitre": "MLT", "milliliter": "MLT",
 };
 
-function toUqc(unit?: string | null): string {
+export function toUqc(unit?: string | null): string {
   if (!unit) return "NOS";
   return UQC_MAP[unit.toLowerCase()] ?? "NOS";
 }
@@ -733,17 +772,20 @@ export function gstr1ToPortalJson(
   for (const cn of report.creditNotes) pushNote(cn, "C");
   for (const dn of report.debitNotes) pushNote(dn, "D");
 
-  // HSN summary
+  // HSN summary (Table 12): one row per HSN + UQC + GST rate (`rt`).
   const hsnData = report.hsn.map((entry, idx) => ({
     num: idx + 1,
     hsn_sc: entry.hsn,
     desc: entry.description,
-    uqc: toUqc(null),
+    uqc: entry.uqc,
     qty: entry.quantity,
+    rt: entry.taxRate,
     txval: entry.taxableValue,
     iamt: entry.igst,
     camt: entry.cgst,
     samt: entry.sgst,
+    // TODO(0.11.0): cess is not modelled on sales lines yet, so it is always 0 here and in the
+    // CSV; once lines carry a cess rate and amount, sum it per row.
     csamt: 0,
   }));
 
@@ -790,6 +832,21 @@ export function gstr1ToCSV(report: GSTR1Report): string {
     lines.push(csvRow([
       row.taxRate, row.taxableValue.toFixed(2),
       row.cgst.toFixed(2), row.sgst.toFixed(2), row.igst.toFixed(2),
+    ]));
+  }
+  lines.push("");
+
+  // HSN summary (Table 12): one row per HSN + UQC + GST rate
+  lines.push("HSN - Summary of Outward Supplies (Table 12)");
+  lines.push("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value");
+  for (const row of report.hsn) {
+    lines.push(csvRow([
+      row.hsn, row.description, row.uqc, row.quantity, row.taxRate,
+      row.taxableValue.toFixed(2),
+      row.cgst.toFixed(2), row.sgst.toFixed(2), row.igst.toFixed(2),
+      // TODO(0.11.0): cess is not modelled on sales lines yet; always 0 until it is.
+      "0.00",
+      row.totalValue.toFixed(2),
     ]));
   }
   lines.push("");

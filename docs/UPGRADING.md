@@ -341,6 +341,20 @@ The code must be 4 to 8 digits (spaces, dots and hyphens are ignored: `7306.90` 
 
 No action is needed if every item you e-invoice already has an HSN. Nothing was ever sent to the IRP with a made-up code, since no e-invoice could be generated before 0.10.1 (see above).
 
+### GSTR-1 Table 12 (HSN summary): one row per HSN, unit and GST rate
+
+The HSN summary in GSTR-1 had one row per HSN code. An HSN sold at 5% on some invoices and 18% on others was a single row with the two rates mixed and no rate at all, and every row said unit `NOS`. From 0.10.1:
+
+- **A row is one HSN + unit + GST rate.** The same HSN at 5% and at 18% is two rows, and each row states its rate (`taxRate`; `rt` in the portal JSON). Quantities in different units (kilograms and grams, say) are separate rows, never added together. Each row's taxable value and tax still add up to the same totals as the B2B and B2CS sections and GSTR-3B Table 3.1(a); only the grouping changed.
+- **The unit (UQC) comes from the line.** It is the unit the line was billed in, or the item's unit when none was chosen, translated to the GST code (`kg` is `KGS`, `g` is `GMS`, `l` is `LTR`, `m` is `MTR`, `pair` is `PRS`, and so on for every unit Hisaabo offers; inches, jars and pouches have no GST code and are `OTH`). `pcs` stays `NOS`. A line with no item has no unit and is `NOS`. Before 0.10.1 the portal JSON said `NOS` for every row, and `g`, `l`, `m`, `cm`, `ft`, `pair`, `pkt`, `bun`, `btl` and a few others were not translated at all.
+- **Quantities are added exactly** (in thousandths), not as floating-point numbers.
+- **The portal JSON `hsn.data` rows now carry `rt`** (and the real `uqc`); the GSTR-1 CSV gets a new **HSN summary** section with HSN, description, UQC, quantity, rate, taxable value, CGST, SGST, IGST, cess and total value. Cess is not modelled on sales lines yet and is always 0 (planned for 0.11.0).
+- **`gst.gstr1` rows carry two new fields, `uqc` and `taxRate`** (additive; the existing fields are unchanged), and the rows are sorted by HSN, rate and unit.
+
+**A known limitation that stays until 0.11.0: HSN comes from the live item, not from the invoice.** Invoice lines carry no HSN snapshot, so the summary uses each item's *current* HSN. If you change an item's HSN, every past invoice of that item moves to the new HSN in Table 12 for months you have already filed, and a line typed in without an item (or an item with no HSN) is filed under `0000`, which is not a real HSN code. Before filing, check that every item you sold has the HSN you want; do not change the HSN of an item after the month is filed unless you are refiling it.
+
+If you downloaded or uploaded GSTR-1 Table 12 before 0.10.1, compare it with the new one: rows for an HSN sold at more than one rate are now split.
+
 ### E-invoice cancellation now cancels the invoice
 
 Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.

@@ -47,7 +47,7 @@ export const gstEndpoints: EndpointGroup = {
             igst: "0.00",
           },
           hsnSummary: [
-            { hsn: "6109", description: "T-shirts", quantity: 500, taxableValue: "75000.00", cgst: "6750.00", sgst: "6750.00", igst: "0.00" },
+            { hsn: "6109", description: "T-shirts", uqc: "NOS", taxRate: 12, quantity: 500, taxableValue: "75000.00", cgst: "6750.00", sgst: "6750.00", igst: "0.00" },
           ],
           documentSummary: {
             invoicesIssued: { from: "INV-2026-0038", to: "INV-2026-0055", total: 18, cancelled: 1 },
@@ -82,6 +82,7 @@ print("Period:", report["period"])`,
         "Both GST-registered and non-GST businesses can use this endpoint. Non-GST businesses receive the same data with generic terminology.",
         "Only sale invoices with status != 'cancelled' are included.",
         "B2B section only includes invoices where the customer has a GSTIN.",
+        "The HSN summary (Table 12) has one row per HSN, UQC and GST rate: the same HSN sold at 5% and at 18% is two rows, each with its `taxRate`, and quantities in different units are never added together (`uqc` is the code of the unit the quantity is in). The HSN is the item's current HSN (invoice lines carry no HSN snapshot until 0.11.0); a line with no item, or an item with no HSN, is filed under `0000`. Cess is not modelled yet and is always 0.",
       ],
       relatedEndpoints: ["gst-gstr1csv", "gst-gstr1json", "gst-gstr3b"],
     },
