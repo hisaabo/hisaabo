@@ -4,6 +4,13 @@
 
 A bug-fix release. Take the usual backup, then **upgrade the API first**: set `HISAABO_API_IMAGE` to `v0.10.1`, then `pull api` and `up -d api` as in [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install). The migration step applies the small additive migrations listed below on first boot. Then upgrade the web app and the store. There are **no breaking API changes**: every procedure keeps its name and its success response shape, and 0.10.0 web, desktop, mobile, CLI and MCP clients keep working against a 0.10.1 API. Multi-tenant operators should read the connection-pool sizing below.
 
+**Action needed** (each item says who it concerns; nothing else has to be done):
+
+1. **If you use e-invoicing: configure the NIC public key** (`IRP_PUBLIC_KEY_PATH` / `IRP_PUBLIC_KEY_PEM`, and the `IRP_SANDBOX_*` pair for sandbox mode). Until you do, generating, retrying and cancelling an e-invoice are refused. See [E-invoicing never signed in to the IRP](#e-invoicing-never-signed-in-to-the-irp).
+2. **Review the GST returns you have already filed.** Past periods are recomputed with corrected rules; run the per-month query to find the months that change. See [What to do after upgrading](#what-to-do-after-upgrading), step 1.
+3. **Review supplier and customer opening balances** with the review query: the meaning of a positive supplier balance changed. Run it again after your users' mobile and desktop apps update. See step 5 of the same list.
+4. **Multi-tenant: size the tenant connection pools** (`TENANT_POOL_MAX`, `TENANT_POOL_PER_DB_MAX`, `TENANT_POOL_DRAINING_MAX`) for your `max_connections`. See [Multi-tenant: size the tenant connection pools](#multi-tenant-size-the-tenant-connection-pools).
+
 ### For operators
 
 - **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
@@ -39,9 +46,7 @@ Three additive schema migrations for the browser agent (WebMCP) hardening, plus 
 - `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Idempotency is strictly opt-in: clients that do not send a key behave exactly as before, and nothing derives a key. Repeating the identical request with the same key within 15 minutes creates nothing and answers with the live record flagged `idempotentReplay: true` (a keyed call that did create the record is flagged `false`; a deleted record is a `CONFLICT`). The table keeps only the record id and a hash of the request, never a copy of the response, and expired rows are purged by the next keyed write and by an hourly sweep.
 - `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me` and enforced by the API for agent-marked calls (FORBIDDEN). It rides in the cached membership entry, so the `hisaabo_cache_tenants` cache-invalidation trigger now also fires on changes to this column: the `*_webmcp_cache_invalidation_triggers` migrations re-install the (idempotent) cache triggers with the new column list; nothing else about them changes.
 
-The recurring-invoice and ledger fixes add their own:
-
-Two additive migrations, applied automatically by the migration step. The first is `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted); the second, `ledger_adjustment_accounts` (`drizzle-tenant/0011`; `drizzle/0024`), is data-only and described under [Corrected accounting and GST figures](#corrected-accounting-and-gst-figures). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+The recurring-invoice and ledger fixes add two more additive migrations of their own, applied automatically by the same migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted) and `ledger_adjustment_accounts` (`drizzle-tenant/0011`; `drizzle/0024`), which is data-only and described under [Corrected accounting and GST figures](#corrected-accounting-and-gst-figures). `recurring_run_occurrence` adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
 
 - **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
 - It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
@@ -121,7 +126,12 @@ After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLL
 
 ### Upgrade
 
-Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No environment variable is required or changed; the two pool settings above are optional but recommended for multi-tenant installs with more tenants than pool slots.
+Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No existing environment variable changes meaning. 0.10.1 adds these, all documented in [DEPLOYMENT.md](DEPLOYMENT.md#environment-variables) and `.env.prod.example`:
+
+- `EXPOSE_VERSION` (optional): `false` hides `GET /api/version`. Default on.
+- `WEBMCP_DISABLED` (optional): `true` switches browser AI agents (WebMCP) off for everyone on this server. Default off.
+- `TENANT_POOL_MAX`, `TENANT_POOL_PER_DB_MAX` and `TENANT_POOL_DRAINING_MAX` (**recommended for multi-tenant**; ignored otherwise): the defaults allow up to 500 tenant connections per API process, so size them for your `max_connections` (see [Multi-tenant: size the tenant connection pools](#multi-tenant-size-the-tenant-connection-pools)). `TENANT_POOL_DRAINING_MAX` is new in 0.10.1.
+- `IRP_PUBLIC_KEY_PEM` / `IRP_PUBLIC_KEY_PATH` and `IRP_SANDBOX_PUBLIC_KEY_PEM` / `IRP_SANDBOX_PUBLIC_KEY_PATH` (**required for e-invoicing**, not otherwise): the NIC public key for each mode you use. 0.10.1 no longer bundles one.
 
 ```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
@@ -134,6 +144,8 @@ ONCE: pull the new image and restart it as usual; it runs the same migration ste
 Verify:
 
 - `curl http://127.0.0.1:3000/health` returns `ok`.
+- `curl https://<your-api-host>/api/version` returns `{"version":"0.10.1"}` (404 means the API is still older than 0.10.1, or you set `EXPOSE_VERSION=false`).
+- E-invoicing only: in the app, **E-Invoicing, Settings, Test Connection** succeeds. It names the step that failed (the public key, the network or the sign-in).
 - Multi-tenant: the log shows `Tenant database access: closed to PUBLIC` with `failed: 0`. Spot-check from the host: connect as one tenant's role to another tenant's database and expect `permission denied for database`.
 - Multi-tenant: sign in as a user whose organisation has a business, and open an invoice (it proves the tenant role still connects to its own database).
 - Create an organisation with a long name in a multi-tenant deployment; its row in `tenants` has a `t_...` `db_name`.
@@ -278,6 +290,8 @@ What was wrong, and what you see now:
 
    There is deliberately no bulk migration. The statement is safe to run once per party; running it twice flips it back.
 
+   **Run the review query again after your users' mobile and desktop apps have updated.** The 0.10.0 mobile and desktop apps keep showing the bare "Opening Balance" box, where a positive number on a supplier now means "they owe you". A supplier created or edited from such an app after you did this review can therefore introduce a new row with the sign you did not intend, and the query will list it. The web app and the 0.10.1 mobile app label the direction ("To receive" / "To pay").
+
 #### Points to confirm with your CA
 
 - A **purchase-side debit note** (a debit note you raise against a supplier) is treated like a purchase return: it reduces input credit in GSTR-3B Table 4, matching the books. Under the GST law a *debit note issued by the supplier* increases credit; Hisaabo's purchase-side debit note is the one you issue.
@@ -300,7 +314,7 @@ The same release corrects how the sign-in request is built and how the IRP's `St
 
 Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.
 
-From v0.10.1, **Cancel** on the E-Invoicing page (also `hisaabo einvoice cancel`, the `einvoice_cancel` MCP tool and `eInvoice.cancel`) cancels the IRN and the invoice together, through the same path as a normal invoice cancel (stock and returns adjusted, out of GSTR-1/3B, the ledger and party balances). The 24-hour window is unchanged, and it is refused **before** anything is sent to the portal while payments are allocated to the invoice (remove or reallocate them first). No schema change and no migration.
+From v0.10.1, **Cancel** on the E-Invoicing page (also `hisaabo einvoice cancel`, the `einvoice_cancel` MCP tool and `eInvoice.cancel`) cancels the IRN and the invoice together, through the same path as a normal invoice cancel (stock and returns adjusted, out of GSTR-1/3B, the ledger and party balances). The 24-hour window is unchanged, and it is refused **before** anything is sent to the portal while payments are allocated to the invoice (remove or reallocate them first). This fix needs no migration of its own.
 
 **Invoices already cancelled by v0.10.0 or earlier are not fixed automatically.** Nothing is migrated, because cancelling an invoice reverses stock and changes returns, and that is a decision for the business. List them with this read-only query, one database at a time (self-hosted: the one database; multi-tenant: every tenant database):
 
