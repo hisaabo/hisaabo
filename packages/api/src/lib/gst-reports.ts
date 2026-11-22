@@ -1,14 +1,8 @@
 import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
-import { csvCell, csvRow } from "@hisaabo/shared";
+import { csvCell, csvRow, money } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
-
-// Split a tax amount exactly in half using paise-level integer arithmetic
-// to avoid floating-point rounding errors on odd amounts (e.g. ₹1.01).
-function splitTax(amount: number): number {
-  return Math.round(amount * 100 / 2) / 100;
-}
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -205,33 +199,46 @@ export async function generateGSTR1(
     return biz?.state && partyState && biz.state.toLowerCase() === partyState.toLowerCase();
   };
 
-  const b2b: GSTR1Report["b2b"] = [];
-  const b2cLargeMap = new Map<string, GSTR1Report["b2cLarge"][0]>();
-  const b2cSmallMap = new Map<number, GSTR1Report["b2cSmall"][0]>();
-  const hsnSummaryMap = new Map<string, GSTR1Report["hsn"][0]>();
+  // All money below is accumulated as decimal strings (integer paise) and only
+  // converted to the JS numbers of the report types when the rows are emitted.
+  // Intra-state tax is summed FIRST and split into CGST/SGST once per group with
+  // `money.splitHalf` (odd paisa to SGST, the same rule the invoice, the ledger
+  // and the ITC ledger use), so CGST + SGST always equals the tax they came from.
+  interface TaxSplit { cgst: number; sgst: number; igst: number }
+  const taxSplit = (intraTax: string, interTax: string): TaxSplit => {
+    const [cgst, sgst] = money.splitHalf(intraTax);
+    return { cgst: money.toNumber(cgst), sgst: money.toNumber(sgst), igst: money.toNumber(interTax) };
+  };
 
-  let totalTaxableValue = 0;
-  let totalCgst = 0;
-  let totalSgst = 0;
-  let totalIgst = 0;
-  let totalInvoiceValue = 0;
+  const b2b: GSTR1Report["b2b"] = [];
+  const b2cLargeMap = new Map<string, { state: string; taxable: string; igst: string }>();
+  const b2cSmallMap = new Map<number, { taxRate: number; taxable: string; intraTax: string; interTax: string }>();
+  const hsnSummaryMap = new Map<string, {
+    hsn: string; description: string; quantity: number;
+    taxable: string; totalValue: string; intraTax: string; interTax: string;
+  }>();
+
+  let totalTaxableValue = "0.00";
+  let totalCgst = "0.00";
+  let totalSgst = "0.00";
+  let totalIgst = "0.00";
+  let totalInvoiceValue = "0.00";
 
   for (const inv of saleInvoices) {
     const lineItems = lineItemsByInvoice.get(inv.id) || [];
     const sameState = isSameState(inv.partyState, inv.partyStateCode);
-    const taxable = parseFloat(inv.subtotal);
-    const tax = parseFloat(inv.taxAmount);
-    const total = parseFloat(inv.totalAmount);
+    const taxable = money.add(inv.subtotal, "0");
+    const tax = money.add(inv.taxAmount, "0");
+    const total = money.add(inv.totalAmount, "0");
 
-    const cgst = sameState ? splitTax(tax) : 0;
-    const sgst = sameState ? splitTax(tax) : 0;
-    const igst = sameState ? 0 : tax;
+    const [cgst, sgst] = sameState ? money.splitHalf(tax) : ["0.00", "0.00"];
+    const igst = sameState ? "0.00" : tax;
 
-    totalTaxableValue += taxable;
-    totalCgst += cgst;
-    totalSgst += sgst;
-    totalIgst += igst;
-    totalInvoiceValue += total;
+    totalTaxableValue = money.add(totalTaxableValue, taxable);
+    totalCgst = money.add(totalCgst, cgst);
+    totalSgst = money.add(totalSgst, sgst);
+    totalIgst = money.add(totalIgst, igst);
+    totalInvoiceValue = money.add(totalInvoiceValue, total);
 
     // B2B: party has GSTIN
     if (inv.partyGstin) {
@@ -241,30 +248,30 @@ export async function generateGSTR1(
         invoiceNumber: inv.invoiceNumber,
         invoiceDate: inv.invoiceDate.toISOString(),
         invoiceType: "Regular",
-        taxableValue: taxable,
-        cgst, sgst, igst,
-        totalInvoiceValue: total,
+        taxableValue: money.toNumber(taxable),
+        cgst: money.toNumber(cgst),
+        sgst: money.toNumber(sgst),
+        igst: money.toNumber(igst),
+        totalInvoiceValue: money.toNumber(total),
       });
-    } else if (!sameState && total > 250000) {
+    } else if (!sameState && money.toNumber(total) > 250000) {
       // B2C Large: inter-state > ₹2.5L
       const state = inv.partyState || "Unknown";
-      const existing = b2cLargeMap.get(state) || { state, taxableValue: 0, cgst: 0, sgst: 0, igst: 0 };
-      existing.taxableValue += taxable;
-      existing.igst += igst;
+      const existing = b2cLargeMap.get(state) || { state, taxable: "0.00", igst: "0.00" };
+      existing.taxable = money.add(existing.taxable, taxable);
+      existing.igst = money.add(existing.igst, igst);
       b2cLargeMap.set(state, existing);
     } else {
       // B2C Small
       for (const li of lineItems) {
         const rate = parseFloat(li.taxPercent);
-        const existing = b2cSmallMap.get(rate) || { taxRate: rate, taxableValue: 0, cgst: 0, sgst: 0, igst: 0 };
-        const itemTaxable = parseFloat(li.totalAmount) - parseFloat(li.taxAmount);
-        const itemTax = parseFloat(li.taxAmount);
-        existing.taxableValue += itemTaxable;
+        const existing = b2cSmallMap.get(rate) || { taxRate: rate, taxable: "0.00", intraTax: "0.00", interTax: "0.00" };
+        const itemTax = money.add(li.taxAmount, "0");
+        existing.taxable = money.add(existing.taxable, money.sub(li.totalAmount, itemTax));
         if (sameState) {
-          existing.cgst += splitTax(itemTax);
-          existing.sgst += splitTax(itemTax);
+          existing.intraTax = money.add(existing.intraTax, itemTax);
         } else {
-          existing.igst += itemTax;
+          existing.interTax = money.add(existing.interTax, itemTax);
         }
         b2cSmallMap.set(rate, existing);
       }
@@ -280,18 +287,16 @@ export async function generateGSTR1(
         // group — use itemName (required snapshot), not the optional notes
         // column.
         hsn: itemHsn, description: li.itemName, quantity: 0,
-        taxableValue: 0, cgst: 0, sgst: 0, igst: 0, totalValue: 0,
+        taxable: "0.00", totalValue: "0.00", intraTax: "0.00", interTax: "0.00",
       };
-      const itemTaxable = parseFloat(li.totalAmount) - parseFloat(li.taxAmount);
-      const itemTax = parseFloat(li.taxAmount);
+      const itemTax = money.add(li.taxAmount, "0");
       existing.quantity += parseFloat(li.quantity);
-      existing.taxableValue += itemTaxable;
-      existing.totalValue += parseFloat(li.totalAmount);
+      existing.taxable = money.add(existing.taxable, money.sub(li.totalAmount, itemTax));
+      existing.totalValue = money.add(existing.totalValue, li.totalAmount);
       if (sameState) {
-        existing.cgst += splitTax(itemTax);
-        existing.sgst += splitTax(itemTax);
+        existing.intraTax = money.add(existing.intraTax, itemTax);
       } else {
-        existing.igst += itemTax;
+        existing.interTax = money.add(existing.interTax, itemTax);
       }
       hsnSummaryMap.set(itemHsn, existing);
     }
@@ -381,17 +386,34 @@ export async function generateGSTR1(
     businessGstin: biz?.gstin || "",
     businessName: biz?.name || "",
     b2b,
-    b2cLarge: Array.from(b2cLargeMap.values()),
-    b2cSmall: Array.from(b2cSmallMap.values()),
-    hsn: Array.from(hsnSummaryMap.values()),
+    b2cLarge: Array.from(b2cLargeMap.values()).map((e) => ({
+      state: e.state,
+      taxableValue: money.toNumber(e.taxable),
+      cgst: 0,
+      sgst: 0,
+      igst: money.toNumber(e.igst),
+    })),
+    b2cSmall: Array.from(b2cSmallMap.values()).map((e) => ({
+      taxRate: e.taxRate,
+      taxableValue: money.toNumber(e.taxable),
+      ...taxSplit(e.intraTax, e.interTax),
+    })),
+    hsn: Array.from(hsnSummaryMap.values()).map((e) => ({
+      hsn: e.hsn,
+      description: e.description,
+      quantity: e.quantity,
+      taxableValue: money.toNumber(e.taxable),
+      ...taxSplit(e.intraTax, e.interTax),
+      totalValue: money.toNumber(e.totalValue),
+    })),
     creditNotes,
     debitNotes,
-    totalTaxableValue,
-    totalCgst,
-    totalSgst,
-    totalIgst,
-    totalTax: totalCgst + totalSgst + totalIgst,
-    totalInvoiceValue,
+    totalTaxableValue: money.toNumber(totalTaxableValue),
+    totalCgst: money.toNumber(totalCgst),
+    totalSgst: money.toNumber(totalSgst),
+    totalIgst: money.toNumber(totalIgst),
+    totalTax: money.toNumber(money.sum([totalCgst, totalSgst, totalIgst])),
+    totalInvoiceValue: money.toNumber(totalInvoiceValue),
     invoiceCount: saleInvoices.length,
   };
 }
@@ -428,50 +450,41 @@ export async function generateGSTR3B(
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ));
 
-  let itcIgst = 0, itcCgst = 0, itcSgst = 0;
+  let itcIgst = "0.00", itcCgst = "0.00", itcSgst = "0.00";
 
   // RCM accumulators: Table 3.1(d) — inward supplies liable to reverse charge
-  let rcmTaxableValue = 0, rcmCgst = 0, rcmSgst = 0, rcmIgst = 0;
+  let rcmTaxableValue = "0.00", rcmCgst = "0.00", rcmSgst = "0.00", rcmIgst = "0.00";
 
   for (const inv of purchaseInvoices) {
-    const tax = parseFloat(inv.taxAmount);
+    const tax = money.add(inv.taxAmount, "0");
     // Prefer state code comparison; fall back to text
     const sameState = (biz?.stateCode && inv.partyStateCode)
       ? biz.stateCode === inv.partyStateCode
       : (biz?.state && inv.partyState &&
           biz.state.toLowerCase() === inv.partyState.toLowerCase());
+    const [cgst, sgst] = sameState ? money.splitHalf(tax) : ["0.00", "0.00"];
+    const igst = sameState ? "0.00" : tax;
 
     if (inv.isReverseCharge) {
       // RCM purchases: tracked in 3.1(d) AND generate ITC for the buyer
-      rcmTaxableValue += parseFloat(inv.subtotal);
-      if (sameState) {
-        const half = splitTax(tax);
-        rcmCgst += half;
-        rcmSgst += half;
-        itcCgst += half;
-        itcSgst += half;
-      } else {
-        rcmIgst += tax;
-        itcIgst += tax;
-      }
-    } else {
-      // Normal purchase ITC
-      if (sameState) {
-        itcCgst += splitTax(tax);
-        itcSgst += splitTax(tax);
-      } else {
-        itcIgst += tax;
-      }
+      rcmTaxableValue = money.add(rcmTaxableValue, inv.subtotal);
+      rcmCgst = money.add(rcmCgst, cgst);
+      rcmSgst = money.add(rcmSgst, sgst);
+      rcmIgst = money.add(rcmIgst, igst);
     }
+    // Normal and RCM purchases alike carry their GST as input credit
+    itcCgst = money.add(itcCgst, cgst);
+    itcSgst = money.add(itcSgst, sgst);
+    itcIgst = money.add(itcIgst, igst);
   }
 
   // Net tax payable = output tax - ITC
   // A negative value indicates ITC credit remaining (e.g. when purchase tax
   // exceeds sales tax for a component). This is correct per GST rules —
   // the excess credit carries forward. Do NOT clamp to zero.
-  const netIgst = gstr1.totalIgst - itcIgst;
-  const netCgst = gstr1.totalCgst - itcCgst;
-  const netSgst = gstr1.totalSgst - itcSgst;
+  const netIgst = money.sub(gstr1.totalIgst, itcIgst);
+  const netCgst = money.sub(gstr1.totalCgst, itcCgst);
+  const netSgst = money.sub(gstr1.totalSgst, itcSgst);
 
   return {
     period: gstr1.period,
@@ -488,19 +501,19 @@ export async function generateGSTR3B(
       exempt: { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 },
     },
     rcmSupplies: {
-      taxableValue: rcmTaxableValue.toFixed(2),
-      cgst: rcmCgst.toFixed(2),
-      sgst: rcmSgst.toFixed(2),
-      igst: rcmIgst.toFixed(2),
+      taxableValue: rcmTaxableValue,
+      cgst: rcmCgst,
+      sgst: rcmSgst,
+      igst: rcmIgst,
     },
     interStateUnregistered: gstr1.b2cLarge.map((e) => ({
       state: e.state, taxableValue: e.taxableValue, igst: e.igst,
     })),
     itc: {
-      igst: itcIgst,
-      cgst: itcCgst,
-      sgst: itcSgst,
-      total: itcIgst + itcCgst + itcSgst,
+      igst: money.toNumber(itcIgst),
+      cgst: money.toNumber(itcCgst),
+      sgst: money.toNumber(itcSgst),
+      total: money.toNumber(money.sum([itcIgst, itcCgst, itcSgst])),
     },
     taxPayable: {
       igst: gstr1.totalIgst,
@@ -508,10 +521,10 @@ export async function generateGSTR3B(
       sgst: gstr1.totalSgst,
     },
     netTax: {
-      igst: netIgst,
-      cgst: netCgst,
-      sgst: netSgst,
-      total: netIgst + netCgst + netSgst,
+      igst: money.toNumber(netIgst),
+      cgst: money.toNumber(netCgst),
+      sgst: money.toNumber(netSgst),
+      total: money.toNumber(money.sum([netIgst, netCgst, netSgst])),
     },
   };
 }

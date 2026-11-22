@@ -459,19 +459,15 @@ export const invoiceRouter = router({
 
           const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
 
-          // Use integer paise arithmetic to avoid floating-point rounding errors
-          const taxPaise = Math.round(parseFloat(totals.taxTotal) * 100);
+          // The one CGST/SGST split (odd paisa to SGST), shared with the ledger and the GST returns
           let cgst = "0";
           let sgst = "0";
           let igst = "0";
 
           if (sameState) {
-            const halfPaise = Math.floor(taxPaise / 2);
-            const remainderPaise = taxPaise - halfPaise;
-            cgst = (halfPaise / 100).toFixed(2);
-            sgst = (remainderPaise / 100).toFixed(2);
+            [cgst, sgst] = money.splitHalf(totals.taxTotal);
           } else {
-            igst = (taxPaise / 100).toFixed(2);
+            igst = money.add(totals.taxTotal, "0");
           }
 
           await tx.insert(itcLedgerEntries).values({

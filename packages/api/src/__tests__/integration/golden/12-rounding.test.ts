@@ -122,13 +122,24 @@ describe("golden 12A: many-line intra-state sale ties to the paisa", () => {
     expectBooksBalance(b);
   });
 
-  // BUG: gst-reports.ts splitTax(amount) rounds the half-paisa UP for BOTH CGST and
-  // SGST (Math.round(amount * 100 / 2)), so an odd-paisa tax is overstated by one
-  // paisa: 51.30 + 51.30 = 102.60 instead of the invoice's 102.59 / the ledger's
-  // 51.29 + 51.30.
-  it.fails("GSTR-3B CGST + SGST equals the invoice GST exactly (102.59)", async () => {
+  it("GSTR-3B CGST + SGST equals the invoice GST exactly (102.59)", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 10 });
     expect(fixed2(r.taxPayable.cgst + r.taxPayable.sgst)).toBe("102.59");
+    // The odd paisa goes to SGST, as on the invoice's ledger entry (2100 = 51.29, 2101 = 51.30).
+    expect(fixed2(r.taxPayable.cgst)).toBe("51.29");
+    expect(fixed2(r.taxPayable.sgst)).toBe("51.30");
+  });
+
+  it("GSTR-1 splits the same way: totals, B2CS row and HSN row all add up to 102.59", async () => {
+    const r = await w.caller.gst.gstr1({ year: 2025, month: 10 });
+    expect(fixed2(r.totalCgst)).toBe("51.29");
+    expect(fixed2(r.totalSgst)).toBe("51.30");
+    expect(fixed2(r.totalTax)).toBe("102.59");
+    // Unregistered customer, intra-state: B2CS rows by rate. Their tax adds up to the invoice's.
+    const b2csTax = r.b2cSmall.reduce((acc, row) => acc + Math.round((row.cgst + row.sgst) * 100), 0);
+    expect(b2csTax).toBe(10259);
+    const hsnTax = r.hsn.reduce((acc, row) => acc + Math.round((row.cgst + row.sgst) * 100), 0);
+    expect(hsnTax).toBe(10259);
   });
 });
 
@@ -178,10 +189,11 @@ describe("golden 12C: the same lines on a purchase", () => {
     expect(dash.summary.available).toMatchObject({ cgst: "51.29", sgst: "51.30", igst: "0.00" });
   });
 
-  // BUG: same splitTax rounding as 12A, on the ITC side: 51.30 + 51.30.
-  it.fails("GSTR-3B ITC CGST + SGST equals the purchase GST exactly (102.59)", async () => {
+  it("GSTR-3B ITC CGST + SGST equals the purchase GST exactly (102.59)", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 10 });
     expect(fixed2(r.itc.cgst + r.itc.sgst)).toBe("102.59");
+    expect(fixed2(r.itc.cgst)).toBe("51.29");
+    expect(fixed2(r.itc.sgst)).toBe("51.30");
   });
 });
 

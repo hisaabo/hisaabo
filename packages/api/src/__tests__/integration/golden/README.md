@@ -35,7 +35,7 @@ test itself.
 | `09-bank-movements-not-ledgered` | Bank transfer and manual "interest" deposit | **documented gap** |
 | `10-opening-balances` | Party and bank opening balances | **documented gap** + 1 bug |
 | `11-financial-year-boundary` | 31 Mar / 1 Apr, TB per FY, default FY derivation | pass (+ documented gaps) |
-| `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass + 2 bugs |
+| `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass + 1 bug |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
@@ -142,7 +142,6 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 | --- | --- |
 | `gst-reports.ts:468-474` | GSTR-3B output tax is not netted by credit notes / returns / debit notes (05A) |
 | `gst-reports.ts:415-429` | GSTR-3B ITC query has no `documentType = 'invoice'` filter: purchase returns and purchase debit notes are *added* to ITC (05B) |
-| `gst-reports.ts:9-11`, `:226-227`, `:459-462` | `splitTax` rounds the odd paisa up for both CGST and SGST: +0.01 on odd-paisa GST (12A, 12C) |
 | `gst-reports.ts:335` | GSTR-1 "debit notes" includes purchase-side debit notes / purchase returns (05B) |
 | `party.ts:164-178` (and `list` at `:70-73`) | Party balance includes quotations / proformas / challans, and adds a purchase-side debit note instead of subtracting it (05B, 13) |
 | `party.ts:450-458`, `:490` | `ledgerReport` applies the opposite sign convention to a supplier's opening balance than `getById` (10) |
