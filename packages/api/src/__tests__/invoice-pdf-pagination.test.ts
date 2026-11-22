@@ -8,6 +8,13 @@
  * invoice whose only overflow was its footer line came out as 4 pages (2 content + 2 stamp pages);
  * a 5-line A5 invoice came out as 40.
  *
+ * Item rows used to be a fixed height, so a wrapped item name or row note was drawn over the row
+ * below instead of taking room (see invoice-pdf-layout.test.ts), and the A5 legal name shared a
+ * line with the address. Rows now take the height of their wrapped text and the legal name has
+ * its own line. The fixtures' long item names and two-line row notes are what push eight of the
+ * counts below up by one page (each is marked with its old count): the same invoices, now with
+ * nothing drawn on top of anything else.
+ *
  * These tests render synthetic invoices (see helpers/pdf-fixtures.ts) and pin the page counts. The
  * bounds are the layout's actual counts, not generous ceilings: a template change that adds a page
  * has to be a conscious one. Counts are the PDF's own page objects, so a stray page (an orphaned
@@ -28,11 +35,11 @@ describe("A5 invoice pagination", () => {
   it.each([
     [1, 2],
     [5, 2],
-    [10, 2],
+    [10, 3], // 2 before
     [15, 3],
     [20, 3],
     [30, 4],
-    [40, 4],
+    [40, 5], // 4 before
   ])("a full %i-line invoice takes %i pages", async (lines, pages) => {
     const pdf = await renderInvoicePdf(await buildFullInvoice(lines), "a5");
     expect(countPdfPages(pdf)).toBe(pages);
@@ -40,11 +47,11 @@ describe("A5 invoice pagination", () => {
 
   it.each([
     [1, 1],
-    [2, 1],
+    [2, 2], // 1 before: the wrapped name and the legal name now take their room; the signatory moves over
     [3, 2],
     [10, 2],
-    [20, 2],
-    [40, 3],
+    [20, 3], // 2 before
+    [40, 4], // 3 before
   ])("a lean %i-line invoice takes %i pages", async (lines, pages) => {
     const pdf = await renderInvoicePdf(await buildFullInvoice(lines, LEAN), "a5");
     expect(countPdfPages(pdf)).toBe(pages);
@@ -64,11 +71,11 @@ describe("A5 invoice pagination", () => {
 describe("A4 invoice pagination", () => {
   it.each([
     [1, 1],
-    [3, 1],
+    [3, 2], // 1 before: the notes block now counts the notes' own height (they were drawn over the footer)
     [5, 2],
     [10, 2],
     [20, 2],
-    [30, 2],
+    [30, 3], // 2 before
     [40, 3],
   ])("a full %i-line invoice takes %i pages", async (lines, pages) => {
     const pdf = await renderInvoicePdf(await buildFullInvoice(lines), "a4");
@@ -77,7 +84,7 @@ describe("A4 invoice pagination", () => {
 
   it.each([
     [1, 1],
-    [10, 1],
+    [10, 2], // 1 before: three of the ten names wrap and now take their room
     [12, 2],
     [20, 2],
     [40, 2],

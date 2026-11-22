@@ -565,8 +565,26 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     hLine(doc, margin - 4, y, contentW + 8, cBorder);
   };
 
+  // Row geometry. A row is 18pt for a one-line item name, plus 9pt when it has a note; each extra
+  // wrapped line of the name (8pt) or of the note (6.5pt) adds its own height, so the next row
+  // never starts over text that wrapped. `nameExtra` pushes the note below a wrapped name.
+  const rowGeometry = (item: InvoicePDFData["lineItems"][number]) => {
+    doc.fontSize(8).font("NotoSans");
+    const nameExtra = Math.max(
+      0,
+      doc.heightOfString(item.itemName, { width: DESCW }) - doc.currentLineHeight(true),
+    );
+    const hasNote = !!(item.description && item.description.trim().length > 0);
+    let noteH = 0;
+    if (hasNote) {
+      doc.fontSize(6.5).font("NotoSans");
+      noteH = Math.max(9, doc.heightOfString(item.description!, { width: DESCW - 4 }));
+    }
+    return { hasNote, nameExtra, rowH: 18 + nameExtra + noteH };
+  };
+
   // A header is never left at the foot of a page without its first row.
-  ensureSpace(tableHeaderH + 18);
+  ensureSpace(tableHeaderH + (data.lineItems[0] ? rowGeometry(data.lineItems[0]).rowH : 18));
   drawTableHeader();
 
   // Table rows
@@ -575,11 +593,9 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   // optional notes column (description) is non-empty, a second muted
   // sub-line is rendered immediately below at smaller size — the same
   // convention used for the thermal-receipt sub-line. Row height grows
-  // to accommodate the extra line so neighbouring columns don't overlap.
+  // to accommodate wrapped item names and notes so neighbouring rows don't overlap.
   data.lineItems.forEach((item, i) => {
-    const hasNote = !!(item.description && item.description.trim().length > 0);
-    const noteH = hasNote ? 9 : 0;
-    const rowH = 18 + noteH;
+    const { hasNote, nameExtra, rowH } = rowGeometry(item);
     if (ensureSpace(rowH)) drawTableHeader();
     if (i % 2 === 1) {
       filledRect(doc, margin - 4, y, contentW + 8, rowH, "#f9fafb");
@@ -605,7 +621,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       // Slightly indented muted secondary line under the item name. Uses
       // size 6.5 to match the existing tax-summary label convention.
       doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
-        .text(item.description!, COL_DESC + 4, rowY + 10, { width: DESCW - 4 });
+        .text(item.description!, COL_DESC + 4, rowY + 10 + nameExtra, { width: DESCW - 4 });
     }
 
     y += rowH;
@@ -838,24 +854,28 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // Block height: the header bar (14) plus the taller of the terms / notes column and the
   // signatory (82, down to the "Authorized Signatory" label), then 6pt and a rule + 1pt. Kept
-  // together on one page, with the footer. The notes' own text height is not part of the
-  // advance, exactly as it was before pagination: long notes are drawn over the rule and footer
-  // below them. That overlap is left alone here so that an A4 invoice that fits on one page
-  // renders exactly as it always has.
+  // together on one page, with the footer. The notes come last in the left column; their own text
+  // height is only part of the advance when they run past that (long notes), in which case the
+  // rule and the footer move below them. They used to be drawn over the rule and the footer.
+  // Notes that end above the rule leave the block exactly as it always was.
   doc.fontSize(7).font("NotoSans");
   const termsColH =
     (data.termsAndConditions
       ? 11 + doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8
       : 0) +
     (data.notes ? 11 : 0);
-  ensureSpace(Math.max(14 + termsColH, 82) + 6 + 1 + footerH);
+  const notesTextH = data.notes ? doc.heightOfString(data.notes, { width: bottomLeftW }) : 0;
+  const ruleOffset = Math.max(14 + termsColH, 82) + 6;
+  const notesOverrun = !!data.notes && 14 + termsColH + notesTextH > ruleOffset;
+  const blockH = notesOverrun ? 14 + termsColH + notesTextH + 6 : ruleOffset;
+  ensureSpace(blockH + 1 + footerH);
   const bottomStartY = y;
 
   filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
   hLine(doc, bottomRight, y, bottomRightW + 4, cBorder);
   doc.save();
   doc.strokeColor(cBorder).lineWidth(0.5)
-    .moveTo(bottomRight, y).lineTo(bottomRight, y + 80).stroke();
+    .moveTo(bottomRight, y).lineTo(bottomRight, y + (notesOverrun ? blockH - 8 : 80)).stroke();
   doc.restore();
   y += 14;
   hLine(doc, margin - 4, bottomStartY + 14, contentW + 8, cBorder);
@@ -890,7 +910,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   doc.fontSize(7).fillColor(cMuted).font("NotoSans")
     .text("Authorized Signatory", bottomRight + 4, sigLineY + 3, { width: bottomRightW - 8 });
 
-  y = Math.max(termsY, sigLineY + 14) + 6;
+  y = notesOverrun ? termsY + notesTextH + 6 : Math.max(termsY, sigLineY + 14) + 6;
   hLine(doc, margin - 4, y, contentW + 8, cBorder);
   y += 1;
 
@@ -978,17 +998,31 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   // Left: Business name
   doc.fontSize(13).fillColor(cPrimary).font("NotoSans-Bold")
     .text(data.businessName, a5TextX, y, { width: a5TextW });
+  // Height of the name beyond its first line, when it wraps (0 for a one-line name).
+  const nameExtraH = Math.max(
+    0,
+    doc.heightOfString(data.businessName, { width: a5TextW }) - doc.currentLineHeight(true),
+  );
 
-  if (data.businessLegalName && data.businessLegalName !== data.businessName) {
-    // 13pt font renders at ~16pt line height; offset beneath the business name
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text(data.businessLegalName, a5TextX, y + 16, { width: a5TextW });
-  }
-
-  // Address lines — start below the logo when present so nothing overlaps.
+  // Everything beneath the name starts at y + 16 (plus the name's wrapped lines): the legal name
+  // when there is one, then the address lines, which move down by the legal name's own wrapped
+  // height instead of being drawn over it.
   let leftY = a5HasLogo
     ? Math.max(y + 16, y + A5_LOGO_H + 4)
     : y + 16;
+  leftY = Math.max(leftY, y + 16 + nameExtraH);
+
+  if (data.businessLegalName && data.businessLegalName !== data.businessName) {
+    // 13pt font renders at ~16pt line height; offset beneath the business name
+    const legalY = y + 16 + nameExtraH;
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+      .text(data.businessLegalName, a5TextX, legalY, { width: a5TextW });
+    const legalH = doc.heightOfString(data.businessLegalName, { width: a5TextW });
+    // With a logo the address already starts below the logo box, so a short legal name changes nothing.
+    leftY = Math.max(leftY, legalY + legalH + 1);
+  }
+
+  // Address lines — start below the logo when present so nothing overlaps.
   const addrLine = [data.businessAddress].filter(Boolean).join("");
   const cityLine = [data.businessCity, data.businessState, data.businessPincode].filter(Boolean).join(", ");
   if (addrLine) {
@@ -1132,14 +1166,30 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     hLine(doc, margin, y, contentW, cBorder);
   };
 
+  // Row geometry. A row is 17pt for a one-line item name, plus 9pt when it has a note; each extra
+  // wrapped line of the name (8pt) or of the note (6.5pt) adds its own height, so the next row
+  // never starts over text that wrapped. `nameExtra` pushes the note below a wrapped name.
+  const rowGeometry = (item: InvoicePDFData["lineItems"][number]) => {
+    doc.fontSize(8).font("NotoSans");
+    const nameExtra = Math.max(
+      0,
+      doc.heightOfString(item.itemName, { width: C_DESCW }) - doc.currentLineHeight(true),
+    );
+    const hasNote = !!(item.description && item.description.trim().length > 0);
+    let noteH = 0;
+    if (hasNote) {
+      doc.fontSize(6.5).font("NotoSans");
+      noteH = Math.max(9, doc.heightOfString(item.description!, { width: C_DESCW - 4 }));
+    }
+    return { hasNote, nameExtra, rowH: 17 + nameExtra + noteH };
+  };
+
   // A header is never left at the foot of a page without its first row.
-  ensureSpace(tableHdrH + 17);
+  ensureSpace(tableHdrH + (data.lineItems[0] ? rowGeometry(data.lineItems[0]).rowH : 17));
   drawTableHeader();
 
   data.lineItems.forEach((item, i) => {
-    const hasNote = !!(item.description && item.description.trim().length > 0);
-    const noteH = hasNote ? 9 : 0;
-    const rowH = 17 + noteH;
+    const { hasNote, nameExtra, rowH } = rowGeometry(item);
     if (ensureSpace(rowH)) drawTableHeader();
     if (i % 2 === 1) {
       filledRect(doc, margin, y, contentW, rowH, "#fafafc");
@@ -1162,7 +1212,7 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
     if (hasNote) {
       doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
-        .text(item.description!, C_DESC + 4, rowY + 10, { width: C_DESCW - 4 });
+        .text(item.description!, C_DESC + 4, rowY + 10 + nameExtra, { width: C_DESCW - 4 });
     }
 
     y += rowH;
@@ -1389,7 +1439,8 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
 // ── Thermal Receipt (80mm) ─────────────────────────────────────
 
-function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: InvoicePDFData) {
+/** Lays the receipt out on `doc` and returns where the content ends (the final `y`, in points). */
+function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: InvoicePDFData): number {
   const pageW = 226; // ~80mm at 72 DPI
   const margin = 8;
   const contentW = pageW - margin * 2;
@@ -1421,9 +1472,14 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
     y += THERMAL_LOGO_H + 4;
   }
 
+  const headerName = data.businessName.toUpperCase();
   doc.fontSize(10).fillColor(colorBlack).font("NotoSans-Bold")
-    .text(data.businessName.toUpperCase(), margin, y, { width: contentW, align: "center" });
-  y += 14;
+    .text(headerName, margin, y, { width: contentW, align: "center" });
+  // A name too long for one line wraps; what follows moves down by the wrapped lines.
+  y += 14 + Math.max(
+    0,
+    doc.heightOfString(headerName, { width: contentW }) - doc.currentLineHeight(true),
+  );
 
   if (data.businessAddress) {
     doc.fontSize(6).fillColor(colorGray).font("NotoSans")
@@ -1595,6 +1651,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   } else {
     y += 4;
   }
+  return y;
 }
 
 // ── Status stamp ──────────────────────────────────────────────
@@ -1666,6 +1723,26 @@ function renderStatusStamp(
 
 // ── Public API ─────────────────────────────────────────────────
 
+/** Register Noto Sans (supports ₹ and all Indic scripts). */
+function registerFonts(doc: InstanceType<typeof PDFDocument>) {
+  doc.registerFont("NotoSans", FONT_REGULAR);
+  doc.registerFont("NotoSans-Bold", FONT_BOLD);
+}
+
+/**
+ * Height in points a thermal receipt needs: the receipt laid out once on a scratch page (never
+ * written out) that is far taller than any receipt, so nothing paginates, plus the bottom margin.
+ */
+function measureThermalHeight(data: InvoicePDFData): number {
+  const margin = 8;
+  const scratch = new PDFDocument({
+    size: [226, 14400],
+    margins: { top: margin, left: margin, right: margin, bottom: margin },
+  });
+  registerFonts(scratch);
+  return Math.ceil(generateThermalReceipt(scratch, data) + margin);
+}
+
 export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5"): InstanceType<typeof PDFDocument> {
   let docSize: string | number[];
   let docMargin: number;
@@ -1694,7 +1771,12 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
       (data.notes ? 20 : 0) +
       // Logo slot: fixed 40pt box + 4pt bottom gap, only when a logo is set
       (data.logoBuffer && data.logoBuffer.length > 0 ? 44 : 0);
-    docSize = [226, Math.max(300, estimatedHeight)];
+    // The estimate is only a floor. Its fixed ~30pt per item is too small once item names or notes
+    // wrap, or there are several GST rates, and a receipt taller than its page spills onto extra
+    // pages (one per overflowing text call). So the receipt is also laid out once on a scratch
+    // page, and the page is made as tall as that layout needs. Receipts whose content fits the
+    // estimate keep exactly the height they always had.
+    docSize = [226, Math.max(300, estimatedHeight, measureThermalHeight(data))];
     docMargin = 8;
   }
 
@@ -1720,9 +1802,7 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
     },
   });
 
-  // Register Noto Sans (supports ₹ and all Indic scripts)
-  doc.registerFont("NotoSans", FONT_REGULAR);
-  doc.registerFont("NotoSans-Bold", FONT_BOLD);
+  registerFonts(doc);
 
   if (format === "a4") {
     generateA4Invoice(doc, data);
