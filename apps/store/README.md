@@ -47,10 +47,19 @@ To enable a business's store, go to **Settings > Online Store** in the web dashb
 ## Testing
 
 ```bash
-pnpm --filter @hisaabo/store test
+pnpm --filter @hisaabo/store test        # Vitest: pure logic and the Dialog component (jsdom)
+pnpm --filter @hisaabo/store test:e2e    # Playwright against fixtures, no backend needed
 ```
 
-Vitest covers the pure logic (cart link parsing and merging, cart persistence). There are no component tests.
+Vitest covers the pure logic (cart link parsing and merging, cart persistence, money formatting, the low-stock rule, accent colours) and the shared `Dialog` primitive (Esc, focus trap, focus return, scroll lock). A component test opts into a DOM with `// @vitest-environment jsdom` on its first line.
+
+The Playwright specs in `e2e/` serve the API from a fixture catalog (`e2e/fixtures.ts`, `e2e/mockStore.ts`: a farm store that holds no inventory, so every item reports `lowStock`), start the Vite dev server themselves and need no database. They assert that the cart never shifts the layout (`layout-shift.spec.ts`), that every dialog closes on Esc, traps and returns focus (`dialogs.spec.ts`), and the visible fixes of the UI lift (`storefront.spec.ts`). Headless Chromium hides scrollbars by default; the config turns that off, because a scrollbar appearing or vanishing is one of the shifts under test.
+
+To capture screenshots for design review (catalog, cart, checkout and a policy dialog at 1440, 1024 and 390px):
+
+```bash
+STORE_SHOTS_DIR=/tmp/shots STORE_SHOTS_PREFIX=after pnpm --filter @hisaabo/store test:e2e capture
+```
 
 ---
 
@@ -151,14 +160,18 @@ Items with `itemMode: "variants"` display a variant selector (e.g., size, colour
 ```
 apps/store/
 ├── src/
-│   ├── components/   # Header, ItemCard, CartDrawer, Checkout, PolicyPage, etc.
+│   ├── components/   # Dialog (the one overlay primitive), Header, ItemGrid, ItemCard, Cart (a drawer), Checkout, PhoneVerify, Footer, etc.
 │   ├── App.tsx       # Root component — slug routing, catalog fetch, cart state
+│   ├── money.ts      # One price formatter: Indian grouping, integer paise (unit tested)
+│   ├── stock.ts      # What `inStock` / `lowStock` mean, and the low-stock badge rule (unit tested)
+│   ├── color.ts      # Accent tokens kept AA-legible for any accent (unit tested)
 │   ├── api.ts        # fetchCatalog() and placeOrder() REST calls
 │   ├── cartLink.ts   # Pure: parse/resolve/merge #cart= links, ?item= param (unit tested)
 │   ├── cartStorage.ts # Per-store cart persistence + old shared-cart migration (unit tested)
 │   ├── catalogIds.ts # Chunking and client-side filtering for ?ids= lookups (unit tested)
 │   ├── types.ts      # StoreConfig, CartItem, OrderResult types
-│   └── styles.css    # Tailwind v4 base styles + accent color CSS variable
+│   └── styles.css    # Design tokens and component CSS (in @layer components, below Tailwind utilities)
+├── e2e/              # Playwright specs and the fixture catalog
 ├── index.html
 └── vite.config.ts
 ```

@@ -59,7 +59,7 @@ Each entry in `items` has these fields:
 | `price` | Price per `unit` as a string in the business currency, for example `"120.00"`. Treat it as text; do not do money arithmetic with floating point. |
 | `unit` | The item's base unit, for example `kg`. |
 | `taxPercent`, `taxInclusive` | Tax rate, and whether `price` already includes it. |
-| `inStock` | `false` means sold out. If the owner allows negative stock, sold-out items still report `inStock: true` (with `lowStock: true`) because the store keeps taking orders for them. |
+| `inStock` | `false` means sold out. If the owner allows negative stock, sold-out items still report `inStock: true` (with `lowStock: true`) because the store keeps taking orders for them. `lowStock` does not mean the item is running low: it means "none on hand, but orders are accepted". A store that keeps no inventory reports it on every item, so do not show a "low stock" warning from it. |
 | `sortOrder` | The order the owner chose; items already arrive sorted by it. |
 | `itemMode` | `"simple"`, `"alt_units"` or `"variants"`. |
 | `unitVariants` | For `alt_units` items: the other units, each with `unit`, `price` and `conversionFactor`. |

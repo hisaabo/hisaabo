@@ -30,9 +30,9 @@ Go to **Settings → Online Store** (or via the left navigation under **Store**)
 | **Tagline** | A short tagline displayed below your business name on the storefront. Maximum 200 characters. |
 | **Accent Colour** | Hex colour code for the storefront's primary colour (for example, `#6366f1`). |
 | **Min Order Amount** | Minimum cart total required to place an order. Leave blank for no minimum. |
-| **Delivery Note** | A note displayed on the checkout page (for example, "Delivery within 2–3 business days"). Maximum 500 characters. |
+| **Delivery Note** | A note displayed in the cart and on the checkout page (for example, "Delivery within 2–3 business days"). Maximum 500 characters. |
 | **WhatsApp Number** | If set, a WhatsApp button appears on the storefront so customers can contact you directly. |
-| **Allow Negative Stock** | If enabled, customers can order items that are out of stock. If disabled, out-of-stock items cannot be added to the cart. |
+| **Allow Negative Stock** | If enabled, customers can order items that are out of stock, and the store does not show a stock warning for them. This is the setting to use if you make or source items to order and do not keep inventory. If disabled, out-of-stock items show as "Sold out" and cannot be added to the cart. |
 | **Order Prefix** | Prefix for store order numbers (default: `ORD`). Order numbers are sequential: ORD-00001, ORD-00002, etc. |
 
 ### Step 2: Add items to the store
@@ -55,6 +55,16 @@ For items with **alternate units**, customers see a unit selector on the store p
 ### Step 3: Test your store
 
 Your store URL is shown in the Store Settings page. Open it in an incognito browser window to see the customer view.
+
+## What customers see
+
+- **The page.** Your logo (or the first letter of your store name), name and tagline sit at the top, with your minimum order underneath if you set one. Search and the category chips stay at the top of the screen as customers scroll.
+- **Items.** If most of your items have photos, the store shows a gallery of picture cards. If most do not, it shows compact text cards, and an item that has a photo gets a small thumbnail beside its name. Items with several units or variants show them as buttons on the card, with the price of each.
+- **The cart.** The Cart button at the top always shows how many items are in the cart. It opens a panel over the page, so the items behind it never move. On a phone, a "View cart" bar also appears at the bottom of the screen once something is added. If the cart is below your minimum order, the panel says how much more is needed and the checkout button stays off until it is reached.
+- **Checkout.** Customers confirm their mobile number first, then land on a checkout page with the same header as the store. On a computer, their details are on the left and the order, total, your delivery note and the Place order button are on the right. On a phone it is one column, with the order summary collapsed to a single line at the top.
+- **Prices.** Amounts are written the same way everywhere, with Indian digit grouping: ₹1,500 and ₹1,23,456. Paise are shown only when there are some: ₹640.50.
+- **Stock.** Items you have run out of show "Sold out". Items you take orders for without stock show as available to order. The store does not show a "Low stock" warning today.
+- **Keyboard and screen readers.** Every panel (cart, item, mobile number step, privacy, terms and refund policies) closes with the Esc key, keeps keyboard focus inside while open, and returns focus to where it was opened from.
 
 ## Managing orders
 
@@ -129,4 +139,4 @@ No. Each business has one store. If you need multiple storefronts, create additi
 The `checkSlug` API checks uniqueness across all businesses in your Hisaabo instance. If it is taken and you are the owner of the other business, change that business's slug in its settings.
 
 **Can I customise the store's appearance beyond the accent colour?**
-The storefront template is currently fixed. If you are self-hosting, you can modify the React components in `packages/web` to customise the layout. CSS-level customisation is limited to the accent colour through the settings.
+The storefront template is currently fixed. If you are self-hosting, you can modify the React components in `apps/store` to customise the layout. CSS-level customisation is limited to the accent colour through the settings. Hisaabo keeps the text on your accent colour readable: for a light accent such as yellow it switches button text to dark, and it darkens the accent where it is used as text on white.
