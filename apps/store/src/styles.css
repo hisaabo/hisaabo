@@ -199,10 +199,12 @@
 @layer components {
   /* ---- Layout ---- */
 
-  /* One container for masthead, toolbar, grid, footer and checkout: they line up. */
+  /* One container for masthead, toolbar, grid, footer and checkout: they line up.
+     96rem (1536px): wide enough that a 2000px display is not mostly margin,
+     narrow enough that a line of cards stays readable. */
   .wrap {
     width: 100%;
-    max-width: 75rem;
+    max-width: 96rem;
     margin-inline: auto;
     padding-inline: var(--gutter);
   }
@@ -630,6 +632,13 @@
   @media (min-width: 1024px) {
     .grid-products[data-layout="photo"] {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  /* The text-card grid is auto-fill (17rem and up), so it reaches 5 columns by
+     itself at about 1450px. Photo cards step to 5 at the same point. */
+  @media (min-width: 1400px) {
+    .grid-products[data-layout="photo"] {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
   }
 
@@ -1251,6 +1260,18 @@
     grid-template-columns: minmax(0, 1fr);
     padding-bottom: 48px;
   }
+  /* The form's fields: one column, two once there is room (see 1280px below). */
+  .co-fields,
+  .co-pair {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 640px) {
+    .co-pair {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
   /* On a phone: summary, then form, then place order. The wrapper dissolves so
      the three can be ordered; on desktop it is one sticky column. */
   .co-aside {
@@ -1310,6 +1331,26 @@
       border-top-left-radius: 0;
       border-top-right-radius: 0;
       border-top: 1px dashed var(--store-border-strong);
+    }
+  }
+
+  /* A wide display: the form's fields pair up (name and phone, city and pincode)
+     instead of stretching one input across a thousand pixels, and the order
+     column gets a little more room. */
+  @media (min-width: 1280px) {
+    .co-grid {
+      grid-template-columns: minmax(0, 1fr) 28rem;
+      gap: 40px;
+    }
+    .co-fields {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .co-fields,
+    .co-pair {
+      column-gap: 24px;
+    }
+    .co-wide {
+      grid-column: 1 / -1;
     }
   }
 

@@ -232,124 +232,126 @@ export function Checkout({
         <form id={formId} className="co-form co-card space-y-5" onSubmit={handleSubmit} noValidate>
           <h2 className="co-h">Your details</h2>
 
-          <Field label="Full name" required error={errors.customerName}>
-            {(id, describedBy) => (
-              <input
-                ref={nameRef}
-                id={id}
-                className="input"
-                type="text"
-                placeholder="Rahul Sharma"
-                value={form.customerName}
-                onChange={(e) => set("customerName", e.target.value)}
-                autoComplete="name"
-                readOnly={!isNewCustomer}
-                aria-required="true"
-                aria-invalid={errors.customerName ? true : undefined}
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-
-          <Field
-            label="Phone number"
-            hint={
-              business.otpRequired
-                ? "Verified with an SMS code"
-                : "We will use this number to confirm your order"
-            }
-          >
-            {(id, describedBy) => (
-              <div className="input-group">
-                <span className="input-addon" aria-hidden="true">
-                  +91
-                </span>
+          <div className="co-fields">
+            <Field label="Full name" required error={errors.customerName}>
+              {(id, describedBy) => (
                 <input
-                  id={id}
-                  className="input"
-                  type="tel"
-                  value={form.customerPhone}
-                  readOnly
-                  aria-describedby={describedBy}
-                />
-              </div>
-            )}
-          </Field>
-
-          <Field label="Email" hint="Optional">
-            {(id, describedBy) => (
-              <input
-                id={id}
-                className="input"
-                type="email"
-                placeholder="rahul@example.com"
-                value={form.customerEmail}
-                onChange={(e) => set("customerEmail", e.target.value)}
-                autoComplete="email"
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-
-          <Field label="Delivery address" hint="Optional">
-            {(id, describedBy) => (
-              <textarea
-                id={id}
-                className="input"
-                rows={3}
-                placeholder="House no, street, locality"
-                value={form.deliveryAddress}
-                onChange={(e) => set("deliveryAddress", e.target.value)}
-                autoComplete="street-address"
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-            <Field label="City">
-              {(id) => (
-                <input
+                  ref={nameRef}
                   id={id}
                   className="input"
                   type="text"
-                  placeholder="Mumbai"
-                  value={form.deliveryCity}
-                  onChange={(e) => set("deliveryCity", e.target.value)}
-                  autoComplete="address-level2"
+                  placeholder="Rahul Sharma"
+                  value={form.customerName}
+                  onChange={(e) => set("customerName", e.target.value)}
+                  autoComplete="name"
+                  readOnly={!isNewCustomer}
+                  aria-required="true"
+                  aria-invalid={errors.customerName ? true : undefined}
+                  aria-describedby={describedBy}
                 />
               )}
             </Field>
-            <Field label="Pincode">
-              {(id) => (
+
+            <Field
+              label="Phone number"
+              hint={
+                business.otpRequired
+                  ? "Verified with an SMS code"
+                  : "We will use this number to confirm your order"
+              }
+            >
+              {(id, describedBy) => (
+                <div className="input-group">
+                  <span className="input-addon" aria-hidden="true">
+                    +91
+                  </span>
+                  <input
+                    id={id}
+                    className="input"
+                    type="tel"
+                    value={form.customerPhone}
+                    readOnly
+                    aria-describedby={describedBy}
+                  />
+                </div>
+              )}
+            </Field>
+
+            <Field label="Email" hint="Optional" wide>
+              {(id, describedBy) => (
                 <input
                   id={id}
                   className="input"
-                  type="text"
-                  placeholder="400001"
-                  value={form.deliveryPincode}
-                  onChange={(e) => set("deliveryPincode", e.target.value)}
-                  maxLength={6}
-                  inputMode="numeric"
-                  autoComplete="postal-code"
+                  type="email"
+                  placeholder="rahul@example.com"
+                  value={form.customerEmail}
+                  onChange={(e) => set("customerEmail", e.target.value)}
+                  autoComplete="email"
+                  aria-describedby={describedBy}
+                />
+              )}
+            </Field>
+
+            <Field label="Delivery address" hint="Optional" wide>
+              {(id, describedBy) => (
+                <textarea
+                  id={id}
+                  className="input"
+                  rows={3}
+                  placeholder="House no, street, locality"
+                  value={form.deliveryAddress}
+                  onChange={(e) => set("deliveryAddress", e.target.value)}
+                  autoComplete="street-address"
+                  aria-describedby={describedBy}
+                />
+              )}
+            </Field>
+
+            <div className="co-pair co-wide">
+              <Field label="City">
+                {(id) => (
+                  <input
+                    id={id}
+                    className="input"
+                    type="text"
+                    placeholder="Mumbai"
+                    value={form.deliveryCity}
+                    onChange={(e) => set("deliveryCity", e.target.value)}
+                    autoComplete="address-level2"
+                  />
+                )}
+              </Field>
+              <Field label="Pincode">
+                {(id) => (
+                  <input
+                    id={id}
+                    className="input"
+                    type="text"
+                    placeholder="400001"
+                    value={form.deliveryPincode}
+                    onChange={(e) => set("deliveryPincode", e.target.value)}
+                    maxLength={6}
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                  />
+                )}
+              </Field>
+            </div>
+
+            <Field label="Order notes" hint="Optional" wide>
+              {(id, describedBy) => (
+                <textarea
+                  id={id}
+                  className="input"
+                  rows={2}
+                  placeholder="Any special instructions"
+                  value={form.deliveryNotes}
+                  onChange={(e) => set("deliveryNotes", e.target.value)}
+                  aria-describedby={describedBy}
                 />
               )}
             </Field>
           </div>
-
-          <Field label="Order notes" hint="Optional">
-            {(id, describedBy) => (
-              <textarea
-                id={id}
-                className="input"
-                rows={2}
-                placeholder="Any special instructions"
-                value={form.deliveryNotes}
-                onChange={(e) => set("deliveryNotes", e.target.value)}
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
         </form>
 
         <div className="co-aside">
@@ -467,10 +469,13 @@ function Field({
   required,
   hint,
   error,
+  wide,
   children,
 }: {
   label: string;
   required?: boolean;
+  /** Spans both columns of the two-column field grid on a wide display. */
+  wide?: boolean;
   hint?: string;
   error?: string;
   children: (id: string, describedBy: string | undefined) => React.ReactNode;
@@ -479,7 +484,7 @@ function Field({
   const noteId = `${id}-note`;
   const note = error ?? hint;
   return (
-    <div className="field">
+    <div className={wide ? "field co-wide" : "field"}>
       <label htmlFor={id} className="field-label">
         {label}
         {required && (

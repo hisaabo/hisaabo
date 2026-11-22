@@ -19,6 +19,8 @@ import { mockStoreApi } from "./mockStore";
  */
 
 const SIZES = [
+  { width: 2000, height: 1100 },
+  { width: 1920, height: 1080 },
   { width: 1440, height: 900 },
   { width: 1024, height: 768 },
   { width: 390, height: 844 },

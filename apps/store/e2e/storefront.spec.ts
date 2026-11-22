@@ -201,6 +201,66 @@ test.describe("checkout layout", () => {
   });
 });
 
+test.describe("wide displays", () => {
+  const columnsOf = (page: Page, selector: string) =>
+    page.locator(selector).evaluateAll((cards) => new Set(cards.map((c) => Math.round(c.getBoundingClientRect().x))).size);
+
+  test("2000px: a wider container and five columns of text cards, not a narrow strip", async ({ page }) => {
+    await page.setViewportSize({ width: 2000, height: 1100 });
+    await openStore(page);
+    const wrap = await rectOf(page, "main.wrap");
+    expect(wrap.width).toBeGreaterThan(1500);
+    expect(wrap.width).toBeLessThanOrEqual(1537);
+    expect(await columnsOf(page, ".pcard")).toBe(5);
+    // Still one container: masthead, grid and footer share their edges.
+    const grid = await rectOf(page, ".grid-products");
+    const masthead = await rectOf(page, ".masthead");
+    expect(Math.abs(masthead.x - grid.x)).toBeLessThanOrEqual(0.5);
+    // And the cards are not stretched: about the width they have at 1440.
+    const card = await rectOf(page, ".pcard");
+    expect(card.width).toBeGreaterThan(260);
+    expect(card.width).toBeLessThan(330);
+  });
+
+  test("a photo-led catalog also grows to five columns, and stays at four on a laptop", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await openStore(page, { photoLed: true });
+    expect(await columnsOf(page, ".pcard")).toBe(5);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    expect(await columnsOf(page, ".pcard")).toBe(4);
+    await page.setViewportSize({ width: 1024, height: 768 });
+    expect(await columnsOf(page, ".pcard")).toBe(4);
+  });
+
+  test("2000px checkout: details pair up on the left, the order column keeps a sensible width", async ({ page }) => {
+    await page.setViewportSize({ width: 2000, height: 1100 });
+    await openStore(page);
+    await goToCheckout(page);
+
+    const form = await rectOf(page, ".co-form");
+    const aside = await rectOf(page, ".co-aside");
+    const wrap = await rectOf(page, "main.wrap");
+    expect(form.right).toBeLessThan(aside.x);
+    expect(aside.width).toBeGreaterThanOrEqual(430);
+    expect(aside.width).toBeLessThanOrEqual(480);
+    expect(form.width).toBeGreaterThan(wrap.width * 0.6);
+    expect(Math.abs(aside.right - wrap.right + 32)).toBeLessThanOrEqual(1);
+
+    // Name and phone sit side by side; no input runs across the whole form.
+    const name = await rectOf(page, "input[autocomplete=name]");
+    const phone = await rectOf(page, "input[type=tel]");
+    expect(name.right).toBeLessThan(phone.x);
+    expect(Math.abs(name.y - phone.y)).toBeLessThanOrEqual(1);
+    expect(name.width).toBeLessThan(560);
+
+    // 1024px keeps its single-column form beside the order column.
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const narrowName = await rectOf(page, "input[autocomplete=name]");
+    const narrowPhone = await rectOf(page, "input[type=tel]");
+    expect(narrowPhone.y).toBeGreaterThan(narrowName.bottom);
+  });
+});
+
 test("tap targets are at least 44px on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openStore(page);
