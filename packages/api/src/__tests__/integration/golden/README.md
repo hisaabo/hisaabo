@@ -38,6 +38,7 @@ test itself.
 | `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass |
 | `14-purchase-side-reversals` | Credit note / sales return raised from a purchase invoice (`type = purchase`) | pass |
+| `15-tax-inclusive-items` | Items priced including tax: POS tile rates, an intra-/inter-state bill, purchase side, every document type, 40 random bills tied across invoice, ledger, GSTR-3B and the PDF table | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

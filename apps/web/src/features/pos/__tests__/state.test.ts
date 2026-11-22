@@ -189,6 +189,30 @@ describe("computeCartTotals", () => {
     expect(t.total).toBeCloseTo(425);
   });
 
+  it("uses the exact line maths of the server: a tax-inclusive item's tile rate bills at the shelf price", () => {
+    // POS tile of an item saved at ₹118.00 incl. 18%: rate 100.00. 2 x 100.00 = 200.00, GST 36.00, total 236.00.
+    const t = computeCartTotals([
+      { lineId: "1", itemId: "i", itemName: "Atta", quantity: "2", unit: "pcs", unitPrice: "100.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" },
+    ]);
+    expect(t).toEqual({ subtotal: 200, discount: 0, tax: 36, total: 236 });
+  });
+
+  it("rounds half up in integer paise, never in floats: ₹0.85 x 0.7 = ₹0.60 (the float product gave 0.59)", () => {
+    // 85 paise x 0.7 = 59.5 -> 60 paise
+    const t = computeCartTotals([
+      { lineId: "1", itemId: null, itemName: "A", quantity: "0.7", unit: "kg", unitPrice: "0.85", taxPercent: "0", discountPercent: "0", conversionFactor: "1" },
+    ]);
+    expect(t.subtotal).toBe(0.6);
+    expect(t.total).toBe(0.6);
+  });
+
+  it("matches the invoice the server will create for an 88.39 @ 12% tile: GST 10.61 (1060.68 paise -> 1061), total 99.00", () => {
+    const t = computeCartTotals([
+      { lineId: "1", itemId: "i", itemName: "Oil", quantity: "1", unit: "pcs", unitPrice: "88.39", taxPercent: "12", discountPercent: "0", conversionFactor: "1" },
+    ]);
+    expect(t).toEqual({ subtotal: 88.39, discount: 0, tax: 10.61, total: 99 });
+  });
+
   it("treats bad numeric strings as zero (won't NaN)", () => {
     const lines: POSLineItem[] = [
       { lineId: "1", itemId: null, itemName: "A", quantity: "", unit: "pcs", unitPrice: "abc", taxPercent: "?", discountPercent: "", conversionFactor: "1" },

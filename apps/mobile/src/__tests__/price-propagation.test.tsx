@@ -36,6 +36,11 @@ import { toast } from "../lib/toast";
 
 import InvoiceCreateScreen from "../../app/(app)/(invoices)/create";
 import InvoiceEditScreen from "../../app/(app)/(invoices)/edit";
+import QuotationCreateScreen from "../../app/(app)/(more)/quotations/create";
+import CreditNoteCreateScreen from "../../app/(app)/(more)/credit-notes/create";
+import DeliveryChallanCreateScreen from "../../app/(app)/(more)/delivery-challans/create";
+import ProformaCreateScreen from "../../app/(app)/(more)/proforma-invoices/create";
+import SalesReturnCreateScreen from "../../app/(app)/(more)/sales-returns/create";
 
 const steel = { id: "item-1", name: "Steel Rod", unit: "kg", itemMode: "simple", salePrice: "1000.00", purchasePrice: "800.00", taxPercent: "18.00", taxInclusive: false, unitVariants: [], variants: [] };
 const cement = { id: "item-2", name: "Cement Bag", unit: "bag", itemMode: "simple", salePrice: "350.00", purchasePrice: "300.00", taxPercent: "5.00", taxInclusive: false, unitVariants: [], variants: [] };
@@ -43,7 +48,14 @@ const rice = {
   id: "item-3", name: "Rice Basmati", unit: "kg", itemMode: "alt_units", salePrice: "100.00", purchasePrice: "80.00", taxPercent: "5.00", taxInclusive: false,
   unitVariants: [{ unit: "packet", conversionFactor: 0.2, salePrice: "20.00" }], variants: [],
 };
-const catalog = [steel, cement, rice];
+// sale price ₹118.00 INCLUDING 18% GST (bill rate 100.00); purchase price ₹90.00 (tax-exclusive)
+const atta = { id: "item-4", name: "Atta Inclusive", unit: "pcs", itemMode: "simple", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] };
+// base ₹118.00 incl. 18%; a 5-unit "box" at ₹590.00 incl. 18% (bill rate 500.00)
+const box = {
+  id: "item-5", name: "Box Inclusive", unit: "pcs", itemMode: "alt_units", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true,
+  unitVariants: [{ unit: "box", conversionFactor: 5, salePrice: "590.00" }], variants: [],
+};
+const catalog = [steel, cement, rice, atta, box];
 
 const SHEET = "Update saved prices?";
 const UPDATE = "Update item prices";
@@ -264,5 +276,104 @@ describe("InvoiceEditScreen — update saved prices", () => {
     fireEvent.press(screen.getByText("Save"));
     await waitFor(() => expect(stub.mutations["invoice.update"]).toHaveLength(1));
     expect(screen.queryByText(SHEET)).toBeNull();
+  });
+});
+
+describe("items whose sale price includes GST are billed at the tax-exclusive rate (mobile)", () => {
+  const hint = () => screen.queryByTestId("inclusive-hint");
+  const hintText = () => {
+    const children = hint()!.props.children as unknown;
+    return Array.isArray(children) ? children.join("") : String(children);
+  };
+
+  it("invoice: picking ₹118 incl. 18% starts the Rate at 100.00 (not 118 + 21.24 = 139.24), with the derivation shown", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Atta Inclusive");
+
+    expect(screen.getByDisplayValue("100.00")).toBeTruthy();
+    expect(hintText()).toBe("₹118 incl. GST → ₹100 + ₹18");
+    fireEvent.press(screen.getByText("Create Invoice"));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect((created()[0] as { lineItems: Array<{ unitPrice: string; taxPercent: string }> }).lineItems[0]).toMatchObject({ unitPrice: "100.00", taxPercent: "18.00" });
+    // untouched: no price prompt (100.00 is the saved 118.00, not a price cut)
+    expect(screen.queryByText(SHEET)).toBeNull();
+  });
+
+  it("invoice: editing the GST % keeps the shelf price: 18% -> 12% re-derives 105.36 (+ 12.64 = 118.00)", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Atta Inclusive");
+    fireEvent.changeText(screen.getByDisplayValue("18.00"), "12");
+
+    expect(screen.getByDisplayValue("105.36")).toBeTruthy();
+    expect(hintText()).toBe("₹118 incl. GST → ₹105.36 + ₹12.64");
+    fireEvent.press(screen.getByText("Create Invoice"));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(screen.queryByText(SHEET)).toBeNull(); // re-derived, not edited
+  });
+
+  it("invoice: typing the Rate states the exclusive rate yourself: the hint goes, and a typed 105 is proposed back as the inclusive 123.90", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Atta Inclusive");
+    setRate("100.00", "105");
+    expect(hint()).toBeNull();
+    fireEvent.press(screen.getByText("Create Invoice"));
+
+    await screen.findByText(SHEET);
+    expect(screen.getByLabelText(/Atta Inclusive, ₹118 to ₹123\.9/)).toBeTruthy();
+    fireEvent.press(screen.getByText(UPDATE));
+    await waitFor(() => expect(priceCalls()).toHaveLength(1));
+    expect((priceCalls()[0] as { updates: unknown[] }).updates[0]).toMatchObject({ itemId: "item-4", side: "sale", newPrice: "123.90", priceIncludesTax: true });
+  });
+
+  it("invoice: an alternate unit is converted too: the box at ₹590.00 incl. 18% is 500.00", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    await pickParty();
+    await pickItem("Box Inclusive");
+    fireEvent.press(screen.getByText("box"));
+    expect(screen.getByDisplayValue("500.00")).toBeTruthy();
+    expect(hintText()).toBe("₹590 incl. GST → ₹500 + ₹90");
+  });
+
+  it("invoice: the purchase side is never converted: the purchase price 90.00 goes on the bill as it is", async () => {
+    renderScreen("admin", InvoiceCreateScreen);
+    fireEvent.press(screen.getByText("Purchase"));
+    await pickItem("Atta Inclusive");
+    expect(screen.getByDisplayValue("90.00")).toBeTruthy();
+    expect(hint()).toBeNull();
+  });
+
+  it("invoice edit: a newly picked inclusive item is converted too", async () => {
+    stub.params.id = "inv-9";
+    stub.data["invoice.getById"] = {
+      id: "inv-9", type: "sale", documentType: "invoice", invoiceNumber: "INV-00009", partyId: "party-1",
+      party: { id: "party-1", name: "Ramesh Traders" }, invoiceDate: "2026-04-01T00:00:00.000Z", dueDate: null, notes: null,
+      lineItems: [{ itemId: "item-1", itemName: "Steel Rod", description: null, quantity: "1.000", unitPrice: "1000.00", taxPercent: "18.00", discountPercent: "0.00", selectedUnit: null, conversionFactor: "1.000000", variantId: null }],
+    };
+    renderScreen("admin", InvoiceEditScreen);
+    await screen.findByText("Edit Invoice");
+    fireEvent.press(screen.getByText("Steel Rod"));
+    fireEvent.press(await screen.findByText("Atta Inclusive"));
+    expect(screen.getByDisplayValue("100.00")).toBeTruthy();
+    expect(hintText()).toBe("₹118 incl. GST → ₹100 + ₹18");
+  });
+
+  it.each([
+    ["quotation", QuotationCreateScreen],
+    ["credit note", CreditNoteCreateScreen],
+    ["delivery challan", DeliveryChallanCreateScreen],
+    ["proforma invoice", ProformaCreateScreen],
+    ["sales return", SalesReturnCreateScreen],
+  ] as const)("%s: an inclusive item starts at 100.00 (GST 18.00 on top = 118.00)", async (_name, Screen) => {
+    renderScreen("admin", Screen);
+    fireEvent.press(screen.getAllByText("Tap to select item...")[0]!);
+    fireEvent.press(await screen.findByText("Atta Inclusive"));
+    expect(screen.getByDisplayValue("100.00")).toBeTruthy();
+    expect(hintText()).toBe("₹118 incl. GST → ₹100 + ₹18");
+    // the GST % edit re-derives here too
+    fireEvent.changeText(screen.getByDisplayValue("18.00"), "12");
+    expect(screen.getByDisplayValue("105.36")).toBeTruthy();
   });
 });

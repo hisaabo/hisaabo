@@ -29,6 +29,19 @@ const ghee: PricingCatalogItem = {
   itemMode: "simple",
   salePrice: "620.00",
   purchasePrice: "540.00",
+  taxPercent: "12.00",
+  taxInclusive: false,
+};
+
+/** Sale price ₹118.00 INCLUDING 18% GST (so its bill rate is 100.00); purchase price ₹90.00 (always tax-exclusive). */
+const atta: PricingCatalogItem = {
+  id: "55555555-5555-4555-8555-555555555555",
+  name: "Atta 5kg",
+  unit: "pcs",
+  itemMode: "simple",
+  salePrice: "118.00",
+  purchasePrice: "90.00",
+  taxPercent: "18.00",
   taxInclusive: true,
 };
 
@@ -43,7 +56,7 @@ const tee: PricingCatalogItem = {
   ],
 };
 
-const items = [rice, ghee, tee];
+const items = [rice, ghee, tee, atta];
 
 describe("supportsPricePropagation", () => {
   it("offers the prompt on invoices only", () => {
@@ -69,8 +82,7 @@ describe("proposePriceUpdates", () => {
       label: "Ghee 1L",
       oldPrice: "620.00",
       newPrice: "600.00",
-      // the item stores its prices GST-inclusive: the proposal says so
-      priceIncludesTax: true,
+      priceIncludesTax: false,
     });
   });
 
@@ -279,6 +291,63 @@ describe("convertPriceBasis", () => {
   });
 });
 
+describe("proposePriceUpdates: items whose sale price includes GST", () => {
+  // Atta: saved sale price 118.00 incl. 18% GST. On a bill its rate is the exclusive 100.00 (11800 x 100 / 118 = 10000).
+
+  it("an untouched line (rate 100.00 = the derived rate) proposes nothing", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items,
+      lines: [{ itemId: atta.id, unitPrice: "100.00", taxPercent: "18", originalUnitPrice: "100.00" }],
+    });
+    expect(proposals).toEqual([]);
+  });
+
+  it("with no baseline (CLI / MCP) the exclusive rate 100.00 is compared as 118.00 incl. GST: equal, so nothing (not a 'price cut' to 100)", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items,
+      lines: [{ itemId: atta.id, unitPrice: "100.00", taxPercent: "18" }],
+    });
+    expect(proposals).toEqual([]);
+  });
+
+  it("a typed rate of 105.00 becomes the inclusive price 123.90 (10500 x 118 / 100 = 12390)", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items,
+      lines: [{ itemId: atta.id, unitPrice: "105", taxPercent: "18", originalUnitPrice: "100.00" }],
+    });
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({ oldPrice: "118.00", newPrice: "123.90", priceIncludesTax: true });
+    expect(proposalToUpdate(proposals[0]!)).toMatchObject({ newPrice: "123.90", priceIncludesTax: true });
+  });
+
+  it("converts back at the LINE's GST rate: 105.36 at 12% is 118.00 again (10536 x 112 / 100 = 11800.32 -> 11800): nothing", () => {
+    const same = proposePriceUpdates({
+      side: "sale", items,
+      lines: [{ itemId: atta.id, unitPrice: "105.36", taxPercent: "12" }],
+    });
+    expect(same.proposals).toEqual([]);
+    // a typed 110 at 12%: 11000 x 112 / 100 = 12320 -> 123.20
+    const typed = proposePriceUpdates({
+      side: "sale", items,
+      lines: [{ itemId: atta.id, unitPrice: "110", taxPercent: "12", originalUnitPrice: "105.36" }],
+    });
+    expect(typed.proposals[0]).toMatchObject({ oldPrice: "118.00", newPrice: "123.20" });
+  });
+
+  it("falls back to the item's GST rate when the line carries none", () => {
+    const { proposals } = proposePriceUpdates({ side: "sale", items, lines: [{ itemId: atta.id, unitPrice: "105" }] });
+    expect(proposals[0]).toMatchObject({ newPrice: "123.90" });
+  });
+
+  it("purchase prices are never inclusive: a purchase rate of 95 is the purchase price 95.00 as typed", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "purchase", items,
+      lines: [{ itemId: atta.id, unitPrice: "95", taxPercent: "18", originalUnitPrice: "90.00" }],
+    });
+    expect(proposals[0]).toMatchObject({ side: "purchase", oldPrice: "90.00", newPrice: "95.00", priceIncludesTax: false });
+  });
+});
+
 describe("propagateBillPrices (CLI / MCP)", () => {
   const applied = { updated: [{ label: "Ghee 1L", side: "sale" as const, oldPrice: "620.00", newPrice: "600.00" }], unchanged: [] };
 
@@ -305,7 +374,7 @@ describe("propagateBillPrices (CLI / MCP)", () => {
     expect(out.updated).toEqual(applied.updated);
     expect(calls).toEqual([{
       documentId: "inv-1",
-      updates: [{ itemId: ghee.id, side: "sale", newPrice: "600.00", priceIncludesTax: true }],
+      updates: [{ itemId: ghee.id, side: "sale", newPrice: "600.00", priceIncludesTax: false }],
     }]);
   });
 

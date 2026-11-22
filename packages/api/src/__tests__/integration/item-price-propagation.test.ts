@@ -242,6 +242,26 @@ describe("item.updatePricesFromDocument — happy paths", () => {
     expect((await freshItem(ghee.id)).salePrice).toBe("590.00");
   });
 
+  it("only SALE prices can include tax: a purchase price is stored tax-exclusive, whatever the item's flag", async () => {
+    // ghee is flagged "price includes tax" (18%). A purchase price stated INCLUDING tax is converted down:
+    // 11800 x 100 / 118 = 10000 -> 100.00
+    const incl = await asOwner.item.updatePricesFromDocument({
+      updates: [{ itemId: ghee.id, side: "purchase", newPrice: "118", priceIncludesTax: true }],
+    });
+    expect(incl.updated[0]!.newPrice).toBe("100.00");
+    // stated tax-exclusive (the only basis a purchase bill has): stored as it is, no conversion
+    const excl = await asOwner.item.updatePricesFromDocument({
+      updates: [{ itemId: ghee.id, side: "purchase", newPrice: "95.50", priceIncludesTax: false }],
+    });
+    expect(excl.updated[0]!.newPrice).toBe("95.50");
+    expect((await freshItem(ghee.id)).purchasePrice).toBe("95.50");
+    // and the exact conversion back for a sale price: 10500 x 118 / 100 = 12390 -> 123.90
+    const sale = await asOwner.item.updatePricesFromDocument({
+      updates: [{ itemId: ghee.id, side: "sale", newPrice: "105", priceIncludesTax: false }],
+    });
+    expect(sale.updated[0]!.newPrice).toBe("123.90");
+  });
+
   it("stamps the audit row with the caller's source (a browser agent)", async () => {
     await asAgent.item.updatePricesFromDocument({ updates: [{ itemId: ghee.id, side: "purchase", newPrice: "570" }] });
     const rows = await auditRowsFor(ghee.id);

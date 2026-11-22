@@ -28,7 +28,7 @@ interface Call {
  * Runs `invoice create` against a fake API and returns what was called and what was printed.
  * `fail` makes the named procedure answer with a tRPC FORBIDDEN error.
  */
-async function run(opts: Parameters<typeof invoiceCreateCommand>[0], fail?: string) {
+async function run(opts: Parameters<typeof invoiceCreateCommand>[0], fail?: string, listed: unknown[] = [GHEE]) {
   const calls: Call[] = [];
   const out: string[] = [];
   const realFetch = globalThis.fetch;
@@ -49,8 +49,8 @@ async function run(opts: Parameters<typeof invoiceCreateCommand>[0], fail?: stri
     }
     const results: Record<string, unknown> = {
       "party.list": { data: [{ id: "p1", name: "Priya Textiles" }], total: 1 },
-      "item.list": { data: [GHEE], total: 1 },
-      "item.getById": GHEE,
+      "item.list": { data: listed, total: listed.length },
+      "item.getById": listed[0],
       "invoice.create": CREATED,
       "item.updatePricesFromDocument": {
         documentId: "inv-1",
@@ -128,4 +128,25 @@ test("the registrar exposes --update-item-prices on `invoice create`", () => {
   const src = readFileSync(new URL("../src/bin/registrars/invoice.ts", import.meta.url), "utf8");
   assert.ok(src.includes('"--update-item-prices"'));
   assert.ok(src.includes("updateItemPrices: opts.updateItemPrices"));
+});
+
+// ── items whose sale price includes GST ─────────────────────────────────────────────────────────────
+const ATTA = { ...GHEE, id: "33333333-3333-4333-8333-333333333333", name: "Atta 5kg", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true };
+
+test("a default rate (no --rate) of an item priced INCLUDING GST is converted: 118.00 incl. 18% bills at 100.00, not 118 + 21.24", async () => {
+  const r = await run({ items: ["Atta"], qty: ["1"], json: true }, undefined, [ATTA]);
+  const line = (r.call("invoice.create")!.body as { lineItems: Array<{ unitPrice: string; taxPercent: string }> }).lineItems[0]!;
+  assert.equal(line.unitPrice, "100.00"); // 11800 x 100 / 118 = 10000
+  assert.equal(line.taxPercent, "18.00");
+});
+
+test("a typed --rate is the tax-exclusive rate and is sent as typed; with --update-item-prices 100.00 is the saved 118.00 (no price cut)", async () => {
+  const same = await run({ items: ["Atta"], qty: ["1"], rate: ["100.00"], updateItemPrices: true, json: true }, undefined, [ATTA]);
+  assert.equal((same.call("invoice.create")!.body as { lineItems: Array<{ unitPrice: string }> }).lineItems[0]!.unitPrice, "100.00");
+  assert.ok(!same.paths.includes("item.updatePricesFromDocument"));
+
+  // 105.00 + 18% = 123.90 inclusive (10500 x 118 / 100 = 12390)
+  const changed = await run({ items: ["Atta"], qty: ["1"], rate: ["105.00"], updateItemPrices: true, json: true }, undefined, [ATTA]);
+  const update = (changed.call("item.updatePricesFromDocument")!.body as { updates: Array<{ newPrice: string; priceIncludesTax: boolean }> }).updates[0]!;
+  assert.deepEqual({ newPrice: update.newPrice, priceIncludesTax: update.priceIncludesTax }, { newPrice: "123.90", priceIncludesTax: true });
 });

@@ -27,6 +27,13 @@ const h = vi.hoisted(() => ({
 const catalog = vi.hoisted(() => ({
   steel: { id: "item-1", name: "Steel Rod", unit: "kg", itemMode: "simple", salePrice: "1000.00", purchasePrice: "800.00", taxPercent: "18.00", taxInclusive: false, unitVariants: [], variants: [] },
   cement: { id: "item-2", name: "Cement Bag", unit: "bag", itemMode: "simple", salePrice: "350.00", purchasePrice: "300.00", taxPercent: "5.00", taxInclusive: false, unitVariants: [], variants: [] },
+  // sale price ₹118.00 INCLUDING 18% GST (bill rate 100.00); purchase price ₹90.00 (tax-exclusive)
+  atta: { id: "item-4", name: "Atta Inclusive", unit: "pcs", itemMode: "simple", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true, unitVariants: [], variants: [] },
+  // base ₹118.00 incl. 18%; a 5-unit "box" at ₹590.00 incl. 18% (bill rate 500.00)
+  box: {
+    id: "item-5", name: "Box Inclusive", unit: "pcs", itemMode: "alt_units", salePrice: "118.00", purchasePrice: "90.00", taxPercent: "18.00", taxInclusive: true,
+    unitVariants: [{ unit: "box", conversionFactor: 5, salePrice: "590.00" }], variants: [],
+  },
   rice: {
     id: "item-3", name: "Rice Basmati", unit: "kg", itemMode: "alt_units", salePrice: "100.00", purchasePrice: "80.00", taxPercent: "5.00", taxInclusive: false,
     unitVariants: [{ unit: "packet", conversionFactor: 0.2, salePrice: "20.00" }], variants: [],
@@ -52,7 +59,7 @@ vi.mock("@/lib/trpc", () => {
         create: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
       },
       item: {
-        list: { useQuery: () => ({ data: { data: [catalog.steel, catalog.cement, catalog.rice] }, isFetching: false }) },
+        list: { useQuery: () => ({ data: { data: [catalog.steel, catalog.cement, catalog.rice, catalog.atta, catalog.box] }, isFetching: false }) },
         create: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
         updatePricesFromDocument: { useMutation: () => ({ mutateAsync: h.updateMutate, isPending: false }) },
       },
@@ -413,5 +420,130 @@ describe("DocumentCreator — update saved prices", () => {
         updates: [{ itemId: "item-3", unit: "packet", side: "sale", newPrice: "22.00", priceIncludesTax: false }],
       });
     });
+  });
+});
+
+describe("DocumentCreator: items whose sale price includes GST are billed at the tax-exclusive rate", () => {
+  const hint = () => screen.queryByTestId("inclusive-hint");
+
+  it("picking ₹118 incl. 18% starts the line at 100.00 (not 118 + 21.24 = 139.24), with the derivation shown", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("100.00");
+    expect(hint()).toHaveTextContent("₹118.00 incl. GST → ₹100.00 + ₹18.00");
+    // 100.00 + 18.00 GST = 118.00 (the saved price), so the form's amount is the shelf price
+    expect(screen.getAllByText("₹118.00").length).toBeGreaterThan(0);
+    expect(screen.queryByText("₹139.24")).not.toBeInTheDocument();
+
+    await save(user);
+    await waitFor(() => expect(h.createCalls).toHaveLength(1));
+    expect((h.createCalls[0] as { lineItems: Array<{ unitPrice: string; taxPercent: string }> }).lineItems[0]).toMatchObject({ unitPrice: "100.00", taxPercent: "18.00" });
+  });
+
+  it("quantity 2 bills 2 x 100.00 + 36.00 = 236.00", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+    fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "2" } });
+    expect(screen.getAllByText("₹236.00").length).toBeGreaterThan(0);
+  });
+
+  it("editing the GST % keeps the shelf price: 18% -> 12% re-derives 105.36 + 12.64 = 118.00 (rounded to the paisa)", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+
+    fireEvent.change(screen.getByLabelText("Tax percent"), { target: { value: "12" } });
+
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("105.36");
+    expect(hint()).toHaveTextContent("₹118.00 incl. GST → ₹105.36 + ₹12.64");
+    // and it is not a price edit: no prompt on save
+    await save(user);
+    await waitFor(() => expect(h.createCalls).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: /update saved prices/i })).not.toBeInTheDocument();
+  });
+
+  it("typing the rate states the exclusive rate yourself: the hint goes and a later GST edit leaves it alone", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+    setPrice("110");
+    expect(hint()).toBeNull();
+    fireEvent.change(screen.getByLabelText("Tax percent"), { target: { value: "12" } });
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("110");
+  });
+
+  it("a typed rate is proposed back as the INCLUSIVE price: 105.00 + 18% = 123.90, labelled incl. GST", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+    setPrice("105");
+    await save(user);
+
+    const dialog = await screen.findByRole("dialog", { name: /update saved prices/i });
+    expect(within(dialog).getByText(/₹118\.00/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/₹123\.90/)).toBeInTheDocument();
+    expect(within(dialog).getByText("incl. GST")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Update item prices" }));
+    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledTimes(1));
+    expect(h.updateMutate.mock.calls[0]![0].updates[0]).toMatchObject({ itemId: "item-4", side: "sale", newPrice: "123.90", priceIncludesTax: true });
+  });
+
+  it("an untouched inclusive line proposes nothing: the bill rate 100.00 is the saved 118.00, not a price cut", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /atta inclusive/i);
+    await save(user);
+    await waitFor(() => expect(h.createCalls).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: /update saved prices/i })).not.toBeInTheDocument();
+  });
+
+  it("an alternate unit is converted too: the 5-unit box at ₹590.00 incl. 18% is 500.00", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickParty(user);
+    await pickItem(user, /box inclusive/i);
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("100.00");
+    await user.click(screen.getByRole("radio", { name: /box/i }));
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("500.00");
+    expect(hint()).toHaveTextContent("₹590.00 incl. GST → ₹500.00 + ₹90.00");
+  });
+
+  it("the purchase side is never converted: the purchase price 90.00 goes on the bill as it is", async () => {
+    renderCreator({ invoiceType: "purchase" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: /supplier/i }));
+    await user.click(screen.getByText("Ramesh Traders"));
+    await pickItem(user, /atta inclusive/i);
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe("90.00");
+    expect(hint()).toBeNull();
+  });
+
+  it.each([
+    ["invoice", "sale", "100.00"],
+    ["quotation", "sale", "100.00"],
+    ["proforma", "sale", "100.00"],
+    ["delivery_challan", "sale", "100.00"],
+    ["credit_note", "sale", "100.00"],
+    ["sales_return", "sale", "100.00"],
+    // purchase-side documents use the (tax-exclusive) purchase price
+    ["invoice", "purchase", "90.00"],
+    ["debit_note", "purchase", "90.00"],
+    ["purchase_return", "purchase", "90.00"],
+  ] as const)("%s (%s): an inclusive item starts at %s", async (documentType, invoiceType, rate) => {
+    renderCreator({ documentType, invoiceType });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: invoiceType === "sale" ? /customer/i : /supplier/i }));
+    await user.click(screen.getByText("Ramesh Traders"));
+    await pickItem(user, /atta inclusive/i);
+    expect((screen.getByLabelText("Unit price") as HTMLInputElement).value).toBe(rate);
   });
 });
