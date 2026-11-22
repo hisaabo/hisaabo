@@ -1,28 +1,87 @@
 # Upgrading Hisaabo
 
-## From v0.10.0 to the next release: browser AI agent (WebMCP) hardening
+## From v0.10.0 to v0.10.1 (Docker Compose and ONCE)
 
-Applies to every install; nothing needs configuring and the migration step applies everything on first boot (expand-only, safe while the previous version is still serving).
+A bug-fix release. Take the usual backup, then **upgrade the API first**: set `HISAABO_API_IMAGE` to `v0.10.1`, then `pull api` and `up -d api` as in [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install). The migration step applies the small additive migrations listed below on first boot. Then upgrade the web app and the store. There are **no breaking API changes**: every procedure keeps its name and its success response shape, and 0.10.0 web, desktop, mobile, CLI and MCP clients keep working against a 0.10.1 API. Multi-tenant operators should read the connection-pool sizing below.
 
-**Database migrations**
+### For operators
+
+- **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
+- **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
+
+- **New: `WEBMCP_DISABLED`, a kill switch for browser AI agents (WebMCP, experimental, web only).** `true` stops the web app offering Hisaabo to anyone's browser agent on this server, and the API then refuses requests marked `X-Hisaabo-Agent: webmcp` with 403. It does not affect the MCP server or the CLI. It is also reported by `system.config` (`webmcpDisabled`). See [DEPLOYMENT.md](DEPLOYMENT.md#backend-docker--ghcr). Browser agent calls use their own rate bucket (120 per minute per address) and send `X-Hisaabo-Agent: webmcp`, which is in the credentialed CORS allow-list; if a reverse proxy in front of the API restricts custom request headers, allow `X-Hisaabo-Agent`.
+
+### Migrations
+
+Three additive migrations for the browser agent (WebMCP) hardening, applied by the same migration step (the ledger and recurring-invoice fixes ship their own, listed below). All are expand-only, and old code ignores them, so rolling back needs no reverse SQL.
 
 | Mode | Directory | Migration | What it adds |
 |---|---|---|---|
-| Self-hosted (unified) | `packages/db/drizzle` | `0023_webmcp_audit_source`, `0024_idempotency_keys`, `0025_tenant_webmcp_disabled` | see below |
-| Multi-tenant, each tenant database | `packages/db/drizzle-tenant` | `0010_webmcp_audit_source`, `0011_idempotency_keys` | tenant tables only |
-| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled` | control table only |
+| Self-hosted (unified) | `packages/db/drizzle` | `0025_webmcp_audit_source`, `0026_idempotency_keys`, `0027_tenant_webmcp_disabled` | all three below |
+| Multi-tenant, each tenant database | `packages/db/drizzle-tenant` | `0012_webmcp_audit_source`, `0013_idempotency_keys` | the audit column and the idempotency table |
+| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled` | the organization switch |
 
 - `audit_log.source` (nullable text): where a change came from when it was not a person at the UI. `webmcp` for a browser AI agent, `mcp` for the MCP server (it already sent `x-client-type: mcp`), null for everything else, including every existing row. The web Activity Log labels these entries. It is attribution, not authorisation. Mobile and the CLI are unaffected (the extra field is ignored; the CLI's `--json` output now includes it), and self-export files written before the column existed still validate.
 - `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Repeating the identical request with the same key within 15 minutes returns the first record instead of creating a duplicate. Clients that do not send a key behave exactly as before. Expired rows are purged by the next keyed write.
 - `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me`.
 
-**Changes you may notice**
+The recurring-invoice fix adds its own:
 
-- **Browser AI agents (WebMCP, experimental, web only) are off for everyone after the upgrade.** The setting used to be one flag per browser; it is now per person and organization, and the old flag is deleted, never honoured. Anyone who had turned it on must turn it on again in Settings → Account. The desktop app never registers browser-agent tools.
-- New controls: the organization owner can turn it off for the whole organization (Settings → Account), and operators can set `WEBMCP_DISABLED=true` to turn it off for the whole server (see [DEPLOYMENT.md](DEPLOYMENT.md#backend-docker--ghcr)). The API then also answers requests marked `X-Hisaabo-Agent: webmcp` with 403.
-- Browser agent calls send `X-Hisaabo-Agent: webmcp`. The header is in the credentialed CORS allow-list, and those calls use a separate rate bucket (120 per minute per address), so an agent loop cannot rate-limit the dashboard. If a reverse proxy in front of the API restricts custom request headers, allow `X-Hisaabo-Agent`.
-- `invoice_update_status` in the browser no longer accepts `cancelled`: an agent cannot void an invoice. The MCP server tool is unchanged.
-- `system.config` gains `webmcpDisabled` and `auth.me` gains `webmcpDisabled`; both are additive.
+One additive migration, applied automatically by the migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+
+- **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
+- It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
+- Old code ignores the column and the index, so rolling the image back to 0.10.0 needs no reverse SQL (see [ROLLBACK.md](ROLLBACK.md)).
+
+To look for double-generated invoices from before the fix, run this read-only query in each database (each tenant database when multi-tenant). A template that was behind by several periods also shows up, because catch-up legitimately creates one invoice per missed period in a single tick, so compare the invoices and the template's frequency before acting. Nothing needs doing unless one period was billed twice; if it was, cancel the extra invoice the normal way.
+
+```sql
+SELECT r.template_id, t.name, r.business_id, count(*) AS runs,
+       min(r.executed_at) AS first_at, array_agg(r.invoice_id) AS invoices
+FROM recurring_invoice_runs r
+JOIN recurring_invoice_templates t ON t.id = r.template_id
+WHERE r.status = 'success'
+GROUP BY r.template_id, t.name, r.business_id, date_trunc('minute', r.executed_at)
+HAVING count(*) > 1
+ORDER BY first_at DESC;
+```
+
+### Multi-tenant: size the tenant connection pools
+
+The defaults (`TENANT_POOL_MAX=50`, `TENANT_POOL_PER_DB_MAX=5`, and the new `TENANT_POOL_DRAINING_MAX`, which defaults to `TENANT_POOL_MAX`) allow one API process up to `(50 + 50) x 5 = 500` tenant connections, far above Postgres' default `max_connections` of 100. Idle pools hold no connections, so a quiet system never gets near that, but a busy period can. **Never raise `TENANT_POOL_MAX` alone**: the bound is `(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX`.
+
+For about 230 tenants on `max_connections = 100` (one API process and one worker), set:
+
+```
+TENANT_POOL_MAX=10
+TENANT_POOL_PER_DB_MAX=2
+```
+
+That bounds tenant connections at `(10 + 10) x 2 = 40`. Add about 15 for the API's control, queue and cache connections, about 25 for the worker (conservative: today the worker only runs the system ping job), about 5 for background tenant visits, about 10 for operators and 3 reserved by Postgres, and you are at about 98. It is tight: a second API replica does not fit until `max_connections` is raised. On a server with `max_connections = 300`, `TENANT_POOL_MAX=50` with `TENANT_POOL_PER_DB_MAX=2` (bound 200) keeps most active tenants cached. Keep `TENANT_POOL_PER_DB_MAX` at 2 or more, and add every replica and worker when you add things up. The full budget, and what to do when the API logs `[tenant-pool] ... ended the oldest`, is in [DEPLOYMENT.md](DEPLOYMENT.md#tenant-connection-budget-multi-tenant).
+
+How eviction behaves: an evicted pool is not closed, so a request still using it is not affected, and its connections close by themselves after 20 idle seconds. At most `TENANT_POOL_DRAINING_MAX` evicted pools are allowed to drain at once; beyond that the oldest is closed after its running queries finish (up to 30 seconds). Only in such a storm, where more pools are evicted inside 20 seconds than the cap allows, can a request that holds the closed pool fail with `CONNECTION_ENDED`, and only if it starts a new query or transaction after that. To check connections during a busy period, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
+
+### Upgrade
+
+Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No environment variable is required or changed; the two pool settings above are optional but recommended for multi-tenant installs with more tenants than pool slots.
+
+### What is fixed (reliability)
+
+- **Multi-tenant: intermittent `CONNECTION_ENDED` errors.** The API keeps a cache of tenant database pools (`TENANT_POOL_MAX`, default 50). When the cache was full, serving another tenant evicted the least recently used pool and **closed** it, even while a request that had already taken that pool was still working. That request's next query, or its next transaction, failed with `write CONNECTION_ENDED`. With more tenants than pool slots (for example 229 tenants), and the recurring-invoice scheduler walking every tenant each minute, this was easy to hit. An evicted pool is now just dropped from the cache: requests holding it finish normally, and its connections close by themselves after 20 idle seconds.
+- **Multi-tenant: background loops over every tenant no longer use the shared pool cache.** The recurring-invoice scheduler, the notification dispatcher and collections sweep, the legacy store-slug scan, the shipping-webhook owner lookup and the `rotate-key` / `encrypt-sensitive-fields` tools visit each tenant with their own single-connection client and close it afterwards, so a sweep no longer evicts the pools live requests are using. Self-hosted (single-tenant) installs behave as before.
+- **A recurring template that cannot generate no longer writes a `failed` run every minute.** The failure is recorded once per distinct error for that occurrence; the template stays due and is retried quietly.
+- **Recurring invoices could be generated twice when more than one API replica was running.** The row lock that was meant to prevent it was released before the invoice was generated. Each occurrence is now claimed and generated in one transaction under the template's row lock, and a unique index on the occurrence rejects a second run as a backstop. "Run now" clicked twice quickly now creates two successive invoices (two occurrences) instead of racing for the same one.
+- **E-invoice submission after invoice creation** takes its own tenant database handle when it runs, instead of reusing the request's, which could already be gone.
+
+### What changes for users
+
+- **Browser AI agents (WebMCP, experimental, web only) are off for everyone after the upgrade.** The setting used to be one flag per browser; it is now per person and organization, and the old flag is deleted, never honoured. Anyone who had turned it on must turn it on again in Settings → Account. The organization owner can turn it off for the whole organization (Settings → Account), and the desktop app never registers browser-agent tools. Writes now show the business, the people and amounts involved and what will change; several queued prompts show **N pending** and **Deny all**; and an agent is limited to 20 approved writes per session and 10 per minute. `invoice_update_status` in the browser no longer accepts `cancelled`, so an agent cannot void an invoice (the MCP tool is unchanged). `system.config` and `auth.me` gain a `webmcpDisabled` field; both are additive. Details: [Browser AI Agents](https://docs.hisaabo.in/ai/webmcp/).
+- **Import wizard: Tally and Generic CSV are gone.** The wizard listed them, but the server only has `mybillbook` and `hisaabo` import adapters, so every import from the other two failed on its first batch with "Unknown import source". The wizard now offers myBillBook only. Nothing that worked is removed; there was never a Tally importer. To bring in Tally, Busy or spreadsheet data, convert it to the Hisaabo CSV layout and use `hisaabo import` (see [Import Data](https://docs.hisaabo.in/getting-started/import-data/)). An unregistered `source` sent to the API now returns `BAD_REQUEST` listing the supported sources (it used to be a 500).
+- **MCP import tools default to `source: "hisaabo"`** (they defaulted to `"excel"`, which the server rejected, so calls that did not set `source` failed). Agents that pass `source` explicitly are unaffected.
+- **Bank reconciliation can skip duplicate statement lines (web: on by default; API: opt-in).** When asked to, confirming a column mapping leaves out any line that is already on file in another import of the same bank account (same day, debit, credit and reference number, or the same narration when there is no reference). Overlapping statements and re-uploaded files no longer double up. The 0.10.1 web app has a **Skip lines already imported from an earlier statement** checkbox on the mapping step, ticked by default, and always sends the choice. The API input `skipDuplicates` defaults to **`false`**, so a 0.10.0 web or desktop client talking to a 0.10.1 API (which never sends the flag) imports every line exactly as before; nothing is dropped unless the client asks. The result carries `duplicatesSkipped` and a `duplicates` list (up to 500 lines: file position, date, amounts, narration, and the earlier import that holds each one), and the review screen shows the count with an expandable list of what was skipped, so nothing disappears unseen. `totalLines` in the result and on the import counts the lines actually imported. Imports made before this release are not changed, and they count as "already on file" for later statements. If two statements legitimately contain identical lines with no reference, untick the checkbox (or send `skipDuplicates: false`) for that upload.
+- **Journal entries are never deleted.** `journal.delete` used to remove an entry and its lines with no trace. It now voids the entry, exactly like `journal.void`: a reversing entry is posted, the original is flagged voided, and both stay in the books, reports and Tally export (netting to zero). The response is still `{ success: true }` with extra fields (`voided`, `alreadyVoided`, `reversingEntryNumber`, ...). Calling it on an already voided entry is a no-op. **Both `journal.delete` and `journal.void` now refuse a reversal entry** (the entry a previous void posted) with `BAD_REQUEST`: before, `journal.void` would reverse it, which reinstated the original's effect in the ledger while the original stayed flagged voided. To correct a wrong void, post a new journal entry. **`journal.update` also refuses a reversal entry** (`BAD_REQUEST`, "post a new journal entry to correct it"), because editing it would break the pair's netting to zero. `journal.update` now checks that the entry is not voided under a row lock inside its transaction, so an edit racing a void can no longer rewrite the lines of an entry that was just reversed (the edit is refused instead). Every void, from `journal.void` or `journal.delete`, is now recorded in the audit log as `journal.void`, written in the same transaction as the void itself: the record cannot be missing, and if it cannot be written the void is rolled back with an error. The web app and the CLI only ever offered Void; there is no delete command. Scripts that called `journal.delete` expecting the entry to disappear from `journal.list` will now see it (and its reversal) listed as voided.
+- **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
+
 
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 

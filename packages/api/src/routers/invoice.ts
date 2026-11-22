@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
+import { getTenantDb, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
 import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -529,10 +529,23 @@ export const invoiceRouter = router({
       // Capture everything needed for the async task before returning
       const invoiceId = invoice.id;
       const businessId = ctx.businessId;
-      const db = ctx.db;
+      const tenantId = ctx.tenantId;
 
       // Non-blocking: check e-invoice config + party GSTIN
       setTimeout(async () => {
+        // Take the tenant DB when the task runs rather than capturing the
+        // request's `ctx.db`: this runs after the response, by which time the
+        // pool behind the request's handle may have been evicted from the cache.
+        let db: TenantDatabase;
+        try {
+          db = await getTenantDb(tenantId);
+        } catch (err) {
+          if (process.env.NODE_ENV !== "test") {
+            console.error("[e-invoice auto-submit] tenant database unavailable:", err instanceof Error ? err.message : err);
+          }
+          return;
+        }
+
         try {
           const [config] = await db
             .select()

@@ -46,6 +46,7 @@ The Hono app handles:
 - CORS with origin allowlist from `CORS_ORIGINS` env var
 - Rate limiting: 120 requests/minute per IP
 - Health check: `GET /health`
+- Release version: `GET /api/version` returns `{ "version": "0.10.1" }` (public; polled by the release workflow before it deploys the frontends)
 - tRPC endpoint: `POST /trpc/*` and `GET /trpc/*`
 - Public store REST endpoints: `GET /store/:slug/catalog.json` (query: `page`, `limit`, `category`, `search` truncated to 100 characters, and `ids`, up to 50 comma-separated item UUIDs that narrow the result to those items; anything else is a 400), `POST /store/:slug/order`
 - Invoice PDF endpoint: `GET /invoice/:id/pdf`
@@ -78,7 +79,9 @@ In cloud/SaaS mode (`MULTI_TENANT=true`), each tenant has its own database. The 
 |---|---|---|
 | `auth` | `routers/auth.ts` | `register`, `login`, `logout`, `sendMagicLink`, `verifyMagicLink`, `me` |
 | `business` | `routers/business.ts` | `list`, `create`, `update`, `switchBusiness` |
-| `party` | `routers/party.ts` | `list`, `create`, `update`, `delete`, `ledger`, `merge`, `exportTally` |
+| `party` | `routers/party.ts` | `list`, `create`, `update`, `delete`, `ledger`, `merge` (`tallyExport`, a CSV, is deprecated: use `reports.tallyExport`) |
+| `reports` | `routers/reports.ts` | `trialBalance`, `balanceSheet`, `profitAndLoss`, `generalLedger`, `tallyExport` (Tally Prime XML) |
+| `journal` | `routers/journal.ts` | `list`, `create`, `update`, `void` (`delete` is an alias of `void`: journal entries are never erased) |
 | `item` | `routers/item.ts` | `list`, `create`, `update`, `delete`, `adjustStock`, `stockHistory` |
 | `invoice` | `routers/invoice.ts` | `list`, `create`, `update`, `delete`, `updateStatus`, `pdf` |
 | `payment` | `routers/payment.ts` | `list`, `create`, `update`, `delete`, `allocate` |

@@ -27,7 +27,7 @@
 import { config } from "dotenv";
 config({ path: "../../.env" });
 
-import { controlDb, tenants, getTenantDb } from "@hisaabo/db";
+import { controlDb, tenants, withDedicatedTenantDb, type TenantDatabase } from "@hisaabo/db";
 import { encryptField, isEncrypted } from "@hisaabo/db";
 import { eq } from "drizzle-orm";
 
@@ -103,14 +103,23 @@ async function encryptControlDb(): Promise<EncryptStats> {
 async function encryptTenantDb(tenantId: string, tenantSlug: string): Promise<EncryptStats> {
   const stats = newStats();
 
-  let db;
+  // One-connection client per tenant, ended afterwards: the run visits every
+  // tenant and must not cycle them all through the shared pool cache.
+  let connected = false;
   try {
-    db = await getTenantDb(tenantId);
+    return await withDedicatedTenantDb(tenantId, async (db) => {
+      connected = true;
+      return encryptTenantDbWith(db, stats);
+    });
   } catch (err) {
+    if (connected) throw err; // a failure while processing is not a "cannot connect"
     log(`  SKIP tenant ${tenantSlug}: cannot connect (${err instanceof Error ? err.message : String(err)})`);
     stats.errors++;
     return stats;
   }
+}
+
+async function encryptTenantDbWith(db: TenantDatabase, stats: EncryptStats): Promise<EncryptStats> {
 
   const { eInvoiceConfigs, businesses } = await import("@hisaabo/db");
 

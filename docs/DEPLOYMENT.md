@@ -42,7 +42,7 @@
 
 ### On push to `main` (path-filtered): previews only
 
-Nothing reaches production from `main`. Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
+Nothing from the app reaches production from `main` (the documentation site below is the one exception). Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
 
 | Workflow | Trigger paths | Preview |
 |---|---|---|
@@ -57,10 +57,38 @@ Container images are not published from `main` either: `release.yml` builds and 
 
 ### On a release tag (`v*`): production
 
-**`release.yml`** checks that the tag matches every version manifest, builds and signs the Docker images, then calls `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` to deploy the tagged commit to production (only the apps that changed since the previous tag). The frontend deploys wait for the API image job, so a new frontend never ships ahead of its API image. The release notes report each deploy's result.
+The web app, the store and the API reference reach production only for a **release tag**, by one of two routes. A `v*` tag push runs **`release.yml`**, the normal route, described here. The other is a manual run of a deploy workflow (Deploy Web, Deploy Store, Deploy API Docs) with a tag, for a redeploy or rollback; it passes through the same `production` approval and the same API version check below, but does not build images or wait. `release.yml` runs these jobs in order:
 
-- **Hold until the API is live (recommended):** the production deploy jobs run in the `production` GitHub environment. Add required reviewers to it (Settings → Environments → production) to approve the frontend deploy once the API containers of the same tag are running.
-- **Rollback / redeploy:** run the workflow manually (Actions → Deploy Web / Deploy Store / Deploy API Docs → Run workflow) with a release tag such as `v0.9.1`. Only tags are accepted.
+1. `changes` checks that the tag matches every version manifest.
+2. `prepare-release` creates the **one** GitHub release for the tag (a draft), or reuses one that already exists, draft or published. Every other job attaches to it by id; none creates another.
+3. `docker` builds both images, pushes them, signs them with cosign and verifies the signatures.
+4. `wait-for-api` polls `GET /api/version` on the production API until it reports the tag's version.
+5. `deploy-web`, `deploy-store` and `deploy-api-docs` deploy the tagged commit (only the apps that changed since the previous tag). Each runs in the `production` GitHub environment, so its required reviewers approve it.
+6. `release-notes` fills in the notes, including the result of each step above, and publishes the release.
+
+The `@hisaabo/cli` and `@hisaabo/mcp` npm publishes (API clients, and npm cannot unpublish) also wait for step 4, so they never ship before the API they talk to. The desktop installers and the Android APK build alongside steps 3 to 5 and only attach files to the release from step 2.
+
+**The workflow does not deploy the API.** It runs on its own server (Docker Compose behind nginx, `HISAABO_API_IMAGE` pinned to a tag), and the operator upgrades it by hand. That is why step 4 only waits: a new frontend must not go live before the API it was built against, and in 0.10.0 it did. The wait polls with backoff (10 s growing to 60 s) and logs the version production reports next to the one it expects. It fails after 350 minutes (GitHub stops a hosted job at 360); upgrade the API, then **Re-run failed jobs** on the workflow run. Nothing is rebuilt (the finished `docker` job is kept), and the deploys follow. Until then the GitHub release stays a **draft**. It is published only when `wait-for-api` ran and succeeded: production reports the version, nothing in the release needed the wait (an API-only release), or the operator deliberately ticked `skip_api_wait`. After a timed-out or failed wait, **and when an earlier job such as the image build failed** (the wait then never runs and shows as skipped, which is not a deliberate skip), the notes are updated but the release is not published, so the desktop installers and the Android APK never go public while production runs the old API or with no API image to match. The re-run publishes it.
+
+**Every production deploy re-checks the API version.** The first thing `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` do with a release tag, after any `production` approval, is read `GET /api/version` once and compare it with the tag. They deploy only when production reports **exactly that version**. They refuse when production is **older** (the frontend would run ahead of its API) and when it is **newer** (an older tag would downgrade the frontend: an approval that sat for days and was granted after a newer release, or an API upgrade in between). They also refuse when the version cannot be read. This covers the release run and manual runs alike. The `allow_api_mismatch` input on those workflows, and `skip_api_wait` on a release run (which passes it on), override the check; it is logged as a warning. An intentional rollback needs it, because the API is still on the newer version when the frontends go back first.
+
+#### Release runbook
+
+1. **Tag.** `pnpm release <version>` bumps every manifest and commits; merge it to `main`; run `pnpm release:tag` on `main`. The script refuses if a GitHub release for the tag already exists, a hand-made pre-release included: delete it first (`gh release delete vX.Y.Z --yes`). It needs `gh` and `jq`, or `--skip-release-check`.
+2. **Images publish.** The `Docker Images` job is green once `ghcr.io/<owner>/hisaabo-api:vX.Y.Z` and the all-in-one image are pushed, signed and their signatures verified. Only then does `wait-for-api` start; its log and step summary print the exact `HISAABO_API_IMAGE` lines to use, with and without the digest.
+3. **Operator upgrades the API.** Back up first (see [UPGRADING.md](UPGRADING.md)), set `HISAABO_API_IMAGE=ghcr.io/<owner>/hisaabo-api:vX.Y.Z` in `.env.prod` (or the digest-pinned form), then `pull api` and `up -d api` as in [Upgrading a pinned install](#upgrading-a-pinned-install).
+4. **The workflow detects the version.** Check by hand with `curl https://api.hisaabo.in/api/version`, which returns `{"version":"X.Y.Z"}`. When it matches, `wait-for-api` logs `MATCH` and finishes, and the web, store and API-reference deploys queue.
+5. **A reviewer approves.** Open the workflow run, choose **Review deployments**, tick `production` and approve. The deploys run only now. Add required reviewers under Settings → Environments → production; without them nothing holds the deploys after the API check.
+6. **Web and store deploy** to Cloudflare Pages production, and the release is published with its notes (only because the API check passed; see above).
+7. **Purge `/store/*` on the CDN** in front of the store domain (Cloudflare → Caching → Purge Cache → by prefix `<store-host>/store/`; purge everything if your plan has no prefix purge). The catalog, meta, logo and image responses are cached for up to a minute and the new store build may change their shape.
+8. **Check** the release notes table (every row green, `API in production` reports the version), and the version in the web sidebar footer.
+
+Emergencies and recovery:
+
+- **Run the release again on its tag** (to skip the wait, or to change its timeout). Run the Release workflow manually on the tag ref (Actions → Release → Run workflow, ref = the tag) with `skip_api_wait` ticked or `api_wait_timeout_minutes` set. A second run on a tag does not rebuild anything: `docker` finds both images already published, **verifies their existing cosign signatures** (this workflow, this tag, this commit) and carries on with those exact digests, so it reaches the wait and the deploys. The same applies to **Re-run all jobs**. With `skip_api_wait` the job logs a loud warning, the release notes say `Version NOT verified`, and the frontends run against whatever API is live, so use it only when that is known to be compatible.
+- **`force` is a separate, deliberate act.** It is the only way to overwrite release images: tick `force` on a manual run to re-push both images when a publish was partial (only one image exists) or an existing image has no valid signature. It is never implied by a re-run or by `skip_api_wait`, and without it a partial publish fails with a message saying so.
+- **Change the wait.** `api_wait_timeout_minutes` on a manual run, or the `API_WAIT_TIMEOUT_MINUTES` repository variable (which tag pushes use), sets how long `wait-for-api` polls (default and maximum 350 minutes).
+- **Redeploy or roll back a frontend.** Run Deploy Web / Deploy Store / Deploy API Docs manually with a release tag such as `v0.9.1` (see [ROLLBACK.md](ROLLBACK.md#6-rolling-back-a-release)). These runs do not wait for the API, but they never skip the version check described above, and need the `production` approval.
 - **Cloudflare settings:** the projects use direct uploads from these workflows. If a Pages project is also connected to the GitHub repository in the Cloudflare dashboard, disconnect it (or disable automatic production deployments), otherwise Cloudflare keeps deploying `main` itself. The production branch name defaults to `main`; set the `CF_PAGES_PRODUCTION_BRANCH` repository variable if a project uses another.
 
 ## Environment Variables
@@ -92,6 +120,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
 | `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). In production a set value that is not a valid `http(s)` URL fails startup (outside production it is ignored with a warning) | `https://api.hisaabo.in` |
 | `LEGACY_V09_CLIENT_COMPAT` | No | Default on; set to `false` to disable every v0.9.x client compatibility path at once: the Turnstile exemption for installed v0.9.x mobile/desktop apps on `sendMagicLink`, the bearer-token sign-in signature, and the `source=` app handoff. Deprecated, removed in 0.11.0 | `false` |
+| `EXPOSE_VERSION` | No | Default on. `false` removes the public `GET /api/version` endpoint (it then answers 404 like any unknown path), for operators who do not want the exact version readable by anyone. Leave it on for a deployment whose release workflow gates frontend deploys on it (see the [Release runbook](#release-runbook)): with it off that gate can only time out, or be bypassed. `/health` never reports a version either way | `false` |
 | `ALLOW_OPEN_SIGNUP` | No | Self-hosted only. By default signup is invite-only after the first owner; `true` restores open signup | `false` |
 | `WEBMCP_DISABLED` | No | Operator kill switch for browser AI agents (WebMCP). `true` (or `1`, `yes`, `on`) makes the web app skip registering Hisaabo tools with the browser's AI agent for **everyone** on this server, regardless of each user's or organization's setting; the Settings page says it is turned off by the administrator. The API also refuses requests that carry the browser-agent marker header (`X-Hisaabo-Agent: webmcp`) with 403. It does not affect the MCP server or the CLI, which are separate, deliberately installed integrations, and the marker is attribution rather than a security boundary: sessions and roles still decide what any call may do. Read at request time (restart the API after changing it). Default: unset (agents allowed, each user still has to opt in) | `true` |
 | `ENCRYPTION_KEY` | Yes (production and `MULTI_TENANT=true`) | AES-256-GCM key for field-level encryption: exactly **64 hex characters** (32 bytes); startup rejects anything else in multi-tenant mode. In single-tenant production a malformed key only logs a warning and saving/reading encrypted credentials (e-invoice, carrier API keys) fails until it is fixed. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | `a1b2c3...` |
@@ -129,7 +158,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `OPS_IP_ALLOWLIST` | No (recommended with `/ops`) | Comma-separated CIDRs (IPv4/IPv6) allowed to reach `/ops`; others get a plain 404. Uses the same client-IP rules as rate limiting (`TRUST_PROXY_HOPS`) | `203.0.113.0/24` |
 | `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | No | `/ops` session idle timeout, absolute lifetime, and how long a TOTP step-up covers destructive actions (defaults 15 / 8 / 5) | `15` |
 | `QUEUE_HEARTBEAT_FILE` | No | Worker only. File the worker touches every 10 seconds to prove liveness (default `/tmp/worker-heartbeat`; the bundled compose healthcheck reads that path, so change it only together with the healthcheck) | `/tmp/worker-heartbeat` |
-| `NOTIFICATIONS_WORKER` | No | The in-process notification dispatcher (outbox delivery plus the hourly collections sweep) that runs inside the **API** process. `true` = on, `false` = off (case-insensitive; any other value is ignored with a warning and the default applies). **Unset: on for single-tenant / self-hosted installs, off when `MULTI_TENANT=true`.** A multi-tenant operator who wants notifications dispatched sets `NOTIFICATIONS_WORKER=true`; until then nothing is dispatched and events queue in `notification_outbox`. Once it is enabled they are delivered, except events older than 72 hours, which are expired instead (so enable it before you need notifications, not after a long pause). With it on, a multi-tenant deployment scans **every** tenant database each `NOTIFICATIONS_FULL_SWEEP_SECONDS`, which churns the tenant connection pool (`TENANT_POOL_MAX`) when there are many tenants. Set `false` on replicas that should only serve requests (claiming from the outbox is safe across replicas) | `true` |
+| `NOTIFICATIONS_WORKER` | No | The in-process notification dispatcher (outbox delivery plus the hourly collections sweep) that runs inside the **API** process. `true` = on, `false` = off (case-insensitive; any other value is ignored with a warning and the default applies). **Unset: on for single-tenant / self-hosted installs, off when `MULTI_TENANT=true`.** A multi-tenant operator who wants notifications dispatched sets `NOTIFICATIONS_WORKER=true`; until then nothing is dispatched and events queue in `notification_outbox`. Once it is enabled they are delivered, except events older than 72 hours, which are expired instead (so enable it before you need notifications, not after a long pause). With it on, a multi-tenant deployment scans **every** tenant database each `NOTIFICATIONS_FULL_SWEEP_SECONDS`, which opens one short-lived connection per tenant (not the shared tenant pools) and takes time and load when there are many tenants. Set `false` on replicas that should only serve requests (claiming from the outbox is safe across replicas) | `true` |
 | `NOTIFICATIONS_FULL_SWEEP_SECONDS` | No | Multi-tenant only, and only where the dispatcher is on: how often every active tenant is scanned for pending notification events (default 60, minimum 5; smaller or invalid values fall back to 60). Raise it on large installs | `60` |
 | `PUSH_PROVIDER` | No | Mobile push transport: `none` (default; the inbox and email copies still work) or `gorush`. `gorush` needs `GORUSH_URL` and your own app build with Apple/Firebase credentials; any other value logs a warning and disables push | `gorush` |
 | `GORUSH_URL` | With `PUSH_PROVIDER=gorush` | Base URL of the Gorush sidecar. Gorush's push endpoint has no authentication, so use a private-network address (a compose service name) and never publish its port | `http://gorush:8088` |
@@ -140,7 +169,8 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `STORAGE_DRIVER` | No | Where uploaded item images are stored: `local` (default) or `s3` (Cloudflare R2, AWS S3, MinIO). An unknown value falls back to `local` with a warning | `s3` |
 | `STORAGE_LOCAL_DIR` | No | Directory for `STORAGE_DRIVER=local`. The images set it to `/storage/objects` and `docker-compose.prod.yml` pins it there (the `api_storage` volume), so a value in `.env.prod` has no effect with that compose file. Without it the default is `./.storage/objects` relative to the working directory | `/storage/objects` |
 | `STORAGE_S3_ENDPOINT` / `STORAGE_S3_BUCKET` / `STORAGE_S3_ACCESS_KEY_ID` / `STORAGE_S3_SECRET_ACCESS_KEY` | With `STORAGE_DRIVER=s3` | S3-compatible endpoint, bucket and credentials. The driver is created the first time storage is used (for example an item image upload), and fails with a configuration error if any of the four is missing. `STORAGE_S3_REGION` is optional (default `auto`) | `https://<account>.r2.cloudflarestorage.com` |
-| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU eviction, default 50) and connections per tenant pool (default 5) | `50` |
+| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU, default 50) and connections per tenant pool (default 5). Together with `TENANT_POOL_DRAINING_MAX` they bound the tenant connections one process can hold: `(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX`, which is 500 with the defaults, five times Postgres' default `max_connections`. Size them together; see [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `10` / `2` |
+| `TENANT_POOL_DRAINING_MAX` | No | Multi-tenant only. How many pools that were evicted from the cache may still hold open connections at once (default: `TENANT_POOL_MAX`; `0` closes every evicted pool at once). Past it the oldest is closed, which can fail a request still using it in a storm. See [Tenant connection budget](#tenant-connection-budget-multi-tenant) | `10` |
 | `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
 | `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
 | `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
@@ -150,6 +180,46 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
 When the online store is enabled for a business, its public catalog (including the business phone, email and address) can be read by any website a visitor's browser loads, so an intranet-only self-hosted install must not treat network position as protection for store data.
+
+### Tenant connection budget (multi-tenant)
+
+With `MULTI_TENANT=true` each API process keeps an LRU of tenant database pools (`TENANT_POOL_MAX`), and each pool may open up to `TENANT_POOL_PER_DB_MAX` connections. A connection that sits idle for 20 seconds is closed, so an idle pool holds **no** connections, but a burst across many tenants can reach the ceiling.
+
+When a pool is evicted from the cache it is **not** closed (since 0.10.1): a request that already holds it finishes normally, and the pool's connections close by themselves after 20 idle seconds. Those evicted pools are "draining", and `TENANT_POOL_DRAINING_MAX` (default: the same as `TENANT_POOL_MAX`) caps how many may drain at once. When the cap is passed, the oldest draining pool is closed (waiting up to 30 seconds for the queries already running on it), so the number of tenant connections a process holds has a hard bound:
+
+```
+tenant connections per process  <=  (TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX
+```
+
+plus one for each background visit in progress (the recurring-invoice scheduler, the notification dispatcher and the like each visit one tenant at a time through their own single connection, closed afterwards; none of them uses the shared pools). Add everything that connects to the server and keep the total below Postgres' `max_connections`:
+
+```
+(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX     tenant pools, per API process
++ about 15 per API process      control pool, LISTEN and watchdog, queue client
++ about 25 per worker           queue client and control pool (conservative: today the worker only runs
+                                the system ping job and opens no tenant pools; this grows with 0.11.0 jobs)
++ about 5 per process           background tenant visits
++ about 10 in total             operators: psql, backups, the admin dashboard, migrations
++ 3                             superuser_reserved_connections
+<= max_connections
+```
+
+The defaults (`50`, `50`, `5`) allow 500 tenant connections from one API process, so they only fit a server with `max_connections` of several hundred; a second API replica doubles the figure. **Never raise `TENANT_POOL_MAX` alone**: it raises the bound twice (once for live pools, once for draining ones) and `TENANT_POOL_PER_DB_MAX` multiplies both.
+
+Starting points for about 230 tenants, one API process and one worker:
+
+| `max_connections` | `TENANT_POOL_MAX` | `TENANT_POOL_DRAINING_MAX` | `TENANT_POOL_PER_DB_MAX` | Tenant connections (at most) | Spare |
+|---|---|---|---|---|---|
+| 100 (Postgres default) | 10 | 10 (default) | 2 | 40 | 2 |
+| 300 | 50 | 50 (default) | 2 | 200 | 42 |
+
+The spare column is `max_connections` minus the tenant bound minus the other consumers in the list above (15 + 25 + 5 + 10 + 3 = 58).
+
+At 100 connections the budget is tight (a second API replica does not fit: raise `max_connections` first). Only the tenants active within the last few seconds need a pool, so 10 cached pools serve a quiet period well, but a busy period with more than about 20 distinct tenants inside 20 seconds exceeds the draining cap and starts closing draining pools. The API logs a `[tenant-pool] ... ended the oldest` warning (at most once a minute) when that happens; it is the signal to raise `max_connections` and then `TENANT_POOL_MAX`, not a reason to raise `TENANT_POOL_MAX` on its own.
+
+**What the cap can cost.** Closing the oldest draining pool is the only place a request can still see `CONNECTION_ENDED`, and only in such a storm: a request that holds that pool keeps any query or transaction already running on it (up to 30 seconds), but a new query or transaction it starts afterwards fails. If you would rather spend connections than risk that, raise `max_connections` and `TENANT_POOL_DRAINING_MAX`; if connections matter more, lower `TENANT_POOL_DRAINING_MAX` (`0` closes every evicted pool as soon as its running queries finish, which is the pre-0.10.1 behaviour apart from letting those queries complete).
+
+Keep `TENANT_POOL_PER_DB_MAX` at 2 or more: a request that opens a transaction holds one connection and may still run a query beside it. To see who holds connections: `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
 ### GitHub Actions Secrets
 
@@ -165,6 +235,8 @@ When the online store is enabled for a business, its public catalog (including t
 |---|---|---|
 | `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
 | `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
+| `PRODUCTION_API_URL` | release (wait-for-api) | Base URL of the production API whose `/api/version` the release waits on. Default `https://api.hisaabo.in`; set it on a fork or another deployment |
+| `API_WAIT_TIMEOUT_MINUTES` | release (wait-for-api) | How long a tag-triggered release waits for the production API to report the new version. Default and maximum 350 (GitHub stops a hosted job at 360 minutes) |
 | `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` | deploy-web | Chrome/Edge origin-trial token for the web origin, passed to the web build so the page carries the `origin-trial` meta tag. A variable, not a secret (the token is public in the page HTML). Tokens are bound to one origin, so define it on the `production` environment to keep it off the preview alias. Unset or empty = no tag. Desktop builds do not use it |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
@@ -374,7 +446,7 @@ The `docker-compose.prod.yml` is compatible with Kamal's deploy model:
 
 ## Container images (GHCR)
 
-`release.yml` (on a `v*` tag) first checks that the tag matches every version manifest (`pnpm release <version>` bumps them together), then builds and pushes both images for **every** release tag, whichever paths changed, so a released version always has images. Each image is signed with cosign (keyless) and carries SLSA provenance and an SBOM.
+`release.yml` (on a `v*` tag) first checks that the tag matches every version manifest (`pnpm release <version>` bumps them together), then builds and pushes both images for **every** release tag, whichever paths changed, so a released version always has images. Each image is signed with cosign (keyless) and carries SLSA provenance and an SBOM. The workflow verifies both signatures before it starts waiting for you to upgrade the API, so an image you are asked to deploy is complete and verifiable (see the [Release runbook](#release-runbook)).
 
 Two images are published, both multi-arch (`linux/amd64`, `linux/arm64`):
 
@@ -441,6 +513,7 @@ Every release image records the source revision, so any running instance can be 
 - **Startup log**: `Hisaabo API v0.10.0 (commit 26c61bb0f3a1)`
 - **Admin dashboard** header (`node packages/api/dist/bin/admin.js`): `v0.10.0 · 26c61bb0f3a1`
 - **Signed-in API clients**: `auth.me` returns `server: { version, commit }`. The unauthenticated `/health` deliberately does not.
+- **Public version probe** (0.10.1 and later): `GET /api/version` returns `{"version":"0.10.1"}`, the version only (no commit, no health verdict), uncacheable, with no database access. The release workflow polls it on the production API to know when the operator has upgraded (see the [Release runbook](#release-runbook)). An API older than 0.10.1 answers 404, and so does one started with `EXPOSE_VERSION=false`, the opt-out for operators who do not want the version public (see the environment table).
 - **Web app**: the sidebar footer shows `v0.10.0 · 26c61bb` for the CI-built web deploy and the desktop release builds.
 
 An image built locally without the build args reports version `dev` (resolved from `package.json`) and commit `unknown`.
@@ -452,7 +525,7 @@ The `nginx/nginx.conf` provides:
 - Upstream keepalive connections to the API container
 - Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy; HSTS only when the edge proxy reports `X-Forwarded-Proto: https`), `server_tokens off`
 - Gzip compression for JSON responses
-- Path-based routing (`/api/trpc/*`, `/api/*`, `/store/*`, `/webhooks/*`, `/health`)
+- Path-based routing (`/api/trpc/*`, `/api/*` including `/api/version`, `/store/*`, `/webhooks/*`, `/health`). If you replace this file with your own proxy rules, keep `/api/version` reachable: the release workflow depends on it
 - Per-IP `limit_req` zones (stricter for auth procedures) and a per-IP `limit_conn` cap; header/body timeouts against slow clients
 - Per-location body limits: 10MB for tRPC/API (bulk imports), 64KB for auth, 256KB for the public store, 1MB for webhooks and as the default
 - Overwrites `X-Forwarded-For` with the connecting address and strips `CF-Connecting-IP` (no client-supplied forwarding headers reach the API). nginx does not cache store responses.

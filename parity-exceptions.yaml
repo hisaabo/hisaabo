@@ -77,10 +77,6 @@ exceptions:
       - selfExport.request
       - selfImport.request
 
-      # --- Parties ---
-      # Tally integration is an accounting workflow built for the web app.
-      - party.tallyExport
-
       # --- Document Types ---
       # Debit Notes — rare document type; intentionally omitted from mobile.
       - debitNote.list
@@ -393,10 +389,6 @@ exceptions:
       - import.importTransfers
       - import.reconcileDirectPayments
 
-      # --- Parties ---
-      # Tally accounting integration — Tally-specific export format.
-      - party.tallyExport
-
       # --- Bank Reconciliation ---
       # Interactive CSV upload + review workflow — not suited for CLI.
       - bankRecon.uploadCSV
@@ -530,9 +522,13 @@ exceptions:
       - import.importTransfers
       - import.reconcileDirectPayments
 
-      # --- Parties ---
-      # Tally accounting integration — Tally-specific export format.
-      - party.tallyExport
+      # --- Tally export ---
+      # Tally Prime XML for a whole period (ledger masters plus every voucher) is a
+      # file hand-off to the accountant's Tally, and can run to megabytes; returned
+      # inline it would flood the agent's context. MCP agents read the structured
+      # reports instead (trial balance, general ledger, day book).
+      # (party.tallyExport, the deprecated CSV, is used by no platform any more.)
+      - reports.tallyExport
 
       # --- Bank Reconciliation ---
       # Interactive CSV upload flow — MCP agents use structured data.

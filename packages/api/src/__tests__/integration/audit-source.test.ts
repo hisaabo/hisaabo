@@ -78,12 +78,12 @@ describe("every audit write carries the source", () => {
     });
   }
 
-  it("passes `source: ctx.source` at every logAudit(ctx.db, { ... }) call site", () => {
+  it("passes `source: ctx.source` at every logAudit(ctx.db, { ... }) and logAuditInTransaction(tx, { ... }) call site", () => {
     const offenders: string[] = [];
     let callSites = 0;
     for (const file of sourceFiles(srcRoot)) {
       const text = fs.readFileSync(file, "utf8");
-      const needle = /logAudit\(\s*ctx\.db,\s*\{/g;
+      const needle = /(?:logAudit\(\s*ctx\.db|logAuditInTransaction\(\s*tx),\s*\{/g;
       for (let m = needle.exec(text); m; m = needle.exec(text)) {
         callSites++;
         const open = m.index + m[0].length - 1;

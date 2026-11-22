@@ -9,9 +9,160 @@ import {
   voidJournalEntrySchema,
   createJournalEntryTemplateSchema,
 } from "@hisaabo/shared";
-import { router, viewerProcedure, adminProcedure } from "../trpc.js";
+import { router, viewerProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAuditInTransaction } from "../lib/audit.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+
+type JournalEntryRow = typeof journalEntries.$inferSelect;
+
+type VoidOutcome =
+  | { kind: "voided"; voidedEntry: JournalEntryRow; reversingEntry: JournalEntryRow }
+  | { kind: "already_voided"; entry: JournalEntryRow };
+
+interface VoidCtx {
+  db: TenantDatabase;
+  businessId: string;
+  user: { id: string; name?: string | null };
+  ipAddress?: string | null;
+  /** Where the call came from (webmcp / mcp / null), copied onto the audit row. */
+  source?: string | null;
+}
+
+/**
+ * Void a journal entry by posting a reversing entry (debits and credits
+ * swapped, same date) and flagging the original as voided. Shared by `void` and
+ * `delete`. Everything, including the lookup, runs in one transaction with the
+ * original row locked, so two concurrent voids cannot both reverse the same
+ * entry.
+ *
+ * An entry that is itself the reversal of another entry (it has `reversesEntryId`)
+ * is refused for both procedures: reversing it would reinstate the original's
+ * effect in the ledger while the original stays flagged voided. Correct a wrong
+ * void by posting a new entry instead.
+ */
+async function voidJournalEntry(
+  ctx: VoidCtx,
+  id: string,
+  via: "void" | "delete",
+): Promise<VoidOutcome> {
+  return ctx.db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(journalEntries)
+      .where(
+        and(
+          eq(journalEntries.id, id),
+          eq(journalEntries.businessId, ctx.businessId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+
+    if (!existing) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
+    }
+
+    if (existing.reversesEntryId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          `${existing.entryNumber} is the reversal of another journal entry and is part of its audit trail; ` +
+          "it cannot be voided or deleted. To correct a wrong void, post a new journal entry.",
+      });
+    }
+
+    if (existing.isVoided) {
+      return { kind: "already_voided" as const, entry: existing };
+    }
+
+    const originalLines = await tx
+      .select({
+        accountId: journalEntryLines.accountId,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        narration: journalEntryLines.narration,
+      })
+      .from(journalEntryLines)
+      .where(eq(journalEntryLines.journalEntryId, id));
+
+    // Generate entry number for the reversing entry
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':journal_entry_number'))`);
+    const [maxEntry] = await tx
+      .select({
+        count: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,
+      })
+      .from(journalEntries)
+      .where(eq(journalEntries.businessId, ctx.businessId));
+
+    const nextNum = (maxEntry?.count ?? 0) + 1;
+    const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`;
+
+    // Create the reversing entry with debits and credits swapped
+    const [reversingEntry] = await tx
+      .insert(journalEntries)
+      .values({
+        businessId: ctx.businessId,
+        entryNumber,
+        entryDate: existing.entryDate,
+        narration: `Void: reversal of ${existing.entryNumber}`,
+        source: "manual",
+        reversesEntryId: existing.id,
+        createdByUserId: ctx.user.id,
+        createdByName: ctx.user.name ?? null,
+      })
+      .returning();
+
+    if (!reversingEntry) {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create reversing entry" });
+    }
+
+    // Insert reversed lines (debit <-> credit swapped)
+    if (originalLines.length > 0) {
+      await tx.insert(journalEntryLines).values(
+        originalLines.map(line => ({
+          journalEntryId: reversingEntry.id,
+          accountId: line.accountId,
+          debit: line.credit,   // swap: original credit becomes debit
+          credit: line.debit,   // swap: original debit becomes credit
+          narration: line.narration,
+        })),
+      );
+    }
+
+    // Mark original as voided
+    await tx
+      .update(journalEntries)
+      .set({
+        isVoided: true,
+        voidedByEntryId: reversingEntry.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(journalEntries.id, existing.id));
+
+    // The audit row commits (or rolls back) with the void itself: a void that
+    // succeeded always has its record, and a failed audit insert rolls the void
+    // back instead of leaving an unrecorded change. `via` says which procedure
+    // was called.
+    await logAuditInTransaction(tx, {
+      businessId: ctx.businessId,
+      userId: ctx.user.id,
+      action: "journal.void",
+      entityType: "journal_entry",
+      entityId: existing.id,
+      metadata: {
+        entryNumber: existing.entryNumber,
+        reversingEntryId: reversingEntry.id,
+        reversingEntryNumber: reversingEntry.entryNumber,
+        via,
+      },
+      ipAddress: ctx.ipAddress,
+      source: ctx.source,
+    });
+
+    return { kind: "voided" as const, voidedEntry: existing, reversingEntry };
+  });
+}
 
 export const journalRouter = router({
   list: viewerProcedure
@@ -176,55 +327,73 @@ export const journalRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Account");
 
-      const [existing] = await ctx.db
-        .select()
-        .from(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.id, input.id),
-            eq(journalEntries.businessId, ctx.businessId),
-          ),
-        )
-        .limit(1);
+      const updated = await ctx.db.transaction(async (tx) => {
+        // Lock the entry row and check its state INSIDE the transaction. `void`
+        // takes the same lock, so an update and a void of one entry are
+        // serialized: either the update commits first and the void then reverses
+        // the updated lines, or the void commits first and this update is refused.
+        // (Checking outside the transaction let an update replace the lines of an
+        // entry that a concurrent void had just reversed.)
+        const [existing] = await tx
+          .select()
+          .from(journalEntries)
+          .where(
+            and(
+              eq(journalEntries.id, input.id),
+              eq(journalEntries.businessId, ctx.businessId),
+            ),
+          )
+          .for("update")
+          .limit(1);
 
-      if (!existing) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
-      }
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
+        }
 
-      if (existing.source !== "manual") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Only manually created journal entries can be updated",
-        });
-      }
+        if (existing.source !== "manual") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Only manually created journal entries can be updated",
+          });
+        }
 
-      if (existing.isVoided) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Cannot update a voided journal entry",
-        });
-      }
+        // A reversal (the entry a void posted) is the counterpart of the entry it
+        // reverses: editing its lines would break the pair's netting to zero.
+        if (existing.reversesEntryId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `${existing.entryNumber} is the reversal of another journal entry and is part of its audit trail; ` +
+              "it cannot be edited. To correct it, post a new journal entry.",
+          });
+        }
 
-      // If lines are provided, verify all account IDs belong to this business
-      if (input.lines) {
-        const accountIds = input.lines.map(l => l.accountId);
-        const foundAccounts = await ctx.db
-          .select({ id: chartOfAccounts.id })
-          .from(chartOfAccounts)
-          .where(eq(chartOfAccounts.businessId, ctx.businessId));
+        if (existing.isVoided) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Cannot update a voided journal entry",
+          });
+        }
 
-        const ownedAccountIds = new Set(foundAccounts.map(a => a.id));
-        for (const accountId of accountIds) {
-          if (!ownedAccountIds.has(accountId)) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Account ${accountId} not found in this business`,
-            });
+        // If lines are provided, verify all account IDs belong to this business
+        if (input.lines) {
+          const accountIds = input.lines.map(l => l.accountId);
+          const foundAccounts = await tx
+            .select({ id: chartOfAccounts.id })
+            .from(chartOfAccounts)
+            .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+          const ownedAccountIds = new Set(foundAccounts.map(a => a.id));
+          for (const accountId of accountIds) {
+            if (!ownedAccountIds.has(accountId)) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Account ${accountId} not found in this business`,
+              });
+            }
           }
         }
-      }
 
-      const updated = await ctx.db.transaction(async (tx) => {
         // Update lines if provided: delete old, insert new
         if (input.lines) {
           await tx
@@ -275,129 +444,70 @@ export const journalRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Account");
 
-      const [existing] = await ctx.db
-        .select()
-        .from(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.id, input.id),
-            eq(journalEntries.businessId, ctx.businessId),
-          ),
-        )
-        .limit(1);
+      const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
+      const outcome = await voidJournalEntry(scope, input.id, "void");
 
-      if (!existing) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
-      }
-
-      if (existing.isVoided) {
+      if (outcome.kind === "already_voided") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Journal entry is already voided",
         });
       }
 
-      // Fetch original lines
-      const originalLines = await ctx.db
-        .select({
-          accountId: journalEntryLines.accountId,
-          debit: journalEntryLines.debit,
-          credit: journalEntryLines.credit,
-          narration: journalEntryLines.narration,
-        })
-        .from(journalEntryLines)
-        .where(eq(journalEntryLines.journalEntryId, input.id));
-
-      const result = await ctx.db.transaction(async (tx) => {
-        // Generate entry number for the reversing entry
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':journal_entry_number'))`);
-        const [maxEntry] = await tx
-          .select({
-            count: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,
-          })
-          .from(journalEntries)
-          .where(eq(journalEntries.businessId, ctx.businessId));
-
-        const nextNum = (maxEntry?.count ?? 0) + 1;
-        const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`;
-
-        // Create the reversing entry with debits and credits swapped
-        const [reversingEntry] = await tx
-          .insert(journalEntries)
-          .values({
-            businessId: ctx.businessId,
-            entryNumber,
-            entryDate: existing.entryDate,
-            narration: `Void: reversal of ${existing.entryNumber}`,
-            source: "manual",
-            reversesEntryId: existing.id,
-            createdByUserId: ctx.user.id,
-            createdByName: ctx.user.name ?? null,
-          })
-          .returning();
-
-        if (!reversingEntry) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create reversing entry" });
-        }
-
-        // Insert reversed lines (debit <-> credit swapped)
-        await tx.insert(journalEntryLines).values(
-          originalLines.map(line => ({
-            journalEntryId: reversingEntry.id,
-            accountId: line.accountId,
-            debit: line.credit,   // swap: original credit becomes debit
-            credit: line.debit,   // swap: original debit becomes credit
-            narration: line.narration,
-          })),
-        );
-
-        // Mark original as voided
-        await tx
-          .update(journalEntries)
-          .set({
-            isVoided: true,
-            voidedByEntryId: reversingEntry.id,
-            updatedAt: new Date(),
-          })
-          .where(eq(journalEntries.id, existing.id));
-
-        return { voidedEntry: existing, reversingEntry };
-      });
-
-      return result;
+      return { voidedEntry: outcome.voidedEntry, reversingEntry: outcome.reversingEntry };
     }),
 
+  /**
+   * delete — kept for API compatibility; it no longer erases anything.
+   *
+   * A posted journal entry is part of the books: removing the row (and, through
+   * the FK cascade, its lines) left no trace of what was posted or who removed
+   * it. `delete` now does exactly what `void` does: it posts a reversing entry
+   * (debits and credits swapped, same date) and flags the original as voided,
+   * so both stay on record and the effect on the ledger nets to zero.
+   *
+   * There are no draft journal entries (an entry is posted on creation; the
+   * table has no status column), so there is nothing that could be dropped
+   * without a trace.
+   *
+   *  - not found                  -> NOT_FOUND (unchanged)
+   *  - already voided             -> `{ success: true, alreadyVoided: true }`, no change
+   *                                  (the entry is already out of the books, so a repeated
+   *                                  call is a no-op rather than an error)
+   *  - a reversal entry           -> BAD_REQUEST: reversing it would silently reinstate the
+   *                                  entry it reverses (`void` refuses it too)
+   *  - anything else              -> voided, `{ success: true, voided: true, ... }`
+   *
+   * Returns `{ success: true }` plus additive fields, so existing callers that
+   * only check `success` keep working.
+   */
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Account");
 
-      const [existing] = await ctx.db
-        .select()
-        .from(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.id, input.id),
-            eq(journalEntries.businessId, ctx.businessId),
-          ),
-        )
-        .limit(1);
+      const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
+      const outcome = await voidJournalEntry(scope, input.id, "delete");
 
-      if (!existing) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
+      if (outcome.kind === "already_voided") {
+        return {
+          success: true as const,
+          voided: false,
+          alreadyVoided: true,
+          entryNumber: outcome.entry.entryNumber,
+          reversingEntryId: outcome.entry.voidedByEntryId,
+          reversingEntryNumber: null as string | null,
+        };
       }
 
-      // Lines are cascade-deleted by FK constraint
-      await ctx.db
-        .delete(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.id, input.id),
-            eq(journalEntries.businessId, ctx.businessId),
-          ),
-        );
-
-      return { success: true };
+      return {
+        success: true as const,
+        voided: true,
+        alreadyVoided: false,
+        entryNumber: outcome.voidedEntry.entryNumber,
+        reversingEntryId: outcome.reversingEntry.id as string | null,
+        reversingEntryNumber: outcome.reversingEntry.entryNumber as string | null,
+      };
     }),
 
   // ── Template endpoints ──────────────────────────────────────

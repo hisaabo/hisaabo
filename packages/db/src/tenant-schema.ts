@@ -797,10 +797,20 @@ export const recurringInvoiceRuns = pgTable("recurring_invoice_runs", {
   status: recurringRunStatusEnum("status").notNull(),
   errorMessage: text("error_message"),
   executedAt: timestamp("executed_at", { withTimezone: true }).defaultNow().notNull(),
+  // The occurrence this run consumed: the template's next_run_date when the run
+  // was claimed. NULL only on rows written before this column existed.
+  scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
 }, (t) => [
   index("recurring_run_template_idx").on(t.templateId),
   index("recurring_run_business_idx").on(t.businessId),
   index("recurring_run_executed_idx").on(t.businessId, t.executedAt),
+  // Backstop for the template row lock: one run may consume a given occurrence,
+  // so a second runner that somehow got past the lock fails instead of billing
+  // twice. Partial: history (scheduled_for IS NULL, which may already hold
+  // duplicate rows) is never touched, and `failed` rows repeat by design.
+  uniqueIndex("recurring_run_occurrence_uniq")
+    .on(t.templateId, t.scheduledFor)
+    .where(sql`${t.scheduledFor} IS NOT NULL AND ${t.status} IN ('success', 'skipped_limit')`),
 ]);
 
 // ── Chart of Accounts ──────────────────────────────────────────

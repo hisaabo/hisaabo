@@ -102,7 +102,9 @@ export function registerJournalTools(server: ToolServer, client: HisaaboClient) 
     "journal_void",
     [
       "Void a journal entry, reversing its accounting effect.",
-      "A voided entry cannot be edited. Use this to correct mistakes.",
+      "Posts a reversing entry (debits and credits swapped) and flags the original as voided; both stay on record, journal entries are never deleted.",
+      "A voided entry cannot be edited, and a reversal entry (the one a void posted) cannot itself be voided: to correct a wrong void, post a new entry.",
+      "Use this to correct mistakes.",
     ].join(" "),
     {
       id: z.string().uuid()

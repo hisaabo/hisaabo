@@ -1462,55 +1462,63 @@ Get all active targets assigned to the currently authenticated user.
 
 ### Import
 
+All four import tools need admin mode and `confirm: true`, take at most 500 records per call, and accept an optional `source` that selects the server's import adapter. Leave it at its default, `hisaabo`: the tools send Hisaabo's canonical fields. The server only has `hisaabo` and `mybillbook` adapters, so any other value (for example `tally` or `excel`, which earlier docs suggested) is rejected with a message listing the supported sources. Data exported from Tally, Vyapar or a spreadsheet has to be mapped to the fields below first.
+
 #### `import_parties`
 
-Bulk-import parties from a CSV or JSON payload.
+Bulk-import parties. Duplicates (same name, case-insensitive) are skipped, never overwritten.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string; // JSON array string or CSV content
-  skipDuplicates?: boolean; // default true
+  source?: "hisaabo";          // default
+  parties: Array<{
+    name: string;
+    type?: "customer" | "supplier";   // default "customer"
+    phone?: string; email?: string; gstin?: string; pan?: string;
+    opening_balance?: string;         // decimal string
+    billing_address?: string; shipping_address?: string;
+    city?: string; state?: string; pincode?: string;
+  }>;
 }
 ```
 
 #### `import_items`
 
-Bulk-import items from a CSV or JSON payload.
+Bulk-import items or services. Duplicates (same name) are skipped; stock always starts at 0.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string;
-  skipDuplicates?: boolean;
+  source?: "hisaabo";
+  items: Array<{ name: string; item_type?: "product" | "service"; sale_price?: string; purchase_price?: string; /* ... */ }>;
 }
 ```
 
 #### `import_invoices`
 
-Bulk-import historical invoices. Useful for migrating from Tally, Vyapar, or spreadsheets.
+Bulk-import historical invoices with optional line items. Parties must already exist; duplicate invoice numbers are skipped.
 
 **Input:**
 ```typescript
 {
-  format: "json";
-  data: string; // JSON array of invoice objects
-  createMissingParties?: boolean;
-  createMissingItems?: boolean;
+  source?: "hisaabo";
+  auto_create_payments?: boolean;
+  default_payment_mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  invoices: Array<{ invoice_number: string; invoice_date: string; party_name: string; total_amount: string; /* ... */ }>;
 }
 ```
 
 #### `import_payments`
 
-Bulk-import historical payment records.
+Bulk-import historical payment records. Parties and invoices must already exist.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string;
+  source?: "hisaabo";
+  paid_invoice_numbers?: string[];
+  payments: Array<{ party_name: string; amount: string; payment_date: string; mode?: string; /* ... */ }>;
 }
 ```
 
@@ -1790,7 +1798,7 @@ These tools are registered like the others and follow the same safety modes; the
 | `report_profit_and_loss`, `report_balance_sheet`, `report_trial_balance`, `report_cash_flow_statement` | Financial statements for a period or date |
 | `report_comparative_profit_and_loss`, `report_comparative_balance_sheet`, `report_comparative_trial_balance` | The same statements for two periods or dates side by side |
 | `report_general_ledger` | General ledger for one account |
-| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true` |
+| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true`; it posts a reversing entry and keeps both on record (there is no way to delete a journal entry) |
 | `gst_gstr9` | GSTR-9 annual return summary for a financial year |
 | `gstr2b_uploads`, `gstr2b_records`, `gstr2b_summary` | GSTR-2B uploads, records and reconciliation summary by return period |
 | `gstr2b_missing_in_2b`, `gstr2b_missing_in_books` | Purchase invoices missing from GSTR-2B, and GSTR-2B invoices missing from your books |

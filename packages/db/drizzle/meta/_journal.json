@@ -166,22 +166,29 @@
     {
       "idx": 23,
       "version": "7",
-      "when": 1795337426311,
-      "tag": "0023_webmcp_audit_source",
-      "breakpoints": true
-    },
-    {
-      "idx": 24,
-      "version": "7",
-      "when": 1795337846617,
-      "tag": "0024_idempotency_keys",
+      "when": 1795337182898,
+      "tag": "0023_recurring_run_occurrence",
       "breakpoints": true
     },
     {
       "idx": 25,
       "version": "7",
-      "when": 1795338476522,
-      "tag": "0025_tenant_webmcp_disabled",
+      "when": 1795346112743,
+      "tag": "0025_webmcp_audit_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795346121592,
+      "tag": "0026_idempotency_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795346122798,
+      "tag": "0027_tenant_webmcp_disabled",
       "breakpoints": true
     }
   ]
