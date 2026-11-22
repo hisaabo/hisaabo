@@ -119,6 +119,12 @@ export function Cart({ store }: Props) {
           <span>Tax</span>
           <span className="tabular-nums">₹{fmt(totals.tax)}</span>
         </div>
+        {totals.roundOff !== 0 && (
+          <div className="flex items-center justify-between text-text-secondary">
+            <span>Round off</span>
+            <span className="tabular-nums">{totals.roundOff < 0 ? "−" : "+"}₹{fmt(Math.abs(totals.roundOff))}</span>
+          </div>
+        )}
         <div className="flex items-center justify-between text-lg font-bold text-text-primary pt-2 border-t border-border">
           <span>Total</span>
           <span className="tabular-nums">₹{fmt(totals.total)}</span>

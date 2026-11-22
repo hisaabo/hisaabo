@@ -128,6 +128,7 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
         taxPercent: tile.taxPercent,
         discountPercent: "0",
         conversionFactor: tile.conversionFactor,
+        ...(tile.inclusivePrice ? { inclusivePrice: tile.inclusivePrice } : {}),
       },
     );
   };

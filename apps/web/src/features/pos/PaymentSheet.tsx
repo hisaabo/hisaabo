@@ -70,7 +70,7 @@ export function PaymentSheet({ open, cart, onClose, onFinalized }: Props) {
         additionalCharges: "0",
         invoiceDiscount: "0",
         invoiceDiscountType: "amount",
-        roundOff: "0",
+        roundOff: totals.roundOff.toFixed(2),
         isReverseCharge: false,
         deliveryMethod: "self_pickup",
       });

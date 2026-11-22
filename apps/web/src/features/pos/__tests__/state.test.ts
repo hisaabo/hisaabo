@@ -172,7 +172,7 @@ describe("POSStore — persistence", () => {
 
 describe("computeCartTotals", () => {
   it("handles empty cart as all-zero", () => {
-    expect(computeCartTotals([])).toEqual({ subtotal: 0, discount: 0, tax: 0, total: 0 });
+    expect(computeCartTotals([])).toEqual({ subtotal: 0, discount: 0, tax: 0, roundOff: 0, total: 0 });
   });
 
   it("computes subtotal, discount, and tax per line then sums", () => {
@@ -194,7 +194,7 @@ describe("computeCartTotals", () => {
     const t = computeCartTotals([
       { lineId: "1", itemId: "i", itemName: "Atta", quantity: "2", unit: "pcs", unitPrice: "100.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" },
     ]);
-    expect(t).toEqual({ subtotal: 200, discount: 0, tax: 36, total: 236 });
+    expect(t).toEqual({ subtotal: 200, discount: 0, tax: 36, roundOff: 0, total: 236 });
   });
 
   it("rounds half up in integer paise, never in floats: ₹0.85 x 0.7 = ₹0.60 (the float product gave 0.59)", () => {
@@ -210,7 +210,52 @@ describe("computeCartTotals", () => {
     const t = computeCartTotals([
       { lineId: "1", itemId: "i", itemName: "Oil", quantity: "1", unit: "pcs", unitPrice: "88.39", taxPercent: "12", discountPercent: "0", conversionFactor: "1" },
     ]);
-    expect(t).toEqual({ subtotal: 88.39, discount: 0, tax: 10.61, total: 99 });
+    expect(t).toEqual({ subtotal: 88.39, discount: 0, tax: 10.61, roundOff: 0, total: 99 });
+  });
+
+  it("an inclusive line that does not bill to the paisa: ₹10.00 incl. 18% (rate 8.47 + GST 1.52 = 9.99) carries round-off +0.01, total 10.00", () => {
+    // 1000p x 100 / 118 = 847.46 -> 847; GST 847 x 18% = 152.46 -> 152; 847 + 152 = 999; shelf 1000
+    const t = computeCartTotals([
+      { lineId: "1", itemId: "i", itemName: "Tea", quantity: "1", unit: "pcs", unitPrice: "8.47", taxPercent: "18", discountPercent: "0", conversionFactor: "1", inclusivePrice: "10.00" },
+    ]);
+    expect(t).toEqual({ subtotal: 8.47, discount: 0, tax: 1.52, roundOff: 0.01, total: 10 });
+  });
+
+  it("₹41.00 incl. 18% bills 41.01 (34.75 + 6.26): round-off -0.01, total 41.00", () => {
+    // 4100p x 100 / 118 = 3474.58 -> 3475; GST 3475 x 18% = 625.5 -> 626 (half up)
+    const t = computeCartTotals([
+      { lineId: "1", itemId: "i", itemName: "Biscuits", quantity: "1", unit: "pcs", unitPrice: "34.75", taxPercent: "18", discountPercent: "0", conversionFactor: "1", inclusivePrice: "41.00" },
+    ]);
+    expect(t).toEqual({ subtotal: 34.75, discount: 0, tax: 6.26, roundOff: -0.01, total: 41 });
+  });
+
+  it("3 x ₹99.00 incl. 18% bills 297.01: round-off -0.01, total 297.00; with 10% off, 267.31 -> 267.30", () => {
+    const base = { lineId: "1", itemId: "i", itemName: "Notebook", quantity: "3", unit: "pcs", unitPrice: "83.90", taxPercent: "18", conversionFactor: "1", inclusivePrice: "99.00" };
+    // 3 x 83.90 = 251.70, GST 45.306 -> 45.31, 297.01 ; shelf 297.00
+    expect(computeCartTotals([{ ...base, discountPercent: "0" }])).toEqual({ subtotal: 251.7, discount: 0, tax: 45.31, roundOff: -0.01, total: 297 });
+    // 251.70 less 10% (25.17) = 226.53, GST 40.7754 -> 40.78, 267.31 ; shelf 297.00 less 10% = 267.30
+    expect(computeCartTotals([{ ...base, discountPercent: "10" }])).toEqual({ subtotal: 251.7, discount: 25.17, tax: 40.78, roundOff: -0.01, total: 267.3 });
+  });
+
+  it("lines without an inclusive price never get a round-off, and the tie-out of several lines is their sum", () => {
+    const tea = { lineId: "1", itemId: "i", itemName: "Tea", quantity: "1", unit: "pcs", unitPrice: "8.47", taxPercent: "18", discountPercent: "0", conversionFactor: "1", inclusivePrice: "10.00" };
+    const plain = { lineId: "2", itemId: "j", itemName: "Steel", quantity: "1", unit: "pcs", unitPrice: "100.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" };
+    const two = { ...tea, lineId: "3", itemId: "k", itemName: "Pin", unitPrice: "1.69", inclusivePrice: "2.00" }; // 1.69 + 0.30 = 1.99 -> +0.01
+    // 9.99 + 118.00 + 1.99 = 129.98 ; shelf 10.00 + 118.00 + 2.00 = 130.00 -> +0.02
+    expect(computeCartTotals([tea, plain, two])).toMatchObject({ roundOff: 0.02, total: 130 });
+    expect(computeCartTotals([plain])).toMatchObject({ roundOff: 0, total: 118 });
+  });
+
+  it("the shelf price survives a quantity bump: the tile adds quantity to a line that keeps its inclusive price", () => {
+    const store = makeStore();
+    const line = { itemId: "i", itemName: "Tea", quantity: "1", unit: "pcs", unitPrice: "8.47", taxPercent: "18", discountPercent: "0", conversionFactor: "1", inclusivePrice: "10.00" };
+    store.addOrBumpLine({ itemId: "i", unit: "pcs" }, line);
+    store.addOrBumpLine({ itemId: "i", unit: "pcs" }, line);
+    const lines = store.getSnapshot().carts[0]!.lineItems;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.inclusivePrice).toBe("10.00");
+    // 2 x 8.47 = 16.94, GST 3.0492 -> 3.05, 19.99 ; shelf 20.00 -> +0.01
+    expect(computeCartTotals(lines)).toMatchObject({ tax: 3.05, roundOff: 0.01, total: 20 });
   });
 
   it("treats bad numeric strings as zero (won't NaN)", () => {
