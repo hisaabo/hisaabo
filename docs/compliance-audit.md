@@ -511,6 +511,34 @@ Known issues that the 0.10.1 ledger / GST corrections deliberately did not chang
 
 32. **GST month windows ended at 23:59:59.000 and used the server's time zone** (found in the 0.10.1 filing review; fixed in 0.10.1). `generateGSTR1`, `generateGSTR3B`, GSTR-2B `missingIn2B`, CMP-08 and the dashboard's monthly comparison built a month as `new Date(y, m-1, 1)` to `new Date(y, m, 0, 23, 59, 59)` in the server's time zone with an inclusive upper bound. (a) A document stamped after `23:59:59.000` on the last day was in no month. (b) Worse, the web app sends a date-only date as the browser's local midnight (`dayjs(date).toISOString()`, so "1 April" in India is `2026-03-31T18:30:00Z`), and the shipped images set no `TZ`: on a UTC server every document dated the 1st of a month was filed in the previous month's GSTR-1 and GSTR-3B. The ITC ledger's `return_period`, written when a purchase or a purchase return is created, and the date sent to the IRP (`DocDtls.Dt`; the IRP also takes the document's financial year from it) and the e-way bill (`docDate`) read the date in the server's time zone too. All now use the IST calendar from `lib/gst-period.ts` (fixed UTC+05:30) with half-open windows (`buildBusinessDateFilter` takes a new exclusive `before`), so the result does not depend on the server's `TZ`. Not changed: ITC ledger rows written before 0.10.1 keep their stored period; the accounting reports (trial balance, P&L, balance sheet, `financialYearStart`) still use the server's time zone for their date arithmetic; the party statement, and the Tally export format dates in the server's time zone; the recurring-invoice scheduler's per-month plan limit counts calendar months in the server's time zone. A business whose users work outside India, or who enter dates in another zone, gets IST month boundaries by design (a CA question: is the GST period of a document decided by the date the user typed, which is what the IST convention approximates, or by the time it was recorded?).
 
+33. **Date filters computed in UTC or the viewer's zone** (reported by the founder; fixed in 0.10.1). A document date is a timestamptz that means a calendar day; "This Month" is a window of days; so every surface must use one zone. Hisaabo's is India (IST, fixed UTC+05:30, `@hisaabo/shared` `business-time.ts`): windows are half-open IST midnights `[from, before)`, the API takes `fromDate` / `toDate` with `toDate` the last millisecond before the next period, a picked date is stored as 00:00 IST, a stored instant is read as its IST day. Audit of every date-range path (locations as of 0.10.1 before this change):
+
+    | Where | What it did | |
+    |---|---|---|
+    | web `hooks/useDateRange.ts:27-64` `getDatePreset` | This Month / Last Month / Last 30 / This FY / Last FY in **UTC** | wrong, fixed |
+    | web `hooks/useDateRange.ts:99-104` custom range | browser-local midnight / end of day | wrong for non-IST browsers, fixed |
+    | web `lib/fy-bounds.ts:25-39` | FY bounds in UTC | wrong, fixed |
+    | web `lib/utils.ts:25-82` `formatDate*`, `formatDateInput`, `todayISODate`, `toISOString*` | dayjs in the browser's zone (every picked date written, every date shown) | wrong for non-IST viewers, fixed |
+    | web `components/ui/MonthPeriodBar.tsx:26-29`, `routes/gst.tsx:46,1460`, `itc.tsx:105`, `gstr2b.tsx:664` | default month / FY from the browser clock | wrong, fixed |
+    | web `AccountTab.tsx:380-395`, `SalesTargetsTab.tsx:57-86`, `lib/webmcp/tools/dashboard.ts:38-70`, `ImportWizard.tsx:1946`, `DocumentCreator.tsx:132,219`, `routes/index.tsx:448` | browser-local ranges, defaults, a DD/MM/YYYY cell as local midnight, due-date arithmetic, week labels | wrong, fixed |
+    | mobile `(home)/index.tsx:29-62` | `Date.UTC` periods | wrong, fixed |
+    | mobile `(more)/reports.tsx:27-52`, `settings/account.tsx:87-93`, `(parties)/[id].tsx:73-74,92-93` | phone-local periods and ranges | wrong, fixed |
+    | mobile ~20 create / edit screens (`X.toISOString()` of a picker Date), `src/lib/utils.ts:37-71` | stored the picker's instant (time of day, phone zone); showed phone-local days | wrong for non-IST phones, fixed (`business-day.ts`) |
+    | CLI `dates.ts:30-34` | default zone = the machine's (day boundaries via `toApiDateTime` were already zone-aware) | wrong default, now IST; `--tz` / `HISAABO_TZ` override |
+    | CLI `commands/invoice/list.ts:39-41`, `commands/gst/index.ts:19-22`, `format.ts:46-50` | `new Date()` local month / day | wrong, fixed |
+    | API `lib/business-date.ts` `buildBusinessDateFilter` | inclusive `to` only | gained an exclusive `before` (client-supplied instants are used as given, correct once clients send IST windows) |
+    | API `routers/reports.ts:59-62` daybook | date-only days parsed in the server's zone | wrong, fixed |
+    | API `routers/reports.ts:1283-1290` trial balance default year | server zone | wrong, fixed |
+    | API `routers/reports.ts:2093-2095` Tally export file name | UTC date of the instant | wrong, fixed |
+    | API `routers/dashboard.ts:35-38`, `:270-290`, `:326-352`, `:873-876` | FY start, FY grouping (`EXTRACT` in the DB zone), month / week buckets (`date_trunc` in the DB zone), monthly comparison | wrong, fixed |
+    | API GST windows and ITC return period (`gst-reports.ts`, `gstr2b.ts`, `gst.ts`, `invoice.ts:443`, `itc-reversal-entries.ts:97`) | server zone, `23:59:59` end | fixed in item 32 |
+    | API `lib/invoice-pdf.ts:117`, `ledger-pdf.ts:52`, `routers/party.ts:600,666`, `lib/tally-xml-export.ts:47`, `gst-reports.ts:839` | printed dates in the server's zone | wrong (an invoice dated 1 April printed as 31 March on a UTC server), fixed |
+    | API `routers/recurringInvoice.ts:344`, `lib/recurring-invoice-scheduler.ts:104` | plan-limit month in the server's zone | wrong, fixed |
+    | API `store.ts:430`, `business.ts:424`, `payment.ts`, `expense.ts`, `invoice.ts` lists | client-supplied instants used as given | correct, unchanged |
+    | API `reports.ts:233,885`, aging, `computeNextRunDate`, `item.ts:20` | instants, durations, schedule arithmetic | not calendar-day filters, unchanged |
+
+    Open: the time zone is a constant (`BUSINESS_TIME_ZONE`) because `businesses` has no time zone column (TODO for 0.11.0, with its migration); a business outside India gets IST days; dates entered from a browser east of India's zone before this change can be a day off and cannot be repaired automatically; the recurring-invoice `nextRunDate` arithmetic still uses the server's zone.
+
 ---
 
 ## Appendix A: Files Reviewed

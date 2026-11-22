@@ -45,6 +45,7 @@ test itself.
 | `19-month-windows` | Half-open IST month / quarter windows: GSTR-1, 3B, 9, 2B, CMP-08, ITC period, IRP date, dashboard; 23:59:59.500 and 00:00:00.000 either side of a month and of the FY | pass |
 | `20-eway-bill-hsn` | e-way bill HSN: missing HSN refused per line before the NIC, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
 | `21-gstr1-hsn-missing` | GSTR-1 with a line that has no HSN: JSON export refused with the list to fix, report and CSV flag it; with an HSN everywhere the JSON carries `rt` and the real UQC | pass |
+| `22-date-ranges` | Date presets and custom ranges on the IST calendar end to end (invoice list, daybook, month / FY buckets, trial-balance year, Tally file name); documents at 23:59:59.500 IST and 00:00:00 IST either side of a month and of the FY | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation
@@ -132,6 +133,25 @@ sheet has no year-end close). They are labelled *documented gap* and **0.12.0 wi
 change these expectations**. When the posted GL lands, change those literals
 deliberately, with the new numbers worked out by hand and reviewed, never
 regenerated from output.
+
+## Date ranges and the time zone
+
+Everything about dates is on the business calendar (IST, UTC+05:30), so the date tests must not depend
+on the zone of the machine. Run the date suites under three zones before changing any date code:
+
+```bash
+for tz in UTC Asia/Kolkata America/Los_Angeles; do
+  TZ=$tz pnpm --filter @hisaabo/shared exec vitest run src/__tests__/business-time.test.ts
+  TZ=$tz API_TEST_WORKERS=1 pnpm --filter @hisaabo/api exec vitest run \
+    src/__tests__/integration/golden/16 src/__tests__/integration/golden/19 src/__tests__/integration/golden/22
+  TZ=$tz pnpm --filter @hisaabo/web exec vitest run src/hooks src/lib src/components/ui src/components/settings
+  TZ=$tz pnpm --filter @hisaabo/mobile exec jest
+  TZ=$tz pnpm --filter @hisaabo/cli test
+done
+```
+
+Instants in these tests are written out as UTC literals with the IST time in a comment (IST midnight of
+a day is 18:30 UTC of the day before).
 
 ## Isolation
 

@@ -1,3 +1,4 @@
+import { businessYearMonth } from "@hisaabo/shared";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
@@ -661,9 +662,9 @@ function MissingIn2BSection({ year, month }: { year: number; month: number }) {
 // ── Main Page ─────────────────────────────────────────────────
 
 function GSTR2BPage() {
-  const now = new Date();
-  const [year, setYear]   = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const now = businessYearMonth(new Date());
+  const [year, setYear]   = useState(now.year);
+  const [month, setMonth] = useState(now.month);
   const [storedTab, setActiveTabRaw] = useState<G2BTab>(
     () => (localStorage.getItem("hisaabo_gstr2b_tab") as G2BTab) || "upload",
   );
@@ -676,7 +677,7 @@ function GSTR2BPage() {
     localStorage.setItem("hisaabo_gstr2b_tab", tab);
   };
 
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+  const years = Array.from({ length: 5 }, (_, i) => now.year - i);
 
   const tabs: Array<{ value: G2BTab; label: string }> = [
     ...(canUpload ? [{ value: "upload" as const, label: "Upload" }] : []),

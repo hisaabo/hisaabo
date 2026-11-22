@@ -31,6 +31,11 @@ import {
   paymentSummaryInputSchema,
   cashFlowStatementInputSchema,
   money,
+  pickedDateToISO,
+  pickedDateToEndISO,
+  businessDateOf,
+  businessYearMonth,
+  businessMonthStart,
 } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -53,14 +58,12 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      // Accepts YYYY-MM-DD (whole local days) or a full ISO datetime; an
-      // omitted bound leaves that side of the range open (all time).
-      const dayStart = input.fromDate
-        ? new Date(input.fromDate.length === 10 ? `${input.fromDate}T00:00:00` : input.fromDate)
-        : undefined;
-      const dayEnd = input.toDate
-        ? new Date(input.toDate.length === 10 ? `${input.toDate}T23:59:59.999` : input.toDate)
-        : undefined;
+      // Accepts YYYY-MM-DD (whole days on the business calendar, IST) or a full ISO datetime;
+      // an omitted bound leaves that side of the range open (all time).
+      const dayStartISO = pickedDateToISO(input.fromDate);
+      const dayEndISO = pickedDateToEndISO(input.toDate);
+      const dayStart = dayStartISO ? new Date(dayStartISO) : undefined;
+      const dayEnd = dayEndISO ? new Date(dayEndISO) : undefined;
 
       const [dayInvoices, dayPayments, dayExpenses] = await Promise.all([
         input.typeFilter === "payments" || input.typeFilter === "expenses"
@@ -1280,14 +1283,13 @@ export const reportsRouter = router({
         .where(eq(businesses.id, ctx.businessId))
         .limit(1);
 
-      const fyStartMonth = (biz?.financialYearStart ?? 4) - 1; // 0-indexed
-      const fyYear =
-        asOf.getMonth() < fyStartMonth
-          ? asOf.getFullYear() - 1
-          : asOf.getFullYear();
+      // The books year starts on the business (IST) calendar: 00:00 on day 1 of financialYearStart.
+      const fyStartMonth = biz?.financialYearStart ?? 4; // 1-indexed
+      const { year: asOfYear, month: asOfMonth } = businessYearMonth(asOf);
+      const fyYear = asOfMonth < fyStartMonth ? asOfYear - 1 : asOfYear;
       const from = input.fromDate
         ? new Date(input.fromDate)
-        : new Date(fyYear, fyStartMonth, 1);
+        : businessMonthStart(fyYear, fyStartMonth);
 
       const entries = await deriveFullLedger(ctx.db, ctx.businessId, from, asOf);
 
@@ -2086,8 +2088,10 @@ export const reportsRouter = router({
         { name: biz?.name ?? "Business" },
       );
 
-      const fromSlice = input.fromDate.slice(0, 10);
-      const toSlice = input.toDate.slice(0, 10);
+      // the dates in the file name are business-calendar (IST) days: a range that starts at
+      // 1 April 00:00 IST is 2026-03-31T18:30Z, whose UTC date is 31 March
+      const fromSlice = businessDateOf(new Date(input.fromDate));
+      const toSlice = businessDateOf(new Date(input.toDate));
 
       return {
         xml,

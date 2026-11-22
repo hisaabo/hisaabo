@@ -40,7 +40,7 @@
  *     Q2 Jul-Sep 2026   6000.00            -> 60.00
  *     Q3 Oct-Dec 2026   nothing            ->  0.00
  *
- * Accounting trial balance as of 31 Mar 2026, from the start of the business's OWN year
+ * Accounting trial balance as of 31 Mar 2026 21:30 IST (2026-03-31T16:00Z), from the start of the business's OWN year
  * (the only figures that depend on financialYearStart), credit on Sales (4000):
  *     April books  from 2025-04-01   13100.50
  *     January books from 2026-01-01   2000.00 + 3000.00 = 5000.00
@@ -155,7 +155,7 @@ describe.each([4, 1, 7] as const)("golden 16: GST return periods, books start in
   describe("only the accounting reports follow the books year", () => {
     const expectedSales = { 4: "13100.50", 1: "5000.00", 7: "6100.50" } as const;
     it("the default trial balance starts at the business's own year start", async () => {
-      const tb = await w.caller.reports.trialBalance({ asOfDate: "2026-03-31T23:00:00.000Z" });
+      const tb = await w.caller.reports.trialBalance({ asOfDate: "2026-03-31T16:00:00.000Z" });
       const sales = tb.accounts.find((a) => a.accountCode === "4000");
       expect(sales?.credit).toBe(expectedSales[fyStartMonth]);
     });

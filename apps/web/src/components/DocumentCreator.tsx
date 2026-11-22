@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useId, useRef } from "react";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
-import dayjs from "dayjs";
+import { addDaysYmd } from "@hisaabo/shared";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -129,7 +129,7 @@ export function DocumentCreator({
 }: DocumentCreatorProps) {
   const [partyId, setPartyId] = useState(initialPartyId ?? "");
   const [invoiceDate, setInvoiceDate] = useState(todayISODate);
-  const [dueDate, setDueDate] = useState(() => dayjs().add(7, "day").format("YYYY-MM-DD"));
+  const [dueDate, setDueDate] = useState(() => addDaysYmd(todayISODate(), 7));
   const [dueDateManuallySet, setDueDateManuallySet] = useState(false);
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
@@ -216,8 +216,8 @@ export function DocumentCreator({
     if (dueDateManuallySet || isEditing) return;
     const selectedParty = partiesData?.data.find((p) => p.id === partyId);
     const creditDays = selectedParty?.creditPeriodDays ?? 7;
-    const base = dayjs(invoiceDate || todayISODate()).add(creditDays, "day");
-    setDueDate(base.format("YYYY-MM-DD"));
+    // calendar-day arithmetic on the business calendar, not the browser's
+    setDueDate(addDaysYmd(invoiceDate || todayISODate(), creditDays));
   }, [invoiceDate, partyId, partiesData, dueDateManuallySet, isEditing]);
 
   const utils = trpc.useUtils();

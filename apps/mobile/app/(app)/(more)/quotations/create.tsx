@@ -24,6 +24,7 @@ import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 interface LineItem {
   itemId?: string;
@@ -368,8 +369,8 @@ function QuotationCreateScreenContent() {
       partyId: selectedParty.id,
       type: "sale",
       documentType: "quotation",
-      invoiceDate: invoiceDate.toISOString(),
-      dueDate: dueDate.toISOString(),
+      invoiceDate: pickerDateToISO(invoiceDate),
+      dueDate: pickerDateToISO(dueDate),
       notes: notes.trim() || undefined,
       additionalCharges: "0",
       invoiceDiscount: "0",

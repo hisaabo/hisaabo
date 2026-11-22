@@ -1,3 +1,4 @@
+import { pickedDateToISO } from "@hisaabo/shared";
 import { useState, useRef, useCallback } from "react";
 import Papa from "papaparse";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -1943,8 +1944,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             if (dateStr) {
               const parts = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
               if (parts) {
-                const d = new Date(+parts[3], +parts[2] - 1, +parts[1]);
-                if (!isNaN(d.getTime())) expenseDate = d.toISOString();
+                // a DD/MM/YYYY cell is that calendar day on the business calendar (00:00 IST)
+                const ymd = `${parts[3]}-${parts[2]!.padStart(2, "0")}-${parts[1]!.padStart(2, "0")}`;
+                expenseDate = pickedDateToISO(ymd);
               } else {
                 const iso = new Date(dateStr);
                 if (!isNaN(iso.getTime())) expenseDate = iso.toISOString();

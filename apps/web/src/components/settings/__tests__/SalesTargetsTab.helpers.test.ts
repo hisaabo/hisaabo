@@ -18,10 +18,10 @@ import {
   formatTargetValue,
 } from "../SalesTargetsTab";
 
-// Pin "now" to Wed 2025-07-16 so weekly (Sun-Sat), monthly, quarterly are
-// deterministic. Using local time because the helper uses Date() + local
-// getters, not UTC.
-const FIXED_NOW = new Date("2025-07-16T12:00:00");
+// Pin "now" to Wed 2025-07-16 12:00 IST so weekly (Sun-Sat), monthly, quarterly are
+// deterministic. The helper reads the business (IST) calendar, so the instants are IST noon and
+// the results do not depend on the TZ of the machine.
+const FIXED_NOW = new Date("2025-07-16T06:30:00.000Z");
 
 describe("getDefaultPeriodDates", () => {
   beforeEach(() => {
@@ -66,27 +66,27 @@ describe("getDefaultPeriodDates", () => {
 
   it("weekly edge: on a Sunday, start === today and end === Saturday six days later", () => {
     // 2025-07-13 is a Sunday
-    vi.setSystemTime(new Date("2025-07-13T12:00:00"));
+    vi.setSystemTime(new Date("2025-07-13T06:30:00.000Z"));
     const { start, end } = getDefaultPeriodDates("weekly");
     expect(start).toBe("2025-07-13");
     expect(end).toBe("2025-07-19");
   });
 
   it("quarterly edge: Jan 1 → Q1 = Jan 1 to Mar 31", () => {
-    vi.setSystemTime(new Date("2025-01-01T12:00:00"));
+    vi.setSystemTime(new Date("2025-01-01T06:30:00.000Z"));
     const { start, end } = getDefaultPeriodDates("quarterly");
     expect(start).toBe("2025-01-01");
     expect(end).toBe("2025-03-31");
   });
 
   it("monthly edge: February handles non-leap-year last day", () => {
-    vi.setSystemTime(new Date("2025-02-10T12:00:00"));
+    vi.setSystemTime(new Date("2025-02-10T06:30:00.000Z"));
     const { end } = getDefaultPeriodDates("monthly");
     expect(end).toBe("2025-02-28");
   });
 
   it("monthly edge: February in a leap year ends on the 29th", () => {
-    vi.setSystemTime(new Date("2024-02-10T12:00:00"));
+    vi.setSystemTime(new Date("2024-02-10T06:30:00.000Z"));
     const { end } = getDefaultPeriodDates("monthly");
     expect(end).toBe("2024-02-29");
   });

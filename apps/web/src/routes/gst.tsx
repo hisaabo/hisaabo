@@ -1,3 +1,4 @@
+import { businessYearMonth, businessFinancialYearStartYear } from "@hisaabo/shared";
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { z } from "zod";
@@ -43,9 +44,9 @@ export const Route = createFileRoute("/gst")({
 });
 
 function GSTReportsPage() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const now = businessYearMonth(new Date());
+  const [year, setYear] = useState(now.year);
+  const [month, setMonth] = useState(now.month);
   const navigate = useNavigate();
   const { tab: tabFromSearch, partyId: partyIdFromSearch } = useSearch({ from: "/gst" });
 
@@ -1460,10 +1461,7 @@ function PartyLedgerView({ partyId }: { partyId: string }) {
 
 // ── GSTR-9 View ────────────────────────────────────────────────
 
-const currentFYStart = (() => {
-  const now = new Date();
-  return now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-})();
+const currentFYStart = businessFinancialYearStartYear();
 
 function GSTR9View() {
   const [financialYear, setFinancialYear] = useState(currentFYStart - 1); // Default to last completed FY

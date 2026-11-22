@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
-import { formatAmount, quarterRange, formatDate } from "../../format.js";
+import { formatAmount, quarterRange, formatDate, todayParts } from "../../format.js";
 import { safeFilename, writeFileSafe } from "../../safety.js";
 
 interface GstOpts {
@@ -16,10 +16,10 @@ function resolveMonthYear(opts: GstOpts): { month: number; year: number } {
     const range = quarterRange(opts.quarter);
     return { month: range.month, year: range.year };
   }
-  const now = new Date();
+  const now = todayParts(); // today in the business zone (IST by default), not the machine's
   return {
-    month: opts.month ?? (now.getMonth() + 1),
-    year: opts.year ?? now.getFullYear(),
+    month: opts.month ?? now.month,
+    year: opts.year ?? now.year,
   };
 }
 

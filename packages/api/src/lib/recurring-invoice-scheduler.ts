@@ -25,6 +25,7 @@ import {
 } from "@hisaabo/db";
 import { generateInvoiceInTx, toTemplateRow, computeNextRunDate } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
+import { businessYearMonth, businessMonthStart } from "@hisaabo/shared";
 
 const TICK_MS = 60_000; // 60 seconds
 const MAX_CATCHUP = 12; // Max invoices per template per tick to prevent runaway loops
@@ -101,9 +102,9 @@ async function processOccurrence(db: SchedulerDb, templateId: string): Promise<b
       if (!tpl) return false; // no longer due, or another runner holds the lock
       claimed.tpl = tpl;
 
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      // the plan limit counts runs in the current calendar month on the business (IST) calendar
+      const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+      const monthStart = businessMonthStart(nowYear, nowMonth);
 
       const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` })
         .from(recurringInvoiceRuns)

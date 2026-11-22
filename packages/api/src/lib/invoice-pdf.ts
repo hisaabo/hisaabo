@@ -1,7 +1,7 @@
 import PDFDocument from "pdfkit";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { money, splitDocumentGst } from "@hisaabo/shared";
+import { money, splitDocumentGst, BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
@@ -114,10 +114,13 @@ function fmt(amount: string | number): string {
 
 function fmtDate(dateStr: string): string {
   const d = new Date(dateStr);
+  // The business-calendar date (IST), not the server's: an invoice dated 1 April is stored as
+  // 31 March 18:30 UTC and must print as 01 Apr.
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit",
     month: "short",
     year: "numeric",
+    timeZone: BUSINESS_TIME_ZONE,
   }).format(d);
 }
 

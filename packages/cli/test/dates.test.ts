@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  InvalidTimeZoneError, resolveTimeZone, setTimeZone, toApiDateTime, apiFrom, apiTo,
+  InvalidTimeZoneError, dateParts, todayParts, resolveTimeZone, setTimeZone, toApiDateTime, apiFrom, apiTo,
   todayISO, monthStart, monthEnd, fyStart, currentFY, quarterRange,
 } from "../src/dates.ts";
 
@@ -41,12 +41,12 @@ test("non-date input passes through; apiFrom/apiTo handle undefined", () => {
   assert.equal(apiTo(undefined), undefined);
 });
 
-test("resolveTimeZone precedence: flag > HISAABO_TZ > machine zone", () => {
-  const machine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+test("resolveTimeZone precedence: flag > HISAABO_TZ > the business zone (IST), never the machine's", () => {
   assert.equal(resolveTimeZone("Asia/Tokyo", { HISAABO_TZ: "Asia/Kolkata" }), "Asia/Tokyo");
-  assert.equal(resolveTimeZone(undefined, { HISAABO_TZ: "Asia/Kolkata" }), "Asia/Kolkata");
+  assert.equal(resolveTimeZone(undefined, { HISAABO_TZ: "America/New_York" }), "America/New_York");
   assert.equal(resolveTimeZone("", { HISAABO_TZ: "Asia/Kolkata" }), "Asia/Kolkata");
-  assert.equal(resolveTimeZone(undefined, {}), machine);
+  // run under TZ=UTC, TZ=Asia/Kolkata and TZ=America/Los_Angeles: the machine zone must not matter
+  assert.equal(resolveTimeZone(undefined, {}), "Asia/Kolkata");
 });
 
 test("invalid zone is a clear error from flag and from env", () => {
@@ -78,4 +78,34 @@ test("setTimeZone drives the default zone of toApiDateTime and the 'today' helpe
   assert.equal(quarterRange("Q1", fyEdge).from, "2026-04-01");
   setTimeZone("UTC");
   assert.equal(fyStart(fyEdge), "2025-04-01");
+});
+
+test("with no --tz and no HISAABO_TZ the day boundaries are IST, whatever the machine's TZ", () => {
+  const saved = process.env["HISAABO_TZ"];
+  delete process.env["HISAABO_TZ"];
+  try {
+    assert.equal(setTimeZone(), "Asia/Kolkata");
+    // 03:00 IST on 1 Nov 2026 is still 31 October in UTC and in the US
+    const now = new Date("2026-10-31T21:30:00.000Z");
+    assert.equal(todayISO(now), "2026-11-01");
+    assert.equal(monthStart(now), "2026-11-01");
+    assert.equal(monthEnd(now), "2026-11-30");
+    assert.deepEqual(todayParts(now), { year: 2026, month: 11, day: 1 });
+    // "--from 2026-11-01 --to 2026-11-30": 1 Nov 00:00 IST to the last millisecond of 30 Nov IST
+    assert.equal(apiFrom("2026-11-01"), "2026-10-31T18:30:00.000Z");
+    assert.equal(apiTo("2026-11-30"), "2026-11-30T18:29:59.999Z");
+    // the FY and the month flip at 00:00 IST
+    assert.equal(fyStart(new Date("2026-03-31T18:29:59.999Z")), "2025-04-01");
+    assert.equal(fyStart(new Date("2026-03-31T18:30:00.000Z")), "2026-04-01");
+    assert.equal(monthStart(new Date("2026-11-30T18:29:59.999Z")), "2026-11-01");
+    assert.equal(monthStart(new Date("2026-11-30T18:30:00.000Z")), "2026-12-01");
+  } finally {
+    if (saved !== undefined) process.env["HISAABO_TZ"] = saved;
+  }
+});
+
+test("dateParts reads an instant's calendar day in the active zone", () => {
+  setTimeZone("Asia/Kolkata");
+  assert.deepEqual(dateParts(new Date("2026-10-31T18:29:59.999Z")), { year: 2026, month: 10, day: 31 });
+  assert.deepEqual(dateParts(new Date("2026-10-31T18:30:00.000Z")), { year: 2026, month: 11, day: 1 });
 });

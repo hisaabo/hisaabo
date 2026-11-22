@@ -22,6 +22,7 @@ import { DatePickerField } from "../../../../src/components/ui";
 import { calculateGatewayCharge } from "@hisaabo/shared";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -315,7 +316,7 @@ function CreatePaymentScreenContent() {
       bankAccountId: selectedAccountId ?? undefined,
       referenceNumber: referenceNumber.trim() || undefined,
       notes: notes.trim() || undefined,
-      paymentDate: paymentDate.toISOString(),
+      paymentDate: pickerDateToISO(paymentDate),
       allocations: activeAllocations.length > 0 ? activeAllocations : undefined,
     });
   }, [selectedParty, amount, selectedAccount, selectedAccountId, isGatewayAccount, gatewayMode, computedAllocations, referenceNumber, notes, paymentDate, createPayment]);

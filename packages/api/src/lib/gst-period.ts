@@ -20,37 +20,44 @@
  * does not depend on the time zone of the server.
  */
 
+import {
+  BUSINESS_UTC_OFFSET_MS,
+  businessMonthStart,
+  businessMonthWindow,
+  businessYearMonth,
+  formatBusinessDateSlashes,
+} from "@hisaabo/shared";
+
+// The IST calendar helpers live in @hisaabo/shared (business-time.ts), shared with the web app,
+// the mobile app and the CLI; these are the names the GST code uses.
+
 /** IST = UTC + 5h30m, all year. */
-export const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+export const IST_OFFSET_MS = BUSINESS_UTC_OFFSET_MS;
 
 /** The instant of 00:00 IST on day 1 of calendar month `month` (1-12) of `year`; months past 12 roll into the next year. */
 export function istMonthStart(year: number, month: number): Date {
-  return new Date(Date.UTC(year, month - 1, 1) - IST_OFFSET_MS);
+  return businessMonthStart(year, month);
 }
 
 /** Half-open window of one calendar month on the IST calendar: `from` inclusive, `before` exclusive. */
 export function gstMonthWindow(year: number, month: number): { from: Date; before: Date } {
-  return { from: istMonthStart(year, month), before: istMonthStart(year, month + 1) };
+  return businessMonthWindow(year, month);
 }
 
 /** The calendar year and month (1-12) an instant falls in on the IST calendar. */
 export function istYearMonth(instant: Date): { year: number; month: number } {
-  const shifted = new Date(instant.getTime() + IST_OFFSET_MS);
-  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1 };
+  return businessYearMonth(instant);
 }
 
 /** The ITC / GSTR-2B return period ("2026-03") an instant belongs to, on the IST calendar. */
 export function gstReturnPeriodOf(instant: Date): string {
-  const { year, month } = istYearMonth(instant);
+  const { year, month } = businessYearMonth(instant);
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 /** An instant as DD/MM/YYYY on the IST calendar, the date format of the IRP and the e-way bill. */
 export function formatIstDate(instant: Date): string {
-  const shifted = new Date(instant.getTime() + IST_OFFSET_MS);
-  const dd = String(shifted.getUTCDate()).padStart(2, "0");
-  const mm = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${shifted.getUTCFullYear()}`;
+  return formatBusinessDateSlashes(instant);
 }
 
 /** Start year of the GST financial year that calendar month `month` (1-12) of `year` falls in. */

@@ -1,73 +1,25 @@
 import { useState, useCallback } from "react";
-import dayjs from "dayjs";
-import utc from "dayjs/plugin/utc";
-import { toISOString, toISOStringEndOfDay } from "@/lib/utils";
-
-dayjs.extend(utc);
+import { resolveDatePreset, resolveDayRange, windowToQuery, type DatePresetKey } from "@hisaabo/shared";
 
 export type DatePreset = "this-month" | "last-month" | "last-30" | "this-fy" | "last-fy" | "custom" | "all";
 
-/**
- * Build UTC ISO strings for date boundaries.
- *
- * CRITICAL: All FY and calendar-month boundaries are constructed in UTC.
- * Without this, `dayjs().startOf("month")` in IST (UTC+5:30) produces
- * "2025-03-31T18:30:00Z" for April 1 — which pulled the previous March into
- * every FY chart and is the bug the prior implementation had to work around.
- * We rely on the dayjs UTC plugin (loaded at module scope above) so `.utc()`
- * is available.
- *
- * Public contract: the {fromDate, toDate} strings this returns are always
- * UTC ISO-8601, or empty strings for the "all" preset.
- */
-export function getDatePreset(preset: string): { fromDate: string; toDate: string } {
-  const now = dayjs.utc();
-  const yyyy = now.year();
-  const mm = now.month();
+const NAMED_PRESETS: readonly DatePresetKey[] = ["this-month", "last-month", "last-30", "this-fy", "last-fy"];
 
-  switch (preset) {
-    case "this-month": {
-      return {
-        fromDate: now.startOf("month").toISOString(),
-        toDate: now.endOf("month").toISOString(),
-      };
-    }
-    case "last-month": {
-      const lastMonth = now.subtract(1, "month");
-      return {
-        fromDate: lastMonth.startOf("month").toISOString(),
-        toDate: lastMonth.endOf("month").toISOString(),
-      };
-    }
-    case "last-30": {
-      return {
-        // Day-aligned so the range (and every query key built from it) is
-        // stable across remounts within a day, and includes records created
-        // later today.
-        fromDate: now.subtract(30, "day").startOf("day").toISOString(),
-        toDate: now.endOf("day").toISOString(),
-      };
-    }
-    case "this-fy": {
-      // Indian FY runs April → March. If we're in Jan–Mar, the FY started
-      // last calendar year.
-      const fyYear = mm >= 3 ? yyyy : yyyy - 1;
-      return {
-        fromDate: dayjs.utc().year(fyYear).month(3).date(1).startOf("day").toISOString(),
-        toDate: now.endOf("day").toISOString(),
-      };
-    }
-    case "last-fy": {
-      const lastFyYear = mm >= 3 ? yyyy - 1 : yyyy - 2;
-      return {
-        fromDate: dayjs.utc().year(lastFyYear).month(3).date(1).startOf("day").toISOString(),
-        toDate: dayjs.utc().year(lastFyYear + 1).month(2).date(31).endOf("day").toISOString(),
-      };
-    }
-    case "all":
-    default:
-      return { fromDate: "", toDate: "" };
-  }
+/**
+ * The {fromDate, toDate} a preset sends to the API, or empty strings for "all".
+ *
+ * Boundaries are IST midnights (the business calendar), never UTC or the browser's zone, and the
+ * window is half-open: `toDate` is the last millisecond before the next period starts. In UTC,
+ * "This Month" ends at 2026-10-31T23:59:59Z, which is 05:29 IST on 1 Nov, so a document dated
+ * 1 Nov 03:00 IST fell into October. See @hisaabo/shared business-time for the rules.
+ *
+ * Public contract: the strings this returns are always UTC ISO-8601 instants, or empty strings for
+ * the "all" preset.
+ */
+export function getDatePreset(preset: string, now: Date = new Date()): { fromDate: string; toDate: string } {
+  if (!(NAMED_PRESETS as readonly string[]).includes(preset)) return { fromDate: "", toDate: "" };
+  const q = windowToQuery(resolveDatePreset(preset as DatePresetKey, now));
+  return { fromDate: q.fromDate ?? "", toDate: q.toDate ?? "" };
 }
 
 export const DATE_PRESETS: Array<{ value: DatePreset; label: string }> = [
@@ -123,10 +75,9 @@ export function useDateRange(pageKey: string, defaultPreset: DatePreset = "all")
   const setCustomRange = useCallback((from: string, to: string) => {
     setCustomFrom(from);
     setCustomTo(to);
-    setDateRange({
-      fromDate: toISOString(from) ?? "",
-      toDate: toISOStringEndOfDay(to) ?? "",
-    });
+    // Both picked days are inclusive: "1 Nov" to "30 Nov" is all of November on the business calendar.
+    const q = windowToQuery(resolveDayRange(from, to));
+    setDateRange({ fromDate: q.fromDate ?? "", toDate: q.toDate ?? "" });
   }, []);
 
   return {

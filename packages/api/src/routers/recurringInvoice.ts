@@ -12,6 +12,7 @@ import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { generateInvoiceFromTemplate, computeNextRunDate } from "../lib/recurring-invoice-generator.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { businessYearMonth, businessMonthStart } from "@hisaabo/shared";
 
 export const recurringInvoiceRouter = router({
   list: viewerProcedure
@@ -341,9 +342,9 @@ export const recurringInvoiceRouter = router({
     .query(async ({ ctx }) => {
       requireCan(ctx.ability, "read", "RecurringInvoice");
       // Count successful runs this month
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      // the plan limit counts runs in the current calendar month on the business (IST) calendar
+      const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+      const monthStart = businessMonthStart(nowYear, nowMonth);
 
       const [{ count }] = await ctx.db.select({ count: sql<number>`count(*)::int` })
         .from(recurringInvoiceRuns)

@@ -22,6 +22,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "other";
 
@@ -167,7 +168,7 @@ function BankTransferScreenContent() {
       toAccountId: toAccount!.id,
       amount: amt.toFixed(2),
       description: description.trim() || undefined,
-      transactionDate: txDate.toISOString(),
+      transactionDate: pickerDateToISO(txDate),
     });
   };
 

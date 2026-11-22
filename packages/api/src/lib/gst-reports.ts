@@ -1,7 +1,7 @@
 import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
-import { csvCell, csvRow, money, splitDocumentGst } from "@hisaabo/shared";
+import { csvCell, csvRow, money, splitDocumentGst, BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { gstMonthWindow } from "./gst-period.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
@@ -836,7 +836,7 @@ export function gstr1ToCSV(report: GSTR1Report): string {
   for (const row of report.b2b) {
     lines.push(csvRow([
       row.partyGstin, row.partyName, row.invoiceNumber,
-      new Date(row.invoiceDate).toLocaleDateString("en-IN"),
+      new Date(row.invoiceDate).toLocaleDateString("en-IN", { timeZone: BUSINESS_TIME_ZONE }),
       row.invoiceType, row.taxableValue.toFixed(2),
       row.cgst.toFixed(2), row.sgst.toFixed(2), row.igst.toFixed(2),
       row.totalInvoiceValue.toFixed(2),

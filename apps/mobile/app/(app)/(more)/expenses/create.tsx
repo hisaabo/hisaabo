@@ -16,6 +16,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -83,7 +84,7 @@ function CreateExpenseScreenContent() {
       return;
     }
 
-    const dateStr = expenseDate.toISOString();
+    const dateStr = pickerDateToISO(expenseDate);
 
     haptic.success();
     createExpense.mutate({

@@ -1,7 +1,7 @@
 import { eq, and, ilike, or, sql, desc, asc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
-import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow } from "@hisaabo/shared";
+import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow, formatBusinessDateSlashes } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -596,11 +596,9 @@ export const partyRouter = router({
         }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
+      // DD/MM/YYYY on the business (IST) calendar
       function fmtDate(d: Date): string {
-        const dd = String(d.getDate()).padStart(2, "0");
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const yyyy = d.getFullYear();
-        return `${dd}/${mm}/${yyyy}`;
+        return formatBusinessDateSlashes(d);
       }
       let runningBalance = party.openingBalance;
       const rows: string[] = [];
@@ -662,11 +660,9 @@ export const partyRouter = router({
       requireCan(ctx.ability, "read", "Report");
       warnTallyCsvExportDeprecated();
 
+      // DD-MM-YYYY on the business (IST) calendar
       function formatTallyDate(d: Date): string {
-        const dd = String(d.getDate()).padStart(2, "0");
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const yyyy = d.getFullYear();
-        return `${dd}-${mm}-${yyyy}`;
+        return formatBusinessDateSlashes(d).replace(/\//g, "-");
       }
 
       const invoiceConditions = [eq(invoices.businessId, ctx.businessId), eq(invoices.documentType, "invoice")];
