@@ -81,6 +81,29 @@ jobs:
       - name: Check ownership scoping
         run: tsx scripts/check-ownership-scoping.ts --scan
 
+  # The release gates run only on a tag, so their scripts are exercised here
+  # against a fake API and a fake `gh`: the production API wait (scripts/
+  # wait-for-api-version.sh), the one-release-per-tag helpers and the
+  # release-exists guard in scripts/release-tag.sh. release-workflow.test.ts
+  # pins the ordering invariants of the workflows themselves (frontends need
+  # wait-for-api, production only from a tag, one job creates the release).
+  release-scripts:
+    name: Release Scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NODE_TS: node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # --experimental-strip-types needs Node >= 22.6
+          node-version: 22
+
+      - name: Test the release scripts
+        run: $NODE_TS --test scripts/wait-for-api-version.test.ts scripts/release-scripts.test.ts scripts/release-workflow.test.ts
+
   migration-safety:
     name: Migration Safety
     runs-on: ubuntu-latest

@@ -42,7 +42,7 @@
 
 ### On push to `main` (path-filtered): previews only
 
-Nothing reaches production from `main`. Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
+Nothing from the app reaches production from `main` (the documentation site below is the one exception). Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
 
 | Workflow | Trigger paths | Preview |
 |---|---|---|
@@ -57,10 +57,38 @@ Container images are not published from `main` either: `release.yml` builds and 
 
 ### On a release tag (`v*`): production
 
-**`release.yml`** checks that the tag matches every version manifest, builds and signs the Docker images, then calls `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` to deploy the tagged commit to production (only the apps that changed since the previous tag). The frontend deploys wait for the API image job, so a new frontend never ships ahead of its API image. The release notes report each deploy's result.
+The web app, the store and the API reference reach production only for a **release tag**, by one of two routes. A `v*` tag push runs **`release.yml`**, the normal route, described here. The other is a manual run of a deploy workflow (Deploy Web, Deploy Store, Deploy API Docs) with a tag, for a redeploy or rollback; it passes through the same `production` approval and the same API version check below, but does not build images or wait. `release.yml` runs these jobs in order:
 
-- **Hold until the API is live (recommended):** the production deploy jobs run in the `production` GitHub environment. Add required reviewers to it (Settings → Environments → production) to approve the frontend deploy once the API containers of the same tag are running.
-- **Rollback / redeploy:** run the workflow manually (Actions → Deploy Web / Deploy Store / Deploy API Docs → Run workflow) with a release tag such as `v0.9.1`. Only tags are accepted.
+1. `changes` checks that the tag matches every version manifest.
+2. `prepare-release` creates the **one** GitHub release for the tag (a draft), or reuses one that already exists, draft or published. Every other job attaches to it by id; none creates another.
+3. `docker` builds both images, pushes them, signs them with cosign and verifies the signatures.
+4. `wait-for-api` polls `GET /api/version` on the production API until it reports the tag's version.
+5. `deploy-web`, `deploy-store` and `deploy-api-docs` deploy the tagged commit (only the apps that changed since the previous tag). Each runs in the `production` GitHub environment, so its required reviewers approve it.
+6. `release-notes` fills in the notes, including the result of each step above, and publishes the release.
+
+The `@hisaabo/cli` and `@hisaabo/mcp` npm publishes (API clients, and npm cannot unpublish) also wait for step 4, so they never ship before the API they talk to. The desktop installers and the Android APK build alongside steps 3 to 5 and only attach files to the release from step 2.
+
+**The workflow does not deploy the API.** It runs on its own server (Docker Compose behind nginx, `HISAABO_API_IMAGE` pinned to a tag), and the operator upgrades it by hand. That is why step 4 only waits: a new frontend must not go live before the API it was built against, and in 0.10.0 it did. The wait polls with backoff (10 s growing to 60 s) and logs the version production reports next to the one it expects. It fails after 350 minutes (GitHub stops a hosted job at 360); upgrade the API, then **Re-run failed jobs** on the workflow run. Nothing is rebuilt (the finished `docker` job is kept), and the deploys follow. Until then the GitHub release stays a **draft**. It is published only when `wait-for-api` ran and succeeded: production reports the version, nothing in the release needed the wait (an API-only release), or the operator deliberately ticked `skip_api_wait`. After a timed-out or failed wait, **and when an earlier job such as the image build failed** (the wait then never runs and shows as skipped, which is not a deliberate skip), the notes are updated but the release is not published, so the desktop installers and the Android APK never go public while production runs the old API or with no API image to match. The re-run publishes it.
+
+**Every production deploy re-checks the API version.** The first thing `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` do with a release tag, after any `production` approval, is read `GET /api/version` once and compare it with the tag. They deploy only when production reports **exactly that version**. They refuse when production is **older** (the frontend would run ahead of its API) and when it is **newer** (an older tag would downgrade the frontend: an approval that sat for days and was granted after a newer release, or an API upgrade in between). They also refuse when the version cannot be read. This covers the release run and manual runs alike. The `allow_api_mismatch` input on those workflows, and `skip_api_wait` on a release run (which passes it on), override the check; it is logged as a warning. An intentional rollback needs it, because the API is still on the newer version when the frontends go back first.
+
+#### Release runbook
+
+1. **Tag.** `pnpm release <version>` bumps every manifest and commits; merge it to `main`; run `pnpm release:tag` on `main`. The script refuses if a GitHub release for the tag already exists, a hand-made pre-release included: delete it first (`gh release delete vX.Y.Z --yes`). It needs `gh` and `jq`, or `--skip-release-check`.
+2. **Images publish.** The `Docker Images` job is green once `ghcr.io/<owner>/hisaabo-api:vX.Y.Z` and the all-in-one image are pushed, signed and their signatures verified. Only then does `wait-for-api` start; its log and step summary print the exact `HISAABO_API_IMAGE` lines to use, with and without the digest.
+3. **Operator upgrades the API.** Back up first (see [UPGRADING.md](UPGRADING.md)), set `HISAABO_API_IMAGE=ghcr.io/<owner>/hisaabo-api:vX.Y.Z` in `.env.prod` (or the digest-pinned form), then `pull api` and `up -d api` as in [Upgrading a pinned install](#upgrading-a-pinned-install).
+4. **The workflow detects the version.** Check by hand with `curl https://api.hisaabo.in/api/version`, which returns `{"version":"X.Y.Z"}`. When it matches, `wait-for-api` logs `MATCH` and finishes, and the web, store and API-reference deploys queue.
+5. **A reviewer approves.** Open the workflow run, choose **Review deployments**, tick `production` and approve. The deploys run only now. Add required reviewers under Settings → Environments → production; without them nothing holds the deploys after the API check.
+6. **Web and store deploy** to Cloudflare Pages production, and the release is published with its notes (only because the API check passed; see above).
+7. **Purge `/store/*` on the CDN** in front of the store domain (Cloudflare → Caching → Purge Cache → by prefix `<store-host>/store/`; purge everything if your plan has no prefix purge). The catalog, meta, logo and image responses are cached for up to a minute and the new store build may change their shape.
+8. **Check** the release notes table (every row green, `API in production` reports the version), and the version in the web sidebar footer.
+
+Emergencies and recovery:
+
+- **Run the release again on its tag** (to skip the wait, or to change its timeout). Run the Release workflow manually on the tag ref (Actions → Release → Run workflow, ref = the tag) with `skip_api_wait` ticked or `api_wait_timeout_minutes` set. A second run on a tag does not rebuild anything: `docker` finds both images already published, **verifies their existing cosign signatures** (this workflow, this tag, this commit) and carries on with those exact digests, so it reaches the wait and the deploys. The same applies to **Re-run all jobs**. With `skip_api_wait` the job logs a loud warning, the release notes say `Version NOT verified`, and the frontends run against whatever API is live, so use it only when that is known to be compatible.
+- **`force` is a separate, deliberate act.** It is the only way to overwrite release images: tick `force` on a manual run to re-push both images when a publish was partial (only one image exists) or an existing image has no valid signature. It is never implied by a re-run or by `skip_api_wait`, and without it a partial publish fails with a message saying so.
+- **Change the wait.** `api_wait_timeout_minutes` on a manual run, or the `API_WAIT_TIMEOUT_MINUTES` repository variable (which tag pushes use), sets how long `wait-for-api` polls (default and maximum 350 minutes).
+- **Redeploy or roll back a frontend.** Run Deploy Web / Deploy Store / Deploy API Docs manually with a release tag such as `v0.9.1` (see [ROLLBACK.md](ROLLBACK.md#6-rolling-back-a-release)). These runs do not wait for the API, but they never skip the version check described above, and need the `production` approval.
 - **Cloudflare settings:** the projects use direct uploads from these workflows. If a Pages project is also connected to the GitHub repository in the Cloudflare dashboard, disconnect it (or disable automatic production deployments), otherwise Cloudflare keeps deploying `main` itself. The production branch name defaults to `main`; set the `CF_PAGES_PRODUCTION_BRANCH` repository variable if a project uses another.
 
 ## Environment Variables
@@ -92,6 +120,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
 | `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). In production a set value that is not a valid `http(s)` URL fails startup (outside production it is ignored with a warning) | `https://api.hisaabo.in` |
 | `LEGACY_V09_CLIENT_COMPAT` | No | Default on; set to `false` to disable every v0.9.x client compatibility path at once: the Turnstile exemption for installed v0.9.x mobile/desktop apps on `sendMagicLink`, the bearer-token sign-in signature, and the `source=` app handoff. Deprecated, removed in 0.11.0 | `false` |
+| `EXPOSE_VERSION` | No | Default on. `false` removes the public `GET /api/version` endpoint (it then answers 404 like any unknown path), for operators who do not want the exact version readable by anyone. Leave it on for a deployment whose release workflow gates frontend deploys on it (see the [Release runbook](#release-runbook)): with it off that gate can only time out, or be bypassed. `/health` never reports a version either way | `false` |
 | `ALLOW_OPEN_SIGNUP` | No | Self-hosted only. By default signup is invite-only after the first owner; `true` restores open signup | `false` |
 | `ENCRYPTION_KEY` | Yes (production and `MULTI_TENANT=true`) | AES-256-GCM key for field-level encryption: exactly **64 hex characters** (32 bytes); startup rejects anything else in multi-tenant mode. In single-tenant production a malformed key only logs a warning and saving/reading encrypted credentials (e-invoice, carrier API keys) fails until it is fixed. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | `a1b2c3...` |
 | `ENCRYPTION_KEY_PREVIOUS` | No | Previous encryption key — set only during key rotation | |
@@ -164,6 +193,8 @@ When the online store is enabled for a business, its public catalog (including t
 |---|---|---|
 | `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
 | `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
+| `PRODUCTION_API_URL` | release (wait-for-api) | Base URL of the production API whose `/api/version` the release waits on. Default `https://api.hisaabo.in`; set it on a fork or another deployment |
+| `API_WAIT_TIMEOUT_MINUTES` | release (wait-for-api) | How long a tag-triggered release waits for the production API to report the new version. Default and maximum 350 (GitHub stops a hosted job at 360 minutes) |
 | `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` | deploy-web | Chrome/Edge origin-trial token for the web origin, passed to the web build so the page carries the `origin-trial` meta tag. A variable, not a secret (the token is public in the page HTML). Tokens are bound to one origin, so define it on the `production` environment to keep it off the preview alias. Unset or empty = no tag. Desktop builds do not use it |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
@@ -373,7 +404,7 @@ The `docker-compose.prod.yml` is compatible with Kamal's deploy model:
 
 ## Container images (GHCR)
 
-`release.yml` (on a `v*` tag) first checks that the tag matches every version manifest (`pnpm release <version>` bumps them together), then builds and pushes both images for **every** release tag, whichever paths changed, so a released version always has images. Each image is signed with cosign (keyless) and carries SLSA provenance and an SBOM.
+`release.yml` (on a `v*` tag) first checks that the tag matches every version manifest (`pnpm release <version>` bumps them together), then builds and pushes both images for **every** release tag, whichever paths changed, so a released version always has images. Each image is signed with cosign (keyless) and carries SLSA provenance and an SBOM. The workflow verifies both signatures before it starts waiting for you to upgrade the API, so an image you are asked to deploy is complete and verifiable (see the [Release runbook](#release-runbook)).
 
 Two images are published, both multi-arch (`linux/amd64`, `linux/arm64`):
 
@@ -440,6 +471,7 @@ Every release image records the source revision, so any running instance can be 
 - **Startup log**: `Hisaabo API v0.10.0 (commit 26c61bb0f3a1)`
 - **Admin dashboard** header (`node packages/api/dist/bin/admin.js`): `v0.10.0 · 26c61bb0f3a1`
 - **Signed-in API clients**: `auth.me` returns `server: { version, commit }`. The unauthenticated `/health` deliberately does not.
+- **Public version probe** (0.10.1 and later): `GET /api/version` returns `{"version":"0.10.1"}`, the version only (no commit, no health verdict), uncacheable, with no database access. The release workflow polls it on the production API to know when the operator has upgraded (see the [Release runbook](#release-runbook)). An API older than 0.10.1 answers 404, and so does one started with `EXPOSE_VERSION=false`, the opt-out for operators who do not want the version public (see the environment table).
 - **Web app**: the sidebar footer shows `v0.10.0 · 26c61bb` for the CI-built web deploy and the desktop release builds.
 
 An image built locally without the build args reports version `dev` (resolved from `package.json`) and commit `unknown`.
@@ -451,7 +483,7 @@ The `nginx/nginx.conf` provides:
 - Upstream keepalive connections to the API container
 - Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy; HSTS only when the edge proxy reports `X-Forwarded-Proto: https`), `server_tokens off`
 - Gzip compression for JSON responses
-- Path-based routing (`/api/trpc/*`, `/api/*`, `/store/*`, `/webhooks/*`, `/health`)
+- Path-based routing (`/api/trpc/*`, `/api/*` including `/api/version`, `/store/*`, `/webhooks/*`, `/health`). If you replace this file with your own proxy rules, keep `/api/version` reachable: the release workflow depends on it
 - Per-IP `limit_req` zones (stricter for auth procedures) and a per-IP `limit_conn` cap; header/body timeouts against slow clients
 - Per-location body limits: 10MB for tRPC/API (bulk imports), 64KB for auth, 256KB for the public store, 1MB for webhooks and as the default
 - Overwrites `X-Forwarded-For` with the connecting address and strips `CF-Connecting-IP` (no client-supplied forwarding headers reach the API). nginx does not cache store responses.

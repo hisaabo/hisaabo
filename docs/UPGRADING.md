@@ -2,9 +2,15 @@
 
 ## From v0.10.0 to v0.10.1
 
-A patch release: pull the new image and restart. There are **no database migrations, no new or changed environment variables, and no breaking API changes** (every procedure keeps its name and its success response shape), so the 0.10.0 upgrade steps below are not repeated. Rolling back to 0.10.0 needs no data changes.
+Upgrade the API first: set `HISAABO_API_IMAGE` to `v0.10.1`, then `pull api` and `up -d api` as in [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install). Then upgrade the web app and the store. There are **no breaking API changes**: every procedure keeps its name and its success response shape, and 0.10.0 web, desktop, mobile, CLI and MCP clients keep working against a 0.10.1 API.
+
+### For operators
+
+- **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
+- **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
 
 ### What changes for users
+
 
 - **Import wizard: Tally and Generic CSV are gone.** The wizard listed them, but the server only has `mybillbook` and `hisaabo` import adapters, so every import from the other two failed on its first batch with "Unknown import source". The wizard now offers myBillBook only. Nothing that worked is removed; there was never a Tally importer. To bring in Tally, Busy or spreadsheet data, convert it to the Hisaabo CSV layout and use `hisaabo import` (see [Import Data](https://docs.hisaabo.in/getting-started/import-data/)). An unregistered `source` sent to the API now returns `BAD_REQUEST` listing the supported sources (it used to be a 500).
 - **MCP import tools default to `source: "hisaabo"`** (they defaulted to `"excel"`, which the server rejected, so calls that did not set `source` failed). Agents that pass `source` explicitly are unaffected.

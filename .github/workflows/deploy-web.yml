@@ -21,12 +21,22 @@ on:
         description: Release tag to deploy to production
         required: true
         type: string
+      allow_api_mismatch:
+        description: "Deploy even if the production API does not report this version: an intentional rollback, or an emergency. Logged loudly."
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       ref:
         description: Release tag to deploy to production (e.g. v0.9.1)
         required: true
         type: string
+      allow_api_mismatch:
+        description: "Deploy even if the production API does not report this version: an intentional rollback, or an emergency. Logged loudly."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,8 +51,12 @@ jobs:
     if: inputs.ref || vars.PREVIEW_API_URL
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Add required reviewers to the `production` environment in the repo
-    # settings to hold the deploy until the API image of the same tag is live.
+    # A release (release.yml) reaches this job only after its wait-for-api job
+    # saw the production API report the same version. Required reviewers on the
+    # `production` environment (repo settings) are the second gate, and the
+    # version is checked once more after their approval (a stale approval, or an
+    # older tag approved after a newer release, is refused). A manual run
+    # (redeploy / rollback) gets the same check; allow_api_mismatch bypasses it.
     environment: ${{ inputs.ref && 'production' || 'preview' }}
     permissions:
       contents: read
@@ -57,6 +71,33 @@ jobs:
             echo "::error::Production deploys take a release tag (vX.Y.Z), got '$REF'"
             exit 1
           fi
+
+      # The deploy's own commit carries the check script, even when the tag
+      # being deployed (a rollback) predates it. These steps run AFTER the
+      # `production` environment approval, so an approval that sat for days, an
+      # API upgrade or rollback in between, or an older tag approved after a
+      # newer release, is caught here. The production API must report exactly
+      # this version; allow_api_mismatch bypasses it, loudly.
+      - name: Fetch the API version check
+        if: inputs.ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .release-tools
+          sparse-checkout: scripts/wait-for-api-version.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Check the production API runs this release
+        if: inputs.ref
+        env:
+          MODE: check
+          EXPECTED_VERSION: ${{ inputs.ref }}
+          API_URL: ${{ vars.PRODUCTION_API_URL || 'https://api.hisaabo.in' }}
+          SKIP_API_WAIT: ${{ inputs.allow_api_mismatch && 'true' || 'false' }}
+          OVERRIDE_NAME: allow_api_mismatch
+        run: |
+          trap 'rm -rf .release-tools' EXIT
+          bash .release-tools/scripts/wait-for-api-version.sh
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
