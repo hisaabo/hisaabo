@@ -72,26 +72,28 @@ export function countStrictProcedures(requestPath: string): number {
 export type RateTier = "same-auth" | "same-anon" | "ext-auth" | "ext-anon" | "agent-auth";
 
 /**
- * Per-minute budget for requests that say they come from a browser AI agent
- * (`x-hisaabo-agent: webmcp`, see lib/audit-source.ts). It is its own bucket,
- * keyed per IP like the others, so an agent stuck in a loop exhausts THIS budget
- * and gets 429s of its own, while the human using the same tab keeps their
- * normal 300/min. Deliberately below the human tier: an agent has no business
- * making more than 2 calls a second against one person's books.
+ * Per-minute cap for requests that say they come from a browser AI agent
+ * (`x-hisaabo-agent: webmcp`, see lib/audit-source.ts). An agent-marked request is
+ * charged against BOTH its own `agent-auth` bucket and the ordinary tier bucket
+ * (see chargeRateLimits), so:
  *
- * The marker is client-supplied, so it only ever moves a request into a SMALLER
- * budget of its own. It requires a plausible credential (an anonymous caller
- * cannot use it to get a second bucket) and is never read for authorisation.
+ *   - an agent stuck in a loop hits this cap (120/min) first and gets 429s of its
+ *     own, and can drain at most 120/min from the shared tier, leaving the human in
+ *     the same tab the rest of their 300/min;
+ *   - the marker can never ADD throughput. A client that alternates the header on
+ *     and off still spends the base tier on every request, so the total never
+ *     exceeds the base limit, and sending the marker only ever adds a cap.
+ *
+ * The marker is client-supplied and requires a plausible credential to count at
+ * all; it is never read for authorisation.
  */
 export const AGENT_LIMIT_PER_MIN = 120;
 
+/** The ordinary per-IP tier for a request. */
 export function pickRateTier(opts: {
   sameOrigin: boolean;
   hasCredential: boolean;
-  /** The request carried the browser-agent marker. */
-  agent?: boolean;
 }): { tier: RateTier; limit: number } {
-  if (opts.agent && opts.hasCredential) return { tier: "agent-auth", limit: AGENT_LIMIT_PER_MIN };
   if (opts.sameOrigin && opts.hasCredential) return { tier: "same-auth", limit: 300 };
   if (opts.sameOrigin) return { tier: "same-anon", limit: 60 };
   if (opts.hasCredential) return { tier: "ext-auth", limit: 120 };
@@ -111,6 +113,28 @@ export function hitRateBucket(map: RateMap, key: string, limit: number, now: num
   if (entry.count >= limit) return false;
   entry.count++;
   return true;
+}
+
+export type RateCharge = { ok: true } | { ok: false; tier: RateTier };
+
+/**
+ * Charge one request against every bucket that applies to it, agent cap first.
+ * An agent-marked request with a plausible credential must fit its agent cap AND
+ * the ordinary tier; an over-cap agent is refused WITHOUT touching the tier, so a
+ * looping agent cannot keep draining the human's budget past its own cap.
+ */
+export function chargeRateLimits(
+  map: RateMap,
+  ip: string,
+  opts: { sameOrigin: boolean; hasCredential: boolean; agent: boolean },
+  now: number,
+): RateCharge {
+  if (opts.agent && opts.hasCredential) {
+    if (!hitRateBucket(map, `agent-auth:${ip}`, AGENT_LIMIT_PER_MIN, now)) return { ok: false, tier: "agent-auth" };
+  }
+  const { tier, limit } = pickRateTier(opts);
+  if (!hitRateBucket(map, `${tier}:${ip}`, limit, now)) return { ok: false, tier };
+  return { ok: true };
 }
 
 export const STRICT_AUTH_LIMIT_PER_MIN = 20;

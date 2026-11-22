@@ -41,7 +41,7 @@ import { registerVersionRoute } from "./http/version.js";
 import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
-import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, hitRateBucket, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, chargeRateLimits, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
 import { isAgentRequest } from "./lib/audit-source.js";
 import { shouldRefuseAgentRequest, WEBMCP_DISABLED_MESSAGE } from "./lib/webmcp-policy.js";
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
@@ -201,8 +201,8 @@ function isSameOrigin(c: Context): boolean {
 // Same-origin unauthenticated: 60 (login attempts, public pages)
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
-// Browser AI agent (x-hisaabo-agent: webmcp, authenticated): 120, in a bucket of
-//   its own so an agent loop cannot 429 the human UI (see AGENT_LIMIT_PER_MIN)
+// Browser AI agent (x-hisaabo-agent: webmcp, authenticated): also capped at 120 in
+//   a bucket of its own, on top of its ordinary tier (see AGENT_LIMIT_PER_MIN)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 
 // @trpc/server has no server-side batch cap, so enforce one here: a batch URL
@@ -289,14 +289,18 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
     authorization: c.req.header("authorization"),
     cookie: c.req.header("cookie"),
   });
-  // Browser-agent calls (x-hisaabo-agent: webmcp) draw on their own bucket so an
-  // agent loop cannot 429 the human UI in the same tab. See lib/rate-limit-tier.ts.
-  const agent = isAgentRequest(c.req.raw.headers);
-  const { tier, limit } = pickRateTier({ sameOrigin: isSameOrigin(c), hasCredential, agent });
-
-  if (!hitRateBucket(rateMap, `${tier}:${ip}`, limit, now)) {
+  // Browser-agent calls (x-hisaabo-agent: webmcp) are charged against their own cap
+  // AND the ordinary tier: an agent loop is cut off at its cap, and the marker can
+  // never add throughput. See lib/rate-limit-tier.ts.
+  const charge = chargeRateLimits(
+    rateMap,
+    ip,
+    { sameOrigin: isSameOrigin(c), hasCredential, agent: isAgentRequest(c.req.raw.headers) },
+    now,
+  );
+  if (!charge.ok) {
     c.header("Retry-After", "60");
-    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: tier });
+    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: charge.tier });
     return c.json({ error: "Too many requests" }, 429);
   }
   await next();

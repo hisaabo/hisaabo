@@ -5,7 +5,7 @@ import {
   countStrictProcedures,
   trpcProcedures,
   pickRateTier,
-  hitRateBucket,
+  chargeRateLimits,
   AGENT_LIMIT_PER_MIN,
   type RateMap,
 } from "../lib/rate-limit-tier.js";
@@ -47,48 +47,92 @@ describe("rate-limit credential shape", () => {
   });
 });
 
-describe("browser-agent rate bucket", () => {
-  it("puts an authenticated agent request in its own, smaller tier", () => {
-    const agent = pickRateTier({ sameOrigin: true, hasCredential: true, agent: true });
-    expect(agent).toEqual({ tier: "agent-auth", limit: AGENT_LIMIT_PER_MIN });
-    expect(AGENT_LIMIT_PER_MIN).toBeLessThan(pickRateTier({ sameOrigin: true, hasCredential: true }).limit);
-    // Same for a cross-origin build (VITE_API_URL): the marker decides the bucket, not the origin.
-    expect(pickRateTier({ sameOrigin: false, hasCredential: true, agent: true }).tier).toBe("agent-auth");
+describe("browser-agent rate cap (charged on top of the ordinary tier)", () => {
+  const IP = "203.0.113.7";
+  const human = { sameOrigin: true, hasCredential: true, agent: false };
+  const agent = { sameOrigin: true, hasCredential: true, agent: true };
+
+  it("the ordinary tier no longer knows about the marker", () => {
+    expect(pickRateTier({ sameOrigin: true, hasCredential: true })).toEqual({ tier: "same-auth", limit: 300 });
+    expect(pickRateTier({ sameOrigin: true, hasCredential: false })).toEqual({ tier: "same-anon", limit: 60 });
+    expect(pickRateTier({ sameOrigin: false, hasCredential: true })).toEqual({ tier: "ext-auth", limit: 120 });
+    expect(pickRateTier({ sameOrigin: false, hasCredential: false })).toEqual({ tier: "ext-anon", limit: 10 });
+    expect(AGENT_LIMIT_PER_MIN).toBeLessThan(300);
   });
 
-  it("never lets an anonymous caller use the marker to get a second bucket", () => {
-    expect(pickRateTier({ sameOrigin: true, hasCredential: false, agent: true })).toEqual({ tier: "same-anon", limit: 60 });
-    expect(pickRateTier({ sameOrigin: false, hasCredential: false, agent: true })).toEqual({ tier: "ext-anon", limit: 10 });
-  });
-
-  it("leaves every non-agent tier exactly as it was", () => {
-    expect(pickRateTier({ sameOrigin: true, hasCredential: true, agent: false }).limit).toBe(300);
-    expect(pickRateTier({ sameOrigin: false, hasCredential: true }).limit).toBe(120);
-  });
-
-  it("an agent stuck in a loop exhausts its own bucket and never the human's", () => {
+  it("an agent stuck in a loop is cut off at its own cap", () => {
     const map: RateMap = new Map();
-    const ip = "203.0.113.7";
-    const now = 1_000_000;
-    const human = pickRateTier({ sameOrigin: true, hasCredential: true });
-    const agent = pickRateTier({ sameOrigin: true, hasCredential: true, agent: true });
-
-    // The agent hammers the API until it is refused...
-    let allowedAgentCalls = 0;
-    while (hitRateBucket(map, `${agent.tier}:${ip}`, agent.limit, now)) allowedAgentCalls++;
-    expect(allowedAgentCalls).toBe(AGENT_LIMIT_PER_MIN);
-    expect(hitRateBucket(map, `${agent.tier}:${ip}`, agent.limit, now)).toBe(false);
-
-    // ...while the person in the same tab, on the same IP, is not limited at all.
-    for (let i = 0; i < 50; i++) expect(hitRateBucket(map, `${human.tier}:${ip}`, human.limit, now)).toBe(true);
+    let allowed = 0;
+    for (let i = 0; i < 1000; i++) if (chargeRateLimits(map, IP, agent, 1_000_000).ok) allowed++;
+    expect(allowed).toBe(AGENT_LIMIT_PER_MIN);
+    expect(chargeRateLimits(map, IP, agent, 1_000_000)).toEqual({ ok: false, tier: "agent-auth" });
   });
 
-  it("the agent bucket refills after its minute", () => {
+  it("the agent drains at most its cap from the human's budget, and the human keeps the rest", () => {
     const map: RateMap = new Map();
-    const key = "agent-auth:203.0.113.7";
-    for (let i = 0; i < AGENT_LIMIT_PER_MIN; i++) hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 0);
-    expect(hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 59_000)).toBe(false);
-    expect(hitRateBucket(map, key, AGENT_LIMIT_PER_MIN, 60_001)).toBe(true);
+    for (let i = 0; i < 1000; i++) chargeRateLimits(map, IP, agent, 1_000_000);
+    // 300 - 120 = 180 requests left for the person in the same tab.
+    let human_ok = 0;
+    for (let i = 0; i < 1000; i++) if (chargeRateLimits(map, IP, human, 1_000_000).ok) human_ok++;
+    expect(human_ok).toBe(300 - AGENT_LIMIT_PER_MIN);
+  });
+
+  it("alternating the header never gets more than the base tier in total", () => {
+    const map: RateMap = new Map();
+    let allowed = 0;
+    let allowedAgent = 0;
+    for (let i = 0; i < 2000; i++) {
+      const marked = i % 2 === 0;
+      if (chargeRateLimits(map, IP, marked ? agent : human, 1_000_000).ok) {
+        allowed++;
+        if (marked) allowedAgent++;
+      }
+    }
+    expect(allowed).toBe(300);
+    expect(allowedAgent).toBeLessThanOrEqual(AGENT_LIMIT_PER_MIN);
+  });
+
+  it("marking every request is no better than not marking: still the base tier at most", () => {
+    const marked: RateMap = new Map();
+    const plain: RateMap = new Map();
+    let a = 0;
+    let b = 0;
+    for (let i = 0; i < 2000; i++) {
+      if (chargeRateLimits(marked, IP, agent, 5).ok) a++;
+      if (chargeRateLimits(plain, IP, human, 5).ok) b++;
+    }
+    expect(b).toBe(300);
+    expect(a).toBeLessThan(b);
+  });
+
+  it("never lets an anonymous caller use the marker for anything", () => {
+    const map: RateMap = new Map();
+    const anonAgent = { sameOrigin: true, hasCredential: false, agent: true };
+    let allowed = 0;
+    for (let i = 0; i < 200; i++) if (chargeRateLimits(map, IP, anonAgent, 1_000_000).ok) allowed++;
+    expect(allowed).toBe(60);
+    expect(map.has(`agent-auth:${IP}`)).toBe(false);
+  });
+
+  it("an over-cap agent is refused without spending the human's tier", () => {
+    const map: RateMap = new Map();
+    for (let i = 0; i < AGENT_LIMIT_PER_MIN; i++) chargeRateLimits(map, IP, agent, 1_000_000);
+    const spent = map.get(`same-auth:${IP}`)!.count;
+    for (let i = 0; i < 50; i++) chargeRateLimits(map, IP, agent, 1_000_000);
+    expect(map.get(`same-auth:${IP}`)!.count).toBe(spent);
+  });
+
+  it("both windows refill after their minute", () => {
+    const map: RateMap = new Map();
+    for (let i = 0; i < 1000; i++) chargeRateLimits(map, IP, agent, 0);
+    expect(chargeRateLimits(map, IP, agent, 59_000).ok).toBe(false);
+    expect(chargeRateLimits(map, IP, agent, 60_001).ok).toBe(true);
+  });
+
+  it("reports which bucket refused the request", () => {
+    const map: RateMap = new Map();
+    for (let i = 0; i < 300; i++) chargeRateLimits(map, IP, { ...human, sameOrigin: true }, 0);
+    expect(chargeRateLimits(map, IP, human, 0)).toEqual({ ok: false, tier: "same-auth" });
   });
 });
 
