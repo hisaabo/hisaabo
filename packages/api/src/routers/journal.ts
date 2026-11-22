@@ -11,7 +11,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
-import { logAudit } from "../lib/audit.js";
+import { logAuditInTransaction } from "../lib/audit.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 type JournalEntryRow = typeof journalEntries.$inferSelect;
@@ -42,6 +42,7 @@ interface VoidCtx {
 async function voidJournalEntry(
   ctx: VoidCtx,
   id: string,
+  via: "void" | "delete",
 ): Promise<VoidOutcome> {
   return ctx.db.transaction(async (tx) => {
     const [existing] = await tx
@@ -137,29 +138,26 @@ async function voidJournalEntry(
       })
       .where(eq(journalEntries.id, existing.id));
 
-    return { kind: "voided" as const, voidedEntry: existing, reversingEntry };
-  });
-}
+    // The audit row commits (or rolls back) with the void itself: a void that
+    // succeeded always has its record, and a failed audit insert rolls the void
+    // back instead of leaving an unrecorded change. `via` says which procedure
+    // was called.
+    await logAuditInTransaction(tx, {
+      businessId: ctx.businessId,
+      userId: ctx.user.id,
+      action: "journal.void",
+      entityType: "journal_entry",
+      entityId: existing.id,
+      metadata: {
+        entryNumber: existing.entryNumber,
+        reversingEntryId: reversingEntry.id,
+        reversingEntryNumber: reversingEntry.entryNumber,
+        via,
+      },
+      ipAddress: ctx.ipAddress,
+    });
 
-/** Audit trail for a void; `via` records which procedure was called. */
-async function auditVoid(
-  ctx: VoidCtx,
-  outcome: Extract<VoidOutcome, { kind: "voided" }>,
-  via: "void" | "delete",
-) {
-  await logAudit(ctx.db, {
-    businessId: ctx.businessId,
-    userId: ctx.user.id,
-    action: "journal.void",
-    entityType: "journal_entry",
-    entityId: outcome.voidedEntry.id,
-    metadata: {
-      entryNumber: outcome.voidedEntry.entryNumber,
-      reversingEntryId: outcome.reversingEntry.id,
-      reversingEntryNumber: outcome.reversingEntry.entryNumber,
-      via,
-    },
-    ipAddress: ctx.ipAddress,
+    return { kind: "voided" as const, voidedEntry: existing, reversingEntry };
   });
 }
 
@@ -433,7 +431,7 @@ export const journalRouter = router({
       requireCan(ctx.ability, "update", "Account");
 
       const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
-      const outcome = await voidJournalEntry(scope, input.id);
+      const outcome = await voidJournalEntry(scope, input.id, "void");
 
       if (outcome.kind === "already_voided") {
         throw new TRPCError({
@@ -441,8 +439,6 @@ export const journalRouter = router({
           message: "Journal entry is already voided",
         });
       }
-
-      await auditVoid(scope, outcome, "void");
 
       return { voidedEntry: outcome.voidedEntry, reversingEntry: outcome.reversingEntry };
     }),
@@ -477,7 +473,7 @@ export const journalRouter = router({
       requireCan(ctx.ability, "delete", "Account");
 
       const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
-      const outcome = await voidJournalEntry(scope, input.id);
+      const outcome = await voidJournalEntry(scope, input.id, "delete");
 
       if (outcome.kind === "already_voided") {
         return {
@@ -489,8 +485,6 @@ export const journalRouter = router({
           reversingEntryNumber: null as string | null,
         };
       }
-
-      await auditVoid(scope, outcome, "delete");
 
       return {
         success: true as const,

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { auditLog, chartOfAccounts, journalEntries, journalEntryLines } from "@hisaabo/db";
 import { createTestWorld, type TestWorld } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
@@ -383,6 +383,78 @@ describe("journal.delete (voids instead of erasing)", () => {
     });
     await expect(seller.journal.delete({ id: created.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect((await entryRow(created.id))!.isVoided).toBe(false);
+  });
+});
+
+// The void's audit row is written inside the void's transaction: it commits or rolls back
+// with the reversal, so a void never exists without its record.
+describe("journal void audit row is atomic with the void", () => {
+  async function postEntry(narration: string) {
+    return callerForRamesh().journal.create({
+      entryDate: new Date("2026-07-10T00:00:00.000Z").toISOString(),
+      narration,
+      lines: [
+        { accountId: cashAccountId, debit: "100.00", credit: "0" },
+        { accountId: capitalAccountId, debit: "0", credit: "100.00" },
+      ],
+    });
+  }
+
+  // Make every audit insert for a journal void fail, as a stand-in for any audit-write failure.
+  async function blockVoidAudits() {
+    const db = getTenantTestDb();
+    await db.execute(sql`
+      CREATE OR REPLACE FUNCTION test_block_journal_void_audit() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'journal.void' THEN RAISE EXCEPTION 'audit insert blocked by test'; END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`);
+    await db.execute(sql`DROP TRIGGER IF EXISTS test_block_journal_void_audit ON audit_log`);
+    await db.execute(sql`
+      CREATE TRIGGER test_block_journal_void_audit BEFORE INSERT ON audit_log
+      FOR EACH ROW EXECUTE FUNCTION test_block_journal_void_audit()`);
+  }
+
+  async function unblockVoidAudits() {
+    await getTenantTestDb().execute(sql`DROP TRIGGER IF EXISTS test_block_journal_void_audit ON audit_log`);
+  }
+
+  it.each(["void", "delete"] as const)("a failing audit insert rolls the %s back: nothing is voided, nothing is posted", async (via) => {
+    const created = await postEntry(`Audit fails on ${via}`);
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+    const entriesBefore = (await db.select().from(journalEntries).where(eq(journalEntries.businessId, world.business1.id))).length;
+
+    await blockVoidAudits();
+    try {
+      await expect(caller.journal[via]({ id: created.id })).rejects.toThrow(/insert into "audit_log"/);
+    } finally {
+      await unblockVoidAudits();
+    }
+
+    const [row] = await db.select().from(journalEntries).where(eq(journalEntries.id, created.id));
+    expect(row!.isVoided).toBe(false);
+    expect(row!.voidedByEntryId).toBeNull();
+    expect(await db.select().from(journalEntries).where(eq(journalEntries.reversesEntryId, created.id))).toHaveLength(0);
+    expect((await db.select().from(journalEntries).where(eq(journalEntries.businessId, world.business1.id))).length).toBe(entriesBefore);
+    expect(await db.select().from(auditLog).where(eq(auditLog.entityId, created.id))).toHaveLength(0);
+
+    // Once audits work again the same entry can be voided, with its record.
+    const ok = await caller.journal[via]({ id: created.id });
+    expect(ok).toBeDefined();
+    expect(await db.select().from(auditLog).where(eq(auditLog.entityId, created.id))).toHaveLength(1);
+  });
+
+  it("the audit row and the reversal commit together", async () => {
+    const created = await postEntry("Audit commits with the void");
+    const db = getTenantTestDb();
+    const res = await callerForRamesh().journal.delete({ id: created.id });
+
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.entityId, created.id));
+    expect(audit).toBeDefined();
+    expect(JSON.parse(audit!.metadata!).reversingEntryId).toBe(res.reversingEntryId);
+    const [reversal] = await db.select().from(journalEntries).where(eq(journalEntries.id, res.reversingEntryId!));
+    expect(reversal).toBeDefined();
   });
 });
 
