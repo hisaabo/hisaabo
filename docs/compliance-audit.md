@@ -479,6 +479,10 @@ The `logAudit()` function wraps the insert in a try/catch (line 27-29) so audit 
 
 19. **Export: Stock Adjustments and Bank Transactions** (Gap 6.1.1): Complete the data export for full portability.
 
+### Open items found after the audit
+
+20. **Stock over-restored when cancelling an invoice converted from a delivery challan** (found during the 0.10.1 e-invoice cancel review, not fixed in 0.10.1; planned for 0.11). Converting a challan to an invoice passes `skipStockAdjustment: true`, so the invoice does not deduct stock (the challan already did), but that flag is not persisted on the invoice. Cancelling (or deleting) such an invoice runs the normal reversal (`reverseInvoiceEffects`), which adds the invoice's quantities back to stock even though the invoice never deducted them, and the challan's own deduction is untouched. Fix: persist the flag (or reverse only when the invoice deducted stock) and add a regression test. Until then, adjust stock manually after cancelling an invoice that was converted from a challan. The same applies when cancelling it by cancelling its e-invoice.
+
 ---
 
 ## Appendix A: Files Reviewed

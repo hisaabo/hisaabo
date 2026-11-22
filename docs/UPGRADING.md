@@ -8,7 +8,7 @@ Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothi
 
 From v0.10.1, **Cancel** on the E-Invoicing page (also `hisaabo einvoice cancel`, the `einvoice_cancel` MCP tool and `eInvoice.cancel`) cancels the IRN and the invoice together, through the same path as a normal invoice cancel (stock and returns adjusted, out of GSTR-1/3B, the ledger and party balances). The 24-hour window is unchanged, and it is refused **before** anything is sent to the portal while payments are allocated to the invoice (remove or reallocate them first). No schema change and no migration.
 
-**Invoices already cancelled by v0.10.0 or earlier are not fixed automatically.** Nothing is migrated, because cancelling an invoice reverses stock and changes returns, and that is a decision for the business. List them with this read-only query, one database at a time (self-hosted: the one database; multi-tenant: every `tenant_*` database):
+**Invoices already cancelled by v0.10.0 or earlier are not fixed automatically.** Nothing is migrated, because cancelling an invoice reverses stock and changes returns, and that is a decision for the business. List them with this read-only query, one database at a time (self-hosted: the one database; multi-tenant: every tenant database):
 
 ```sql
 -- Invoices whose IRN was cancelled but which are still live.
@@ -37,16 +37,18 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec -T postgres 
   sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < stuck-einvoices.sql
 ```
 
-Multi-tenant (loops over every tenant database, reading with the same `POSTGRES_USER` the admin dashboard uses):
+Multi-tenant (loops over every tenant database). Tenant databases are listed from the control database's `tenants` table, not found by name, because their names are not all alike. The control database is `$POSTGRES_DB` unless you set `CONTROL_DATABASE_URL` to another one (then use that name). It reads with the same `POSTGRES_USER` the admin dashboard uses, so that role must be able to connect to every tenant database:
 
 ```bash
 COMPOSE="docker compose --env-file .env.prod -f docker-compose.prod.yml"
-for db in $(echo "SELECT datname FROM pg_database WHERE datname LIKE 'tenant\_%' ORDER BY 1" \
-    | $COMPOSE exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -At'); do
+for db in $(echo "SELECT db_name FROM tenants WHERE db_name IS NOT NULL ORDER BY db_name" \
+    | $COMPOSE exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'); do
   echo "== $db"
   $COMPOSE exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d $db" < stuck-einvoices.sql
 done
 ```
+
+A tenant whose `db_host` is not this Postgres server has to be queried with `psql` on that host instead.
 
 On the ONCE image, connect as shown in [DEPLOYMENT.md](DEPLOYMENT.md#once-all-in-one-image) and run the same file.
 
@@ -56,7 +58,17 @@ For each row returned, whoever owns the business decides whether the invoice sho
 - **CLI:** `hisaabo invoice status <invoice-id> cancelled`.
 - **MCP / API:** `invoice_update_status` / `invoice.updateStatus` with `status: "cancelled"`. (`eInvoice.cancel` on such an invoice also works and only finishes the local cancel.)
 
-The cancel is refused while payments are allocated to the invoice: remove the allocation first, then cancel. If the customer still needs billing, issue a new invoice (new number, new IRN). An invoice that is still listed after you cancel it was in a different state than expected: check its `status`.
+The invoice status rules are unchanged in 0.10.1, so some rows cannot be cancelled directly:
+
+- **`paid`, or any invoice with payments allocated:** remove the payment allocations first (removing the payments moves the invoice back to `sent` or `partial`), then cancel it.
+- **`adjusted` (fully offset by credit notes or sales/purchase returns):** the status rules do not allow cancelling it, and cancelling or deleting those credit notes or returns does not move the invoice out of `adjusted`, so there is no in-app route yet. Leave these rows for a later release and decide with your accountant how the offsetting credit note or return is reported until then.
+
+If the customer still needs billing, issue a new invoice (new number, new IRN). An invoice that is still listed after you cancel it was in a different state than expected: check its `status`. The E-Invoicing page also shows a banner with the count of such invoices, and the invoice's own panel says it is still active.
+
+### Other changes in 0.10.1 that touch e-invoice cancellation
+
+- **A cancel whose answer was lost is now recoverable.** Requests to the IRP time out after 30 seconds. If the IRP cancelled the IRN but the answer never arrived (timeout, crash, double click), cancelling again asks the IRP for the IRN's status; when it reports the IRN as cancelled, Hisaabo completes the local cancel instead of showing the IRP's refusal. This also works after the 24-hour window. If the IRN is still active, the original error is shown and nothing changes.
+- **Known issue (not fixed in 0.10.1, planned for 0.11): cancelling an invoice that was converted from a delivery challan restores stock the invoice did not deduct.** The challan already deducted the stock, the invoice created from it deducts nothing, but cancelling or deleting that invoice (including by cancelling its e-invoice) adds its quantities back. Adjust stock manually after cancelling such an invoice. Listed in [compliance-audit.md](compliance-audit.md).
 
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
