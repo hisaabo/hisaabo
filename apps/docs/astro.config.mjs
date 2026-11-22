@@ -74,6 +74,7 @@ export default defineConfig({
             { label: "Business Reports", slug: "reports" },
             { label: "GST Compliance", slug: "gst" },
             { label: "GSTR-1 Filing", slug: "gst/gstr1" },
+            { label: "E-Invoicing (IRP)", slug: "gst/e-invoicing" },
           ],
         },
         {
