@@ -43,6 +43,7 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
 import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, chargeRateLimits, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
 import { isAgentRequest } from "./lib/audit-source.js";
+import { sweepIdempotencyKeysEverywhere } from "./lib/idempotency-sweep.js";
 import { shouldRefuseAgentRequest, WEBMCP_DISABLED_MESSAGE } from "./lib/webmcp-policy.js";
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
@@ -2159,6 +2160,13 @@ const cleanupTimer = setInterval(async () => {
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
     logger.error({ err: e }, "[session-cleanup] Failed");
+  }
+  // Expired idempotency claims (tenant databases) are swept on the same hourly tick.
+  try {
+    const removed = await sweepIdempotencyKeysEverywhere();
+    if (removed > 0) logger.info({ removed }, "[idempotency-sweep] removed expired claims");
+  } catch (e) {
+    logger.error({ err: e }, "[idempotency-sweep] Failed");
   }
 }, 60 * 60 * 1000);
 cleanupTimer.unref();

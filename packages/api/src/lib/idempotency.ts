@@ -31,7 +31,8 @@
  * no longer exists.
  *
  * Keys are scoped per business AND user, live for IDEMPOTENCY_WINDOW_MINUTES, and
- * expired rows are purged by the next keyed write in the business.
+ * expired rows are purged by the next keyed write in the business and by an hourly
+ * sweep (idempotency-sweep.ts, from the session-cleanup timer in server.ts).
  */
 
 import { createHash } from "node:crypto";
@@ -157,6 +158,18 @@ export function replayedRecordGone(what: string): TRPCError {
     code: "CONFLICT",
     message: `The ${what} created by this idempotencyKey no longer exists, so nothing was created. Send a new idempotencyKey to create another.`,
   });
+}
+
+/**
+ * Delete expired claims everywhere in one tenant database. Returns how many were
+ * removed. See idempotency-sweep.ts for the hourly caller.
+ */
+export async function sweepExpiredIdempotencyKeys(db: Executor, now: Date = new Date()): Promise<number> {
+  const removed = await db
+    .delete(idempotencyKeys)
+    .where(lt(idempotencyKeys.expiresAt, now))
+    .returning({ id: idempotencyKeys.id });
+  return removed.length;
 }
 
 /** Rows currently held for a business (used by tests and diagnostics). */

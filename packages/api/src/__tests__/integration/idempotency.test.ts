@@ -27,7 +27,8 @@ import {
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import { getTenantTestDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
-import { countIdempotencyKeys, canonicalize, hashRequest } from "../../lib/idempotency.js";
+import { countIdempotencyKeys, canonicalize, hashRequest, sweepExpiredIdempotencyKeys } from "../../lib/idempotency.js";
+import { sweepIdempotencyKeysEverywhere } from "../../lib/idempotency-sweep.js";
 
 let world: TestWorld;
 
@@ -410,5 +411,53 @@ describe("payment.create with an idempotency key", () => {
 
     await getTenantTestDb().update(payments).set({ deletedAt: new Date() }).where(eq(payments.id, first.id));
     await expect(caller().payment.create(input)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("the hourly sweep of expired claims", () => {
+  async function claimRow(businessId: string, key: string, expiresAt: Date) {
+    await getTenantTestDb().insert(idempotencyKeys).values({
+      businessId,
+      userId: world.ramesh.id,
+      scope: "invoice.create",
+      key,
+      requestHash: "h",
+      resourceId: "00000000-0000-4000-8000-000000000001",
+      expiresAt,
+    });
+  }
+  const keysNow = async () => (await getTenantTestDb().select({ key: idempotencyKeys.key }).from(idempotencyKeys)).map((r) => r.key);
+
+  it("removes expired claims in every business and keeps live ones", async () => {
+    const other = await createBusiness(world.tenantDb, world.ramesh.id, { name: "Sweep Shop" });
+    const past = new Date(Date.now() - 60_000);
+    const future = new Date(Date.now() + 10 * 60_000);
+    await claimRow(world.business1.id, "sweep-expired-a", past);
+    await claimRow(other.id, "sweep-expired-b", past);
+    await claimRow(world.business1.id, "sweep-live-a", future);
+
+    const removed = await sweepExpiredIdempotencyKeys(getTenantTestDb());
+
+    expect(removed).toBeGreaterThanOrEqual(2);
+    const left = await keysNow();
+    expect(left).not.toContain("sweep-expired-a");
+    expect(left).not.toContain("sweep-expired-b");
+    expect(left).toContain("sweep-live-a");
+  });
+
+  it("is what the hourly timer calls: sweepIdempotencyKeysEverywhere clears them in a self-hosted database", async () => {
+    await claimRow(world.business1.id, "sweep-all-expired", new Date(Date.now() - 1000));
+    await claimRow(world.business1.id, "sweep-all-live", new Date(Date.now() + 600_000));
+
+    expect(await sweepIdempotencyKeysEverywhere()).toBeGreaterThanOrEqual(1);
+
+    const left = await keysNow();
+    expect(left).not.toContain("sweep-all-expired");
+    expect(left).toContain("sweep-all-live");
+  });
+
+  it("does nothing when nothing has expired", async () => {
+    await sweepExpiredIdempotencyKeys(getTenantTestDb());
+    expect(await sweepExpiredIdempotencyKeys(getTenantTestDb())).toBe(0);
   });
 });
