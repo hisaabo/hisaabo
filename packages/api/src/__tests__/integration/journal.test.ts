@@ -298,6 +298,35 @@ describe("journal.delete (voids instead of erasing)", () => {
     expect((await entryRow(created.id))!.isVoided).toBe(true);
   });
 
+  it("journal.void refuses a reversal entry too, and leaves the ledger as it was", async () => {
+    const created = await postEntry("Void a reversal");
+    const caller = callerForRamesh();
+    const first = await caller.journal.void({ id: created.id });
+    const reversalId = first.reversingEntry.id;
+
+    await expect(caller.journal.void({ id: reversalId })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/reversal of another journal entry.*cannot be voided or deleted/),
+    });
+
+    // No second-level reversal was posted: the original is still reversed exactly once,
+    // and the reversal is neither voided nor reversed itself.
+    const db = getTenantTestDb();
+    expect(await db.select().from(journalEntries).where(eq(journalEntries.reversesEntryId, reversalId))).toHaveLength(0);
+    expect(await db.select().from(journalEntries).where(eq(journalEntries.reversesEntryId, created.id))).toHaveLength(1);
+    expect((await entryRow(reversalId))!.isVoided).toBe(false);
+    expect((await entryRow(created.id))!.isVoided).toBe(true);
+  });
+
+  it("refuses a reversal entry on both paths, whichever way the original was voided", async () => {
+    const created = await postEntry("Voided via delete");
+    const caller = callerForRamesh();
+    const res = await caller.journal.delete({ id: created.id });
+
+    await expect(caller.journal.void({ id: res.reversingEntryId! })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.journal.delete({ id: res.reversingEntryId! })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("two concurrent deletes of one entry produce exactly one reversal", async () => {
     const created = await postEntry("Race");
     const caller = callerForRamesh();

@@ -34,13 +34,14 @@ interface VoidCtx {
  * original row locked, so two concurrent voids cannot both reverse the same
  * entry.
  *
- * `refuseReversal` rejects entries that are themselves the reversal of another
- * entry (used by `delete`).
+ * An entry that is itself the reversal of another entry (it has `reversesEntryId`)
+ * is refused for both procedures: reversing it would reinstate the original's
+ * effect in the ledger while the original stays flagged voided. Correct a wrong
+ * void by posting a new entry instead.
  */
 async function voidJournalEntry(
   ctx: VoidCtx,
   id: string,
-  opts: { refuseReversal: boolean },
 ): Promise<VoidOutcome> {
   return ctx.db.transaction(async (tx) => {
     const [existing] = await tx
@@ -59,17 +60,17 @@ async function voidJournalEntry(
       throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
     }
 
-    if (existing.isVoided) {
-      return { kind: "already_voided" as const, entry: existing };
-    }
-
-    if (opts.refuseReversal && existing.reversesEntryId) {
+    if (existing.reversesEntryId) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message:
           `${existing.entryNumber} is the reversal of another journal entry and is part of its audit trail; ` +
-          "it cannot be deleted. Void the original entry instead.",
+          "it cannot be voided or deleted. To correct a wrong void, post a new journal entry.",
       });
+    }
+
+    if (existing.isVoided) {
+      return { kind: "already_voided" as const, entry: existing };
     }
 
     const originalLines = await tx
@@ -425,7 +426,7 @@ export const journalRouter = router({
       requireCan(ctx.ability, "update", "Account");
 
       const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
-      const outcome = await voidJournalEntry(scope, input.id, { refuseReversal: false });
+      const outcome = await voidJournalEntry(scope, input.id);
 
       if (outcome.kind === "already_voided") {
         throw new TRPCError({
@@ -456,8 +457,8 @@ export const journalRouter = router({
    *  - already voided             -> `{ success: true, alreadyVoided: true }`, no change
    *                                  (the entry is already out of the books, so a repeated
    *                                  call is a no-op rather than an error)
-   *  - a reversal entry           -> BAD_REQUEST: deleting it would silently reinstate the
-   *                                  entry it reverses
+   *  - a reversal entry           -> BAD_REQUEST: reversing it would silently reinstate the
+   *                                  entry it reverses (`void` refuses it too)
    *  - anything else              -> voided, `{ success: true, voided: true, ... }`
    *
    * Returns `{ success: true }` plus additive fields, so existing callers that
@@ -469,7 +470,7 @@ export const journalRouter = router({
       requireCan(ctx.ability, "delete", "Account");
 
       const scope: VoidCtx = { db: ctx.db, businessId: ctx.businessId, user: ctx.user, ipAddress: ctx.ipAddress };
-      const outcome = await voidJournalEntry(scope, input.id, { refuseReversal: true });
+      const outcome = await voidJournalEntry(scope, input.id);
 
       if (outcome.kind === "already_voided") {
         return {

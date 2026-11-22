@@ -400,6 +400,7 @@ print(f"Reversal: {result['reversingEntry']['entryNumber']}")`,
       },
       gotchas: [
         "Cannot void an already-voided entry. The API returns BAD_REQUEST.",
+        "Cannot void a reversal entry (one with `reversesEntryId`, i.e. the entry a previous void posted). The API returns BAD_REQUEST. Reversing it would reinstate the original's effect in the ledger while the original stayed flagged voided; to correct a wrong void, post a new journal entry. Before 0.10.1 this was allowed.",
         "The reversing entry has debits and credits SWAPPED: original debits become credits and vice versa. This is standard accounting void practice.",
         "The reversing entry is dated the same as the original entry, not the current date. This keeps the reversal in the same accounting period.",
         "The reversing entry narration is auto-generated as \"Void: reversal of {entryNumber}\".",
