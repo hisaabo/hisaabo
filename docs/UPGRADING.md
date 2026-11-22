@@ -54,7 +54,19 @@ After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLL
    ```
 
    Every row is a tenant database the pass will report as `failed`. Fix it with `ALTER DATABASE "<db_name>" OWNER TO <control role>;` (as the current owner or a superuser) or run the control role as a superuser. It only sees databases on the control database's server; tenants with another `db_host` need the same check there.
-3. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+3. **Multi-tenant only: check that no two tenants share a database.** Each row of `tenants` must point at its own database. Two rows with the same host, port and database name would share data, and the access pass would treat them as one. On the control database this query must return no rows:
+
+   ```sql
+   SELECT coalesce(db_host, 'localhost') AS db_host, coalesce(db_port, '5432') AS db_port, db_name,
+          count(*) AS tenants, array_agg(slug ORDER BY slug) AS slugs
+   FROM tenants
+   WHERE db_name IS NOT NULL
+   GROUP BY 1, 2, 3
+   HAVING count(*) > 1;
+   ```
+
+   Provisioning always gives a tenant a database of its own, so a row here means a hand-edited or restored `tenants` table: fix it before upgrading (point each row at its own database, or remove the duplicate). A unique index on `(db_host, db_port, db_name)` is planned for 0.11.0; until then nothing in the database prevents it.
+4. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
 
 ### Upgrade
 
