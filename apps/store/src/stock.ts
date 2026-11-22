@@ -10,12 +10,13 @@ import type { StoreItem } from "./types";
  * "Low stock" badge for it is wrong twice over: nothing is low, nothing is
  * tracked.
  *
- * A badge for stock that is genuinely running low needs a signal the API does
- * not send yet: `runningLow`, true only for an item that tracks stock and whose
- * quantity is above zero but at or below its own low-stock alert level (both
- * are known to the server: `items.stockQuantity` and `items.lowStockAlert`).
- * Until the API sends it, the badge stays hidden for every item. That is the
- * conservative side of the rule: no badge is better than a false one.
+ * A badge for stock that is genuinely running low uses a separate signal,
+ * `runningLow`: true only for an item (or variant) that tracks stock and whose
+ * quantity is above zero but at or below its own low-stock alert level; see
+ * packages/api/src/lib/store-stock.ts. It is optional: an API that predates it
+ * omits it and no badge is shown, which is the conservative side of the rule
+ * (no badge is better than a false one). The API ships before the store, so a
+ * store never sees a half-way state.
  */
 
 type Variant = NonNullable<StoreItem["variants"]>[number];
@@ -49,8 +50,8 @@ export function stockState(item: StoreItem, selection: Selection = { kind: "item
     return { soldOut: true, onDemand: false, runningLow: false, onHand: false };
   }
   if (selection.kind === "variant") {
-    // Variants carry no low-stock signal: only sold out or not.
-    return { soldOut: !selection.variant.inStock, onDemand: false, runningLow: false, onHand: false };
+    const soldOut = !selection.variant.inStock;
+    return { soldOut, onDemand: false, runningLow: !soldOut && selection.variant.runningLow === true, onHand: false };
   }
   const onDemand = item.lowStock === true;
   return {

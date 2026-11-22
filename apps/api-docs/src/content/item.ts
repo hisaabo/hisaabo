@@ -139,7 +139,7 @@ resp = httpx.get(
         { name: "taxPercent", type: "string (decimal)", required: false, description: "Default GST rate applied to line items", default: "0" },
         { name: "taxInclusive", type: "boolean", required: false, description: "Whether `salePrice` already includes tax", default: "false" },
         { name: "stockQuantity", type: "string (decimal)", required: false, description: "Opening stock quantity (3 decimal places)", default: "0" },
-        { name: "lowStockAlert", type: "string (decimal)", required: false, description: "Alert threshold — triggers low-stock filter when stock ≤ this value" },
+        { name: "lowStockAlert", type: "string (decimal)", required: false, description: "Alert threshold — triggers low-stock filter when stock ≤ this value. Also drives the online store's \"Low stock\" label (`runningLow` in the public catalog): shown while stock is above zero and at or below this value" },
         { name: "hsn", type: "string", required: false, description: "HSN/SAC code for GST filing (max 20 chars)" },
         { name: "sku", type: "string", required: false, description: "Internal SKU/barcode (max 50 chars)" },
         { name: "description", type: "string", required: false, description: "Item description (max 1000 chars)" },

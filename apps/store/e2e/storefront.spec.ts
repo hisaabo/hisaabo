@@ -49,9 +49,29 @@ test("no 'low stock' badge on a store that holds no inventory", async ({ page })
   await expect(page.getByText("Available to order")).toBeVisible();
 });
 
-test("a store that tracks stock does not get the badge either, until the API says an item is running low", async ({ page }) => {
+test("a store that tracks stock gets no badge while nothing is running low", async ({ page }) => {
   await openStore(page, { trackStock: true });
   await expect(page.getByText(/low stock/i)).toHaveCount(0);
+});
+
+test("the badge shows on exactly the items the API says are running low", async ({ page }) => {
+  await openStore(page, { runningLow: true });
+  const badges = page.locator(".badge-low-stock");
+  await expect(badges).toHaveCount(1);
+  await expect(page.locator(".pcard", { hasText: "Black Rice" }).locator(".badge-low-stock")).toHaveText("Low stock");
+
+  // The item view says it too.
+  await page.getByRole("button", { name: "Black Rice", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Black Rice" });
+  await expect(dialog.getByText("Only a few left")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // A variant item follows the chosen variant: 500 g is low, 250 g is not.
+  const honey = page.locator(".pcard", { hasText: "Raw Forest Honey" });
+  await honey.getByRole("button", { name: "500 g" }).click();
+  await expect(honey.locator(".badge-low-stock")).toHaveText("Low stock");
+  await honey.getByRole("button", { name: "250 g" }).click();
+  await expect(honey.locator(".badge-low-stock")).toHaveCount(0);
 });
 
 test("prices are written one way everywhere: Indian grouping, paise only when there are some", async ({ page }) => {

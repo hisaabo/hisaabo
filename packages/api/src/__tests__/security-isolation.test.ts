@@ -483,12 +483,13 @@ describe("SECURITY — public store catalog output does not leak internal busine
      */
     const allowedPublicFields = new Set([
       "id", "name", "description", "price", "unit", "category",
-      "taxPercent", "taxInclusive", "inStock", "lowStock", "sortOrder",
+      "taxPercent", "taxInclusive", "inStock", "lowStock", "runningLow", "sortOrder",
       "itemMode", "variants", "variantAttributes", "unitVariants",
     ]);
 
     expect(allowedPublicFields.has("purchasePrice")).toBe(false);
     expect(allowedPublicFields.has("stockQuantity")).toBe(false);
+    expect(allowedPublicFields.has("lowStockAlert")).toBe(false); // only the boolean runningLow is public
     expect(allowedPublicFields.has("hsn")).toBe(false);
     expect(allowedPublicFields.has("sku")).toBe(false);
   });

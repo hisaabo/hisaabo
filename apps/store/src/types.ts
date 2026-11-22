@@ -58,9 +58,11 @@ export interface StoreItem {
    */
   lowStock?: boolean;
   /**
-   * Reserved for the API: true only when the item tracks stock and its
-   * quantity is above zero but at or below the item's low-stock alert level.
-   * Not sent yet, so no "low stock" badge is shown until it is. See stock.ts.
+   * True only when the item tracks stock and its quantity is above zero but at
+   * or below the owner's low-stock alert level. Optional and additive: an API
+   * that predates it omits it, and the "Low stock" badge then stays hidden. For
+   * an item sold in variants it is true when everything still buyable is low
+   * (the variants carry their own flag). See stock.ts.
    */
   runningLow?: boolean;
   sortOrder: number;
@@ -81,6 +83,8 @@ export interface StoreItem {
     attributes: Record<string, string>;
     price: string;
     inStock: boolean;
+    /** This variant tracks stock, has some, and is at or below its alert level. */
+    runningLow?: boolean;
   }>;
 }
 

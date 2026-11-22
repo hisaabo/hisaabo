@@ -463,7 +463,9 @@ Response:
       id, name, description, category,
       price: "250.00",          // storePrice ?? salePrice
       unit, taxPercent, taxInclusive,
-      inStock: true,            // stockQuantity > 0
+      inStock: true,            // stockQuantity > 0 (or the store allows negative stock)
+      lowStock: false,          // allowNegativeStock && !inStock: "none on hand, orders accepted"; NOT "running low"
+      runningLow: false,        // tracked, 0 < stockQuantity <= lowStockAlert (items and variants)
     },
     ...
   ],
@@ -477,7 +479,7 @@ Headers:
   Cache-Control: public, s-maxage=60, stale-while-revalidate=300
 ```
 
-**Important**: This endpoint NEVER returns `salePrice`, `purchasePrice`, `stockQuantity` (exact number), `hsn`, `sku`, cost data, or any internal business fields. Only the derived `price` and boolean `inStock`.
+**Important**: This endpoint NEVER returns `salePrice`, `purchasePrice`, `stockQuantity` (exact number), `hsn`, `sku`, cost data, or any internal business fields. Only the derived `price` and the booleans `inStock`, `lowStock` and `runningLow`.
 
 **POST `/store/:slug/api/orders`**
 
@@ -853,7 +855,7 @@ A docked panel takes its width from the grid: the first item added makes the pan
 
 **Money** is formatted in one place (`src/money.ts`): decimal strings are read as integer paise (no floating point), grouped the Indian way, and paise are shown only when non-zero ("₹1,500", "₹640.50").
 
-**Stock labels and the API.** The catalog's `lowStock` flag does not mean "running low": the server sets `lowStock: allowNegativeStock && !inStock`, so a store that holds no inventory (stock 0, orders accepted) reports it on every item. The storefront therefore never shows a "Low stock" badge from `lowStock`; such items read "Available to order" in the item view. A genuine low-stock badge needs a new field the API does not send yet. **API change needed (not made here: no contract changes):** add an optional boolean to each catalog item, for example `runningLow`, true only when `stockQuantity > 0` and `lowStockAlert` is set and `stockQuantity <= lowStockAlert` (both columns exist on `items`; variants have the same pair). The storefront already reads `StoreItem.runningLow` (`src/stock.ts`), so the badge appears as soon as the API sends it.
+**Stock labels and the API.** The catalog's `lowStock` flag does not mean "running low": the server sets `lowStock: allowNegativeStock && !inStock`, so a store that holds no inventory (stock 0, orders accepted) reports it on every item. The storefront therefore never shows a "Low stock" badge from `lowStock`; such items read "Available to order" in the item view. The API now sends a separate, additive `runningLow` boolean on every catalog item and variant (`packages/api/src/lib/store-stock.ts`, assembled in `lib/store-catalog-items.ts`): true only when `itemType` is `product`, `stockQuantity > 0`, `lowStockAlert` is set and `stockQuantity <= lowStockAlert`. For an item sold in variants it is true when every variant still buyable is low. `lowStock` is unchanged for compatibility. Neither the quantity nor the alert level is sent. The storefront shows the "Low stock" badge from `StoreItem.runningLow` (and the chosen variant's own flag); a catalog from a server that predates the field omits it, so no badge shows. Deploy order: API first, then the store.
 
 **Not covered.** The storefront has no dark theme. Accent colours are kept legible by deriving the text colour on the accent and a dark enough accent for text on white (`src/color.ts`).
 

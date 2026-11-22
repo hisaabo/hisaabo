@@ -35,12 +35,18 @@ export interface FixtureOptions {
   photoLed?: boolean;
   /** Report real stock: items track inventory and none is low. */
   trackStock?: boolean;
+  /**
+   * Tracked stock, with Black Rice running low and, on Raw Forest Honey, the
+   * 500 g variant (as the API's `runningLow` would say it).
+   */
+  runningLow?: boolean;
   /** The business's accent colour (default: a green). */
   accent?: string;
 }
 
 export function buildItems(opts: FixtureOptions = {}): StoreItem[] {
-  const stock = opts.trackStock ? { inStock: true, lowStock: false } : {};
+  const tracked = opts.trackStock || opts.runningLow;
+  const stock = tracked ? { inStock: true, lowStock: false, runningLow: false } : {};
   const items: StoreItem[] = [
     {
       ...BASE, ...stock, id: id(1), name: "Lakadong Turmeric Powder", category: "Spices",
@@ -54,7 +60,7 @@ export function buildItems(opts: FixtureOptions = {}): StoreItem[] {
       price: "320.00", unit: "jar", itemMode: "variants", variantAttributes: ["Size"],
       variants: [
         { id: id(21), attributes: { Size: "250 g" }, price: "320.00", inStock: true },
-        { id: id(22), attributes: { Size: "500 g" }, price: "600.00", inStock: true },
+        { id: id(22), attributes: { Size: "500 g" }, price: "600.00", inStock: true, ...(opts.runningLow ? { runningLow: true } : {}) },
         { id: id(23), attributes: { Size: "1 kg" }, price: "1150.00", inStock: true },
       ],
     },
@@ -70,7 +76,7 @@ export function buildItems(opts: FixtureOptions = {}): StoreItem[] {
       unitVariants: [{ unit: "5 litre", conversionFactor: 5, price: "2000.00" }],
     },
     { ...BASE, ...stock, id: id(5), name: "Jaggery Powder", category: "Staples", price: "120.00", unit: "kg", description: "Chemical-free, no bleaching." },
-    { ...BASE, ...stock, id: id(6), name: "Black Rice", category: "Staples", price: "260.00", unit: "kg" },
+    { ...BASE, ...stock, ...(opts.runningLow ? { runningLow: true } : {}), id: id(6), name: "Black Rice", category: "Staples", price: "260.00", unit: "kg" },
     { ...BASE, ...stock, id: id(7), name: "Kashmiri Red Chilli Powder", category: "Spices", price: "640.50", unit: "kg", description: "Mild heat, deep colour." },
     { ...BASE, ...stock, id: id(8), name: "Moringa Leaf Powder", category: "Wellness", price: "499.00", unit: "250 g" },
     { ...BASE, ...stock, id: id(9), name: "Mixed Fruit Jam", category: "Wellness", price: "180.00", unit: "jar", description: "Sun-cooked, lightly sweetened." },

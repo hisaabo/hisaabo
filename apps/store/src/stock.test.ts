@@ -41,9 +41,23 @@ describe("low-stock badge", () => {
     expect(showLowStockBadge(item({ lowStock: true, runningLow: true }))).toBe(false);
   });
 
-  it("stays hidden for variants, which carry no low-stock signal", () => {
+  it("follows the chosen variant's own flag, not the item's", () => {
     const variant = { id: "v1", attributes: { Size: "S" }, price: "10.00", inStock: true };
     expect(showLowStockBadge(item({ runningLow: true }), { kind: "variant", variant })).toBe(false);
+    expect(showLowStockBadge(item(), { kind: "variant", variant: { ...variant, runningLow: true } })).toBe(true);
+    expect(showLowStockBadge(item(), { kind: "variant", variant: { ...variant, runningLow: false } })).toBe(false);
+  });
+
+  it("never shows for a sold-out variant, whatever its flag says", () => {
+    const variant = { id: "v1", attributes: { Size: "S" }, price: "10.00", inStock: false, runningLow: true };
+    expect(showLowStockBadge(item(), { kind: "variant", variant })).toBe(false);
+  });
+
+  it("stays hidden when the API does not send the field at all", () => {
+    // An API that predates runningLow: nothing on the item, nothing on the variants.
+    const old = item({ inStock: true, lowStock: false, itemMode: "variants", variants: [{ id: "v1", attributes: { Size: "S" }, price: "10.00", inStock: true }] });
+    expect(showLowStockBadge(old)).toBe(false);
+    expect(showLowStockBadge(old, { kind: "variant", variant: old.variants![0] })).toBe(false);
   });
 });
 
