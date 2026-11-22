@@ -57,9 +57,9 @@ for (const { width, height } of SIZES) {
     await add(page, "Black Rice");
     await openCartIfClosed(page);
     await page.getByRole("button", { name: /proceed to checkout/i }).click();
-    await page.getByLabel("Mobile number", { exact: true }).fill("9876543210");
+    await page.getByLabel("Mobile number", { exact: true }).or(page.getByPlaceholder("9876543210")).fill("9876543210");
     await page.getByRole("button", { name: /^continue$/i }).click();
-    await page.getByLabel("Your name", { exact: true }).fill("Asha Verma");
+    await page.getByLabel("Your name", { exact: true }).or(page.getByPlaceholder("Your name")).fill("Asha Verma");
     await page.getByRole("button", { name: /continue to checkout/i }).click();
     await page.getByText("Success!").waitFor();
     await page.waitForTimeout(500);
