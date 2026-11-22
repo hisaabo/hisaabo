@@ -175,6 +175,7 @@ export async function confirmWrite(
   def: WebMcpToolDefinition,
   input: Record<string, unknown>,
   options?: WebMCP.ToolExecuteCallbackOptions,
+  ctx?: Pick<WebMcpToolContext, "signal">,
 ): Promise<boolean> {
   const title = `Allow AI agent: ${stripControlChars(def.title ?? def.name)}?`;
   const summary = summarizeInput(input);
@@ -183,6 +184,7 @@ export async function confirmWrite(
       return requestConfirmation({
         title,
         description: `A browser AI agent wants to change your Hisaabo data. ${summary}`,
+        signal: ctx?.signal,
       });
     }
     return typeof window !== "undefined" && typeof window.confirm === "function"
@@ -197,6 +199,42 @@ export async function confirmWrite(
   } catch {
     return false;
   }
+}
+
+/**
+ * Why a call must not run any more, or null when its registration is still the
+ * live one.
+ *
+ * A registration is bound to one user, role and business. It ends — and its
+ * `signal` aborts — on a business switch, sign-out, the preference being turned
+ * off or the role changing. The browser also unregisters the tools then, but a
+ * call that was already in flight (or parked in a confirmation dialog) still
+ * holds this context, so the runtime checks again at the two moments that
+ * matter: before asking, and after the user answered. The business comparison is
+ * a second, independent check against what the app is showing right now.
+ */
+function staleReason(ctx: WebMcpToolContext, options?: WebMCP.ToolExecuteCallbackOptions): string | null {
+  if (options?.signal?.aborted) return "The agent cancelled this call.";
+  if (ctx.signal?.aborted) {
+    return "Hisaabo's agent session was reset while this call was waiting (the business was switched, the user signed out, or agent access was turned off).";
+  }
+  const active = ctx.activeBusinessId?.();
+  if (ctx.businessId && active !== undefined && active !== ctx.businessId) {
+    return `The user switched business while this call was waiting, so it no longer matches the business it was prepared for${ctx.businessName ? ` (${stripControlChars(ctx.businessName)})` : ""}.`;
+  }
+  return null;
+}
+
+function staleResult(reason: string): WebMcpToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${reason} Nothing was changed. Call hisaabo_context to see the current business, and only retry if the user still wants it.`,
+      },
+    ],
+    isError: true,
+  };
 }
 
 /**
@@ -221,12 +259,23 @@ export function buildBrowserTool(
     annotations: def.annotations,
     execute: async (input, options) => {
       try {
+        const staleBefore = staleReason(ctx, options);
+        if (staleBefore) return staleResult(staleBefore);
+
         const isWrite = isWriteTool(def);
-        if (isWrite && !(await confirmWrite(def, input ?? {}, options))) {
-          return {
-            content: [{ type: "text", text: "The user declined this action. Nothing was changed. Do not retry unless the user asks." }],
-            isError: true,
-          };
+        if (isWrite) {
+          const allowed = await confirmWrite(def, input ?? {}, options, ctx);
+          // Re-check after the (possibly long) wait: the user may have switched
+          // business or signed out while the dialog was open. Checked before the
+          // answer so a prompt denied by a reset reads as a reset, not a refusal.
+          const staleAfter = staleReason(ctx, options);
+          if (staleAfter) return staleResult(staleAfter);
+          if (!allowed) {
+            return {
+              content: [{ type: "text", text: "The user declined this action. Nothing was changed. Do not retry unless the user asks." }],
+              isError: true,
+            };
+          }
         }
         const value = await def.execute(input ?? {}, ctx);
         if (isWrite) fireInvalidate(ctx);

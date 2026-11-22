@@ -1,6 +1,6 @@
 import { createRootRoute, Link, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
-import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
+import { trpc, setBusinessId, getBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
 import { appVersionLabel } from "@/lib/app-version";
@@ -516,12 +516,17 @@ function RootLayout() {
   // several early returns, and hooks must run before those.
   const webMcpBusinessId = resolveWebMcpBusinessId(currentBusinessId, businesses);
   const webMcpBusiness = businesses?.find((b) => b.id === webMcpBusinessId) ?? null;
+  const webMcpScopeKey = session?.user?.id
+    ? `${session.user.id}:${session.tenantId ?? ""}:${currentBusinessId ?? ""}`
+    : null;
   useWebMcp({
     enabled:
       !!session?.user &&
       !!session?.tenantId &&
       !(Array.isArray(businesses) && businesses.length === 0), // still onboarding
-    client: utils.client,
+    // The module-level business the UI's own requests use; the runtime compares
+    // it with the registration's business after every confirmation.
+    getActiveBusinessId: getBusinessId,
     role: session?.role ?? null,
     businessId: webMcpBusinessId,
     businessName: webMcpBusiness?.name ?? null,
@@ -854,7 +859,8 @@ function RootLayout() {
       />
       <ShortcutsDialog open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ShortcutIndicator />
-      <WebMcpConfirmHost />
+      {/* Pending agent confirmations are denied when the user, tenant or business changes. */}
+      <WebMcpConfirmHost scopeKey={webMcpScopeKey} />
 
       {/* Tenant picker overlay — shown when user clicks the tenant name */}
       {showTenantPicker && (

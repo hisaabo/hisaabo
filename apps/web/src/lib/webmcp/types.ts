@@ -56,11 +56,24 @@ export interface WebMcpPermission {
   action: Action;
 }
 
-/** Everything a tool's execute() may touch. Built once per registration by the hook. */
+/**
+ * Everything a tool's execute() may touch. Built once per registration by the hook.
+ *
+ * A registration belongs to one signed-in user, one role and ONE business.
+ * `client` is pinned to that business (see client.ts), and `signal` aborts the
+ * moment the registration is torn down, so the runtime can refuse to run a call
+ * that outlived the business, session or preference it was offered under.
+ */
 export interface WebMcpToolContext {
+  /** Pinned to `businessId`: every request it makes carries that business, whatever the app shows now. */
   client: WebMcpTrpcClient;
+  /** Aborts when this registration is torn down: business switch, sign-out, preference off, role change. */
+  signal: AbortSignal;
+  /** The business the app is showing right now; compared with `businessId` after a confirmation. */
+  activeBusinessId: () => string | null;
   /** Tenant role of the signed-in user (owner, admin, seller_manager, seller, accountant). */
   role: string | null;
+  /** The business this registration is bound to. */
   businessId: string | null;
   businessName: string | null;
   userName: string | null;

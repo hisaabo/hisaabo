@@ -107,6 +107,97 @@ describe("confirmation host", () => {
   });
 });
 
+describe("confirmation host — the context the prompt was raised for changes", () => {
+  it("denies the open and the queued prompts when the scope (user / tenant / business) changes", async () => {
+    const { rerender } = render(<WebMcpConfirmHost scopeKey="user-1:tenant-1:biz-A" />);
+    let open!: Promise<boolean>;
+    let queued!: Promise<boolean>;
+    act(() => {
+      open = requestConfirmation({ title: "Create invoice", description: "for Acme" });
+      queued = requestConfirmation({ title: "Create party", description: "Acme" });
+    });
+    expect(await screen.findByText("Create invoice")).toBeInTheDocument();
+
+    // The user switches to business B while the dialog is open.
+    rerender(<WebMcpConfirmHost scopeKey="user-1:tenant-1:biz-B" />);
+
+    await expect(open).resolves.toBe(false);
+    await expect(queued).resolves.toBe(false);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument());
+    expect(screen.queryByText("Create party")).not.toBeInTheDocument();
+  });
+
+  it("denies everything when the user signs out (scope becomes null)", async () => {
+    const { rerender } = render(<WebMcpConfirmHost scopeKey="user-1:tenant-1:biz-A" />);
+    let p!: Promise<boolean>;
+    act(() => {
+      p = requestConfirmation({ title: "Record payment", description: "Rs. 500" });
+    });
+    await screen.findByText("Record payment");
+    rerender(<WebMcpConfirmHost scopeKey={null} />);
+    await expect(p).resolves.toBe(false);
+  });
+
+  it("still shows prompts raised after the scope changed", async () => {
+    const { rerender } = render(<WebMcpConfirmHost scopeKey="biz-A" />);
+    rerender(<WebMcpConfirmHost scopeKey="biz-B" />);
+    let p!: Promise<boolean>;
+    act(() => {
+      p = requestConfirmation({ title: "Fresh prompt", description: "d" });
+    });
+    expect(await screen.findByText("Fresh prompt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it("denies a prompt and closes its dialog when the registration that raised it is aborted", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const controller = new AbortController();
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = requestConfirmation({ title: "Prompt A", description: "a", signal: controller.signal });
+      second = requestConfirmation({ title: "Prompt B", description: "b" });
+    });
+    expect(await screen.findByText("Prompt A")).toBeInTheDocument();
+
+    act(() => controller.abort());
+
+    await expect(first).resolves.toBe(false);
+    // The next request in the queue takes over the dialog.
+    expect(await screen.findByText("Prompt B")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await expect(second).resolves.toBe(true);
+  });
+
+  it("removes a queued prompt whose registration was aborted before it was shown", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const controller = new AbortController();
+    let open!: Promise<boolean>;
+    let queued!: Promise<boolean>;
+    act(() => {
+      open = requestConfirmation({ title: "Open one", description: "a" });
+      queued = requestConfirmation({ title: "Queued one", description: "b", signal: controller.signal });
+    });
+    await screen.findByText("Open one");
+    act(() => controller.abort());
+    await expect(queued).resolves.toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await expect(open).resolves.toBe(true);
+    // Nothing left to show: the aborted prompt did not resurface.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument());
+  });
+
+  it("denies at once when the signal was already aborted", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(requestConfirmation({ title: "T", description: "d", signal: controller.signal })).resolves.toBe(false);
+    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+  });
+});
+
 describe("resolveWebMcpBusinessId", () => {
   const list = [{ id: "b1" }, { id: "b2" }];
   it("does not fall back to the first business", () => {

@@ -12,9 +12,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { WEBMCP_PREF_KEY } from "../preferences";
-import type { WebMcpTrpcClient } from "../types";
+import type { WebMcpToolContext, WebMcpTrpcClient } from "../types";
 
 // The catalog is the sibling module under test elsewhere; two stubs are enough here.
+// Contexts the hook built, newest last, so tests can inspect what a tool would see.
+const seenContexts = vi.hoisted(() => [] as WebMcpToolContext[]);
+
 vi.mock("../tools", () => ({
   webMcpTools: [
     {
@@ -22,7 +25,10 @@ vi.mock("../tools", () => ({
       description: "List things.",
       inputSchema: { type: "object", properties: {} },
       annotations: { readOnlyHint: true },
-      execute: async () => [],
+      execute: async (_input: unknown, ctx: WebMcpToolContext) => {
+        seenContexts.push(ctx);
+        return [];
+      },
     },
     {
       name: "fake_create",
@@ -44,7 +50,7 @@ let registerTool: Mock<
 function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
   return {
     enabled: true,
-    client: {} as unknown as WebMcpTrpcClient,
+    createClient: () => ({}) as unknown as WebMcpTrpcClient,
     role: "owner",
     businessId: "biz-1",
     businessName: "Acme Traders",
@@ -57,6 +63,7 @@ function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
 }
 
 beforeEach(() => {
+  seenContexts.length = 0;
   localStorage.setItem(WEBMCP_PREF_KEY, "on");
   registerTool = vi.fn(async () => {});
   Object.defineProperty(document, "modelContext", {
@@ -142,6 +149,82 @@ describe("useWebMcp", () => {
     const { result } = renderHook(() => useWebMcp(makeInput({ role: null })));
     await waitFor(() => expect(result.current.registeredCount).toBe(1));
     expect(registerTool.mock.calls.map((c) => c[0].name)).not.toContain("fake_create");
+  });
+
+  it("builds one client per registration, pinned to that registration's business", async () => {
+    const created: string[] = [];
+    const createClient = (businessId: string) => {
+      created.push(businessId);
+      return { pinnedTo: businessId } as unknown as WebMcpTrpcClient;
+    };
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput({ businessId: "biz-1", createClient }),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    const oldTool = registerTool.mock.calls[0][0];
+    await oldTool.execute({}, { signal: new AbortController().signal });
+
+    rerender(makeInput({ businessId: "biz-2", createClient }));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(4));
+    const newTool = registerTool.mock.calls[2][0];
+    await newTool.execute({}, { signal: new AbortController().signal });
+
+    expect(created).toEqual(["biz-1", "biz-2"]);
+    const pinned = (i: number) => (seenContexts[i].client as unknown as { pinnedTo: string }).pinnedTo;
+    expect(pinned(0)).toBe("biz-1");
+    expect(pinned(1)).toBe("biz-2");
+    // The first registration's context is untouched by the switch.
+    expect(pinned(0)).toBe("biz-1");
+  });
+
+  it("refuses a call made on the old registration after the business switched", async () => {
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput({ businessId: "biz-1" }),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    const oldTool = registerTool.mock.calls[0][0];
+
+    rerender(makeInput({ businessId: "biz-2" }));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(4));
+
+    const result = (await oldTool.execute({}, { signal: new AbortController().signal })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/reset|switched business/i);
+    expect(seenContexts).toHaveLength(0);
+  });
+
+  it("gives the context an abort signal that fires when the business changes", async () => {
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput({ businessId: "biz-1" }),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    await registerTool.mock.calls[0][0].execute({}, { signal: new AbortController().signal });
+    const ctx = seenContexts[0];
+    expect(ctx.signal.aborted).toBe(false);
+
+    rerender(makeInput({ businessId: "biz-2" }));
+    await waitFor(() => expect(ctx.signal.aborted).toBe(true));
+  });
+
+  it("reports the business the app shows now, read at call time (injectable, defaulting to the latest prop)", async () => {
+    let active: string | null = "biz-1";
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput({ businessId: "biz-1", getActiveBusinessId: () => active }),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    await registerTool.mock.calls[0][0].execute({}, { signal: new AbortController().signal });
+    const ctx = seenContexts[0];
+    expect(ctx.businessId).toBe("biz-1");
+    expect(ctx.activeBusinessId()).toBe("biz-1");
+    active = "biz-2";
+    expect(ctx.activeBusinessId()).toBe("biz-2");
+
+    // Without an injected reader it follows the latest businessId prop.
+    rerender(makeInput({ businessId: "biz-1" }));
+    await waitFor(() => expect(ctx.activeBusinessId()).toBe("biz-1"));
   });
 
   it("does not re-register when only the route changes", async () => {

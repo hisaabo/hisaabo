@@ -6,14 +6,22 @@
  * into the wrong books. Role and the user's agent-access preference gate it
  * for the same reason.
  *
+ * Each registration gets its OWN tRPC client with the business id baked into its
+ * headers (client.ts), and its abort signal travels in the context. Together
+ * with the runtime's re-check after a confirmation, a call that was prepared for
+ * business A can never be sent to business B, even if the user switched while a
+ * dialog was open.
+ *
  * Route changes deliberately do NOT re-register. Tearing down and rebuilding
  * a dozen tools on every navigation would make the agent's tool list flicker
- * mid-conversation, so `pathname`, `navigate`, `invalidate` and the tRPC
- * client are read through a ref: the context object exposes getters that
- * always see the latest render's values.
+ * mid-conversation, so `pathname`, `navigate`, `invalidate` and the user's
+ * name are read through a ref: the context object exposes getters that always
+ * see the latest render's values. The tRPC client is NOT one of them — it is
+ * fixed per registration, on purpose.
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createWebMcpClient } from "./client";
 import { isAgentAccessEnabled, subscribeAgentAccess } from "./preferences";
 import { isWebMcpAvailable, registerHisaaboTools } from "./runtime";
 import { webMcpTools } from "./tools";
@@ -22,7 +30,14 @@ import type { WebMcpToolContext, WebMcpTrpcClient } from "./types";
 export interface UseWebMcpInput {
   /** Caller-side gate: signed in, tenant selected, past onboarding. */
   enabled: boolean;
-  client: WebMcpTrpcClient;
+  /** Builds the client one registration uses, pinned to a business. Defaults to the real HTTP client; tests inject a fake. */
+  createClient?: (businessId: string) => WebMcpTrpcClient;
+  /**
+   * The business the app is showing right now, read at call time. Defaults to
+   * the latest `businessId` prop; the root passes the same module-level value
+   * the UI's own requests use.
+   */
+  getActiveBusinessId?: () => string | null;
   role: string | null;
   businessId: string | null;
   businessName: string | null;
@@ -61,10 +76,12 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
     if (!isWebMcpAvailable() || !isAgentAccessEnabled()) return;
 
     const controller = new AbortController();
+    const client = (latest.current.createClient ?? createWebMcpClient)(businessId);
     const ctx: WebMcpToolContext = {
-      get client() {
-        return latest.current.client;
-      },
+      client,
+      signal: controller.signal,
+      activeBusinessId: () =>
+        latest.current.getActiveBusinessId ? latest.current.getActiveBusinessId() : latest.current.businessId,
       role,
       businessId,
       get businessName() {

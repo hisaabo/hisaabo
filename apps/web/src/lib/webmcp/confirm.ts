@@ -12,6 +12,12 @@ import { stripControlChars } from "@hisaabo/shared";
 export interface ConfirmRequest {
   title: string;
   description: string;
+  /**
+   * Aborts when the registration that asked is torn down (business switch,
+   * sign-out). The host then denies this request and closes its dialog, so a
+   * prompt can never outlive the context it was shown for.
+   */
+  signal?: AbortSignal;
 }
 
 type ConfirmHost = (request: ConfirmRequest) => Promise<boolean>;
