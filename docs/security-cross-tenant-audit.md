@@ -4,6 +4,7 @@
 **Auditor**: Security Engineer Agent
 **Scope**: All tRPC procedures and REST endpoints in `packages/api/src/`
 **Result summary**: 2 HIGH, 3 MEDIUM findings — all fixed in this audit session
+**Addendum (v0.10.1)**: tenant database naming and access, the business creator rule and the business plan-limit race; see [v0.10.1 addendum](#v0101-addendum-tenant-database-access-business-ownership-plan-limit-race)
 
 ---
 
@@ -355,6 +356,38 @@ The catalog query selects `stockQty: items.stockQuantity` and the field is strip
 ### INFO-5: Rate limiting is in-memory and not distributed
 
 The rate limit maps (`rateMap`, `orderRateMap`) are in-memory per-process. In a multi-replica deployment, rate limits are not shared across replicas. An attacker could bypass the per-IP rate limit by distributing requests across the process pool. Consider Redis-backed rate limiting for production multi-replica deployments.
+
+---
+
+## v0.10.1 addendum: tenant database access, business ownership, plan-limit race
+
+Follow-up findings against the multi-tenant (`MULTI_TENANT=true`, database per tenant) deployment. The tRPC/REST findings above are unaffected.
+
+### F-P2 (HIGH for availability): tenant database name derived from the slug could collide
+
+`provisionTenantDatabase` named the database and role `tenant_<slug lowercased, cut to 40 chars>`. A slug is `<base up to 40-48 chars>-<nanoid(6)>`, so for a base of 34 characters or more the cut removed the random suffix: two sign-ups with the same long name (or e-mail local part) were assigned the same names and the second `CREATE DATABASE` failed, leaving that user unable to sign up. Lowercasing also reduced the entropy of what remained of the suffix.
+
+**Fixed.** New tenants get `t_<32 random hex>` / `t_<32 random hex>_u` (34/36 chars, within the 63-byte limit), generated inside provisioning from 128 random bits and independent of the slug, which is unchanged. The names are stored in `tenants.db_name` / `db_user`; the API, `migrate.ts`, `tenant-pool.ts`, `rotate-key`, `encrypt-sensitive-fields`, the admin dashboard and `scripts/backup.sh` read them from the table or from `pg_database` and never re-derive them from a slug, so existing `tenant_<slug>` tenants are untouched. A provisioning failure still only drops the objects that call created (it cannot drop another tenant's).
+
+### F-P3 (MEDIUM): every tenant role could connect to every tenant database
+
+`CREATE DATABASE` grants `CONNECT` and `TEMPORARY` on the new database to `PUBLIC`, and provisioning never revoked them. Any tenant's database role (whose password the API holds, and whose credentials are the thing an SQL-injection or credential-leak in tenant-scoped code would expose) could open a session on any other tenant's database: read catalog metadata, create temporary tables, hold connections against that database's limit. Table privileges still blocked reading another tenant's rows, so this removed a defence layer rather than being a direct data leak; the database-per-tenant boundary is meant to be that layer.
+
+**Fixed.** Provisioning now runs `GRANT CONNECT, TEMPORARY ON DATABASE ... TO <tenant role>` and `REVOKE CONNECT, TEMPORARY ON DATABASE ... FROM PUBLIC` in one statement. For databases created before 0.10.1 the migration step runs the same statement for every row of `tenants` with a database, on every start (idempotent; one connection per database server; serialised with an advisory lock; per-database failures are logged and counted, never fatal; `migrate.mjs --restrict-tenant-db-access` runs it alone). Roles that keep access: the tenant's own role, the database owner (the control/migration role that ran `CREATE DATABASE`) and superusers. Everything the product connects with is one of those; any other role an operator added needs an explicit `GRANT CONNECT` (see UPGRADING.md). Tests: `tenant-db-isolation.test.ts` (a tenant role is denied on another tenant's database after provisioning and after the pass, the migrator and the tenant's own role still connect, explicit grants survive).
+
+**Not changed, residual:** the control database and the `postgres` maintenance database keep the default `PUBLIC` connect privilege (tenant roles can connect to them but own nothing there; the control tables belong to the control role). Revisit with a dedicated control-plane role.
+
+### Business ownership inside a database (creator rule)
+
+A business has no tenant id. `hasBusinessAccess` / `getBusinessAccess`, the `business.*` procedures (`businessTenantScope`, now `tenantBusinessScope`), the export stream and the queue worker's job context additionally required the business creator to be a current member of the tenant, which is the only link between a business and an organisation in a **self-hosted database that holds several organisations**. The annotations above ("`business.list` ... `ctx.db` is already tenant-scoped") describe the cloud model; on a shared self-hosted database the creator rule is what scopes these procedures.
+
+Applied unconditionally it was a defect on cloud: `tenant.removeMember` only protects owners and superadmins, so removing an admin who had created a business made that business vanish for the whole organisation, refused every request for it ("Business not found") and failed its queued jobs, although the database was already the isolation boundary.
+
+**Fixed.** One decision, `creatorRuleApplies()` in `lib/tenant-businesses.ts`, shared by the three sites: off when `MULTI_TENANT=true`; off on self-hosted with a single `tenants` row; **on** on self-hosted with several (until `businesses.tenant_id` exists, planned for 0.11.0). The count is cached 15 s (`authz.multiOrg`), invalidated on in-process tenant inserts and by the `tenants` delete trigger, and read uncached by the worker; a second organisation created by another API replica is honoured after at most the TTL. The API logs a warning at start when a self-hosted database holds more than one organisation. Tests: `business-creator-rule.test.ts` (cloud, single-org and multi-org; list/getById, the business middleware, the REST access check, the worker context; freshness of the count) and the multi-org case in `auth-cache-busting.test.ts` (creator removal still denies the very next call).
+
+### F-P7 (LOW): plan-limit race on business creation
+
+`enforceBusinessLimit` counted in one transaction and `business.create` inserted in another, so N concurrent creates on a plan with a limit of 1 all passed the count and all inserted. **Fixed:** the count and the insert share one transaction under `pg_advisory_xact_lock(hashtext('business-create'))` on the tenant database. Test: `business-limit-race.test.ts` (six concurrent creates on a free tenant give exactly one business; fails without the lock).
 
 ---
 

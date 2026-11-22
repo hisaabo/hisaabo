@@ -1,5 +1,72 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to v0.10.1 (Docker Compose and ONCE)
+
+A patch release. It is a drop-in image bump (no new environment variables, no schema migration, nothing to change in `docker-compose.prod.yml`): pull the new image, restart, and the API's migration step does the rest. Self-hosted single-organisation installs are only affected by the business-visibility fix below. **Multi-tenant (`MULTI_TENANT=true`) operators should read the whole section**, because the migration step changes who may connect to each tenant database.
+
+### What changes
+
+- **Multi-tenant: new tenant databases get random names.** Until now a tenant's database and role were named from its slug (`tenant_<slug, lowercased, cut to 40 characters>`). When two sign-ups had the same long name (a slug base of 34 characters or more loses its random suffix after the cut) they were assigned the same database name, and the second sign-up failed on `CREATE DATABASE`. Tenants created from 0.10.1 on get `t_<32 random hex characters>` for the database and `t_<same hex>_u` for the role (34 and 36 characters, inside Postgres' 63-byte identifier limit). The slug shown in URLs and the UI is unchanged. **Existing tenants keep their `tenant_<slug>` names**: the API, the migration step, the admin dashboard and `rotate-key` always read the names from `tenants.db_name` and `tenants.db_user`, never derive them from a slug, and nothing is renamed. Anything of yours that guesses a tenant database from its slug (a script, a dashboard) must read `tenants.db_name` instead; with the new names it cannot work.
+- **Multi-tenant: tenant databases are closed to other roles.** `CREATE DATABASE` grants `CONNECT` and `TEMPORARY` on the new database to `PUBLIC`, i.e. to every role in the cluster, so any tenant's database role could open a session on every other tenant's database (row data was still protected by table privileges, but the door should not be open). From 0.10.1 provisioning grants `CONNECT` and `TEMPORARY` to the tenant's own role and revokes them from `PUBLIC`.
+- **Multi-tenant: the migration step applies this to every existing tenant database.** After the control and tenant migrations, every API start (and so every deploy) runs one idempotent pass over each database listed in `tenants`: `GRANT CONNECT, TEMPORARY` to the tenant's own role, then `REVOKE CONNECT, TEMPORARY ... FROM PUBLIC`, in one statement per database. The first pass after the upgrade closes the databases you already have; later passes change nothing (and also close a database that an older replica provisioned during a rolling deploy). It never fails startup: per-database errors are logged and counted. Look for this line in the API log:
+
+  ```
+  Tenant database access: closed to PUBLIC  {"total":228,"restricted":228,"missing":0,"skipped":0,"failed":0}
+  ```
+
+  `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed (the log has one `could not restrict database` error per tenant with the reason, usually the control role not owning that database). To run the pass on its own, without migrations, and get exit code 1 if any database failed:
+
+  ```bash
+  docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+    node packages/db/dist/migrate.mjs --restrict-tenant-db-access
+  ```
+
+- **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start.
+- **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
+
+### If you connect to tenant databases with a role other than the control role
+
+Who keeps access after the pass: the **tenant's own role** (explicitly), the **role that owns the database** (the role in `CONTROL_DATABASE_URL`, which ran `CREATE DATABASE`: `POSTGRES_USER` in the bundled compose file) and **superusers**. The API, the migration step, the admin dashboard (`admin`), `ops`, `rotate-key`, `scripts/backup.sh` (it connects as `DB_USER`, which defaults to `POSTGRES_USER`) and the restore sidecar all use one of those, so nothing in the stock deployment needs a change.
+
+If you added **another role** that connects to tenant databases (a read-only BI role, a monitoring or backup role, a pooler's auth role, an engineer's personal login), that role loses access to every tenant database on the first pass, until it is granted explicitly. Typical symptom: `FATAL: permission denied for database "tenant_acme"` / `User does not have CONNECT privilege`. Grant it per database, run on the control database:
+
+```sql
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', db_name, 'bi_reader')
+FROM tenants WHERE db_name IS NOT NULL \gexec
+```
+
+Explicit grants to a role survive every later pass (only `PUBLIC` is revoked). Postgres has no default privileges for databases, so a tenant created later needs the same grant: re-run the statement after new sign-ups, or from a periodic job. Do not work around this by granting `CONNECT` to `PUBLIC` again; the next pass would revoke it. Table privileges inside a tenant database are unchanged.
+
+To check a database by hand: `SELECT datname, datacl FROM pg_database WHERE datname LIKE 'tenant\_%' OR datname LIKE 't\_%';`. A closed database lists only its owner and its own role (for example `{hisaabo=CTc/hisaabo,tenant_acme_user=CTc/hisaabo}`), with no `=Tc/...` entry (the empty grantee is `PUBLIC`). The control database and the `postgres` maintenance database are not touched by this release and remain connectable by `PUBLIC`.
+
+After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLLBACK.md)), the restored database has the default privileges again: restart the `api` container, or run the command above, to close it.
+
+### Before you start
+
+1. **Back up the control database and every tenant database** (`backup.sh`, see the 0.10.0 section below).
+2. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+
+### Upgrade
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f api
+```
+
+ONCE: pull the new image and restart it as usual; it runs the same migration step.
+
+Verify:
+
+- `curl http://127.0.0.1:3000/health` returns `ok`.
+- Multi-tenant: the log shows `Tenant database access: closed to PUBLIC` with `failed: 0`. Spot-check from the host: connect as one tenant's role to another tenant's database and expect `permission denied for database`.
+- Multi-tenant: sign in as a user whose organisation has a business, and open an invoice (it proves the tenant role still connects to its own database).
+- Create an organisation with a long name in a multi-tenant deployment; its row in `tenants` has a `t_...` `db_name`.
+
+### Rolling back
+
+Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.
