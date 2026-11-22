@@ -504,9 +504,9 @@ describe("Journal entries page", () => {
 
 describe("E-invoicing page", () => {
   const EInvoicing = page(EInvoicingRoute);
-  const inv = (id: string, status: string | null, irn: string | null = null) => ({
+  const inv = (id: string, status: string | null, irn: string | null = null, invoiceStatus = "sent") => ({
     id, invoiceNumber: `INV-${id}`, invoiceDate: new Date().toISOString(), partyName: "Acme Traders",
-    totalAmount: "118.00", irn, irnAckDate: null, eInvoiceStatus: status, eInvoiceError: null,
+    totalAmount: "118.00", irn, irnAckDate: null, eInvoiceStatus: status, eInvoiceError: null, invoiceStatus,
   });
 
   beforeEach(() => {
@@ -531,6 +531,42 @@ describe("E-invoicing page", () => {
     for (const name of ["Retry All Failed", "Retry", "Generate", "Cancel"]) {
       expect(button(name), name).not.toBeInTheDocument();
     }
+  });
+
+  it("the cancel confirmation says it also cancels the invoice and that a new one must be issued", () => {
+    renderAs("admin", EInvoicing);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const dialogText = document.body.textContent ?? "";
+    expect(dialogText).toMatch(/also cancels the invoice/);
+    expect(dialogText).toMatch(/stock and\s+returns are adjusted/);
+    expect(dialogText).toMatch(/issue a new invoice/);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel IRN and invoice" }));
+    expect(stub.mutations["eInvoice.cancel"]).toEqual([{ invoiceId: "3", cancelReason: "1", cancelRemarks: undefined }]);
+  });
+
+  it("an e-invoice cancelled while its invoice is still active offers to finish cancelling the invoice", () => {
+    stub.data["eInvoice.dashboard"] = {
+      data: [inv("5", "cancelled", "IRN-555", "sent"), inv("6", "cancelled", "IRN-666", "cancelled")],
+      total: 2,
+      counts: { generated: 0, pending: 0, failed: 0, cancelled: 2 },
+    };
+    renderAs("admin", EInvoicing);
+    // Only the row whose invoice is still live gets the action.
+    expect(buttons("Cancel invoice")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel invoice" }));
+    expect(document.body.textContent ?? "").toMatch(/IRN is already cancelled on the NIC portal, but the invoice is still active/);
+    fireEvent.click(buttons("Cancel invoice")[1]!);
+    expect(stub.mutations["eInvoice.cancel"]).toEqual([{ invoiceId: "5", cancelReason: "1", cancelRemarks: undefined }]);
+  });
+
+  it("accountant does not get the finish-cancel action", () => {
+    stub.data["eInvoice.dashboard"] = {
+      data: [inv("5", "cancelled", "IRN-555", "sent")],
+      total: 1,
+      counts: { generated: 0, pending: 0, failed: 0, cancelled: 1 },
+    };
+    renderAs("accountant", EInvoicing);
+    expect(button("Cancel invoice")).not.toBeInTheDocument();
   });
 
   describe("settings tab", () => {
