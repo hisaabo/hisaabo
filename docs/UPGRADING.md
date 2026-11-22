@@ -1,5 +1,12 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to v0.10.1
+
+An ordinary image bump: set `HISAABO_API_IMAGE` to `v0.10.1`, then `pull api` and `up -d api` as in [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install). This note covers only what the release process added; read the release notes for the rest.
+
+- **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
+- **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.

@@ -2,7 +2,7 @@
 
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
-**Last updated**: 2026-11-21
+**Last updated**: 2026-11-22
 **Applies to**: self-hosted migrations 0000 through 0022 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0009) migration sets; the equivalents for 0014-0022 are listed in section 3.
 
 Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
@@ -988,3 +988,15 @@ Then restart the API. The migration runner acquires an advisory lock (`pg_adviso
    ANALYZE;
    ```
 4. **Verify the application works end-to-end**. Create an invoice, record a payment, check the dashboard -- exercise the core flows to confirm nothing is broken.
+
+---
+
+## 6. Rolling Back a Release
+
+This is about application versions, not schema (sections 1 to 5). A release is deployed API first, then the frontends (see the [Release runbook](DEPLOYMENT.md#release-runbook)), so roll it back the other way round: **frontends first, then the API**. The older frontend must be live before the older API, because a newer frontend can call procedures an older API does not have.
+
+1. **Frontends.** Actions → Deploy Web, Deploy Store and Deploy API Docs → Run workflow with the previous release tag (for example `v0.10.0`). Approve the `production` deployment. These manual runs do not wait for the API. Then purge `/store/*` on the CDN.
+2. **API.** Set `HISAABO_API_IMAGE` in `.env.prod` back to the previous tag and run `pull api` and `up -d api` (see [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install)). If the newer API already applied migrations, read sections 1 to 5 first: most migrations are expand-only and are left in place, and a restore from a pre-upgrade backup is the safe way back when one is not.
+3. **Confirm** with `curl https://api.hisaabo.in/api/version`: it must report the version you rolled back to (an API older than 0.10.1 answers 404).
+
+Do not re-run the Release workflow to roll back. It is not idempotent for images (an existing `vX.Y.Z` is refused), and re-tagging an old version is never needed: its images and its frontend build still exist.
