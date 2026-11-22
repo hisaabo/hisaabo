@@ -14,6 +14,14 @@
 import type { IRPInvoiceJson } from "./irp-client.js";
 import { money } from "@hisaabo/shared";
 
+/** The payload built from a stored invoice does not add up to that invoice's stored total (an internal inconsistency, not an IRP rejection). */
+export class EInvoicePayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EInvoicePayloadError";
+  }
+}
+
 // ── Types (subset of what we need from DB rows) ────────────────────────────────
 
 export interface IRPBusiness {
@@ -243,10 +251,27 @@ export function mapInvoiceToIRP(
   const cgstVal = sumOf((item) => item.CgstAmt);
   const sgstVal = sumOf((item) => item.SgstAmt);
   const igstVal = sumOf((item) => item.IgstAmt);
-  const discountTotal = sumOf((item) => item.Discount);
-  const othChrg = n(invoice.additionalCharges);
-  const rndOffAmt = n(invoice.roundOff);
-  const totInvVal = n(invoice.totalAmount);
+
+  // The header comes from the STORED invoice, and ValDtls.Discount is the INVOICE-LEVEL discount only (invoices.discount_amount):
+  // the line discounts are already netted into each item's AssAmt, so AssVal is net of them and putting their sum in the
+  // header would subtract them twice. The NIC rule:
+  //   TotInvVal = AssVal + CgstVal + SgstVal + IgstVal + CesVal + StCesVal + OthChrg - Discount + RndOffAmt
+  const othChrg = money.add(invoice.additionalCharges ?? "0", "0");
+  const invoiceDiscount = money.add(invoice.discountAmount ?? "0", "0");
+  const rndOffAmt = money.add(invoice.roundOff ?? "0", "0");
+  const totInvVal = money.add(invoice.totalAmount, "0");
+  const addsUpTo = money.add(
+    money.sub(money.add(money.sum([assVal, cgstVal, sgstVal, igstVal].map((v) => v.toFixed(2))), othChrg), invoiceDiscount),
+    rndOffAmt,
+  );
+  if (money.compare(addsUpTo, totInvVal) !== 0) {
+    throw new EInvoicePayloadError(
+      `The e-invoice for ${invoice.invoiceNumber} does not add up to the invoice total, so it was not sent to the IRP: ` +
+        `AssVal ${assVal.toFixed(2)} + GST ${money.sum([cgstVal, sgstVal, igstVal].map((v) => v.toFixed(2)))} + OthChrg ${othChrg} ` +
+        `- Discount ${invoiceDiscount} + RndOffAmt ${rndOffAmt} = ${addsUpTo}, but the stored total is ${totInvVal}. ` +
+        `The line amounts and the invoice totals disagree; correct the invoice before submitting it.`,
+    );
+  }
 
   const sellerPin = parseInt(business.pincode ?? "000000", 10);
   const buyerPin = parseInt(party.pincode ?? "000000", 10);
@@ -293,10 +318,10 @@ export function mapInvoiceToIRP(
       CgstVal: cgstVal,
       SgstVal: sgstVal,
       IgstVal: igstVal,
-      Discount: discountTotal,
-      OthChrg: othChrg > 0 ? othChrg : undefined,
-      RndOffAmt: rndOffAmt !== 0 ? rndOffAmt : undefined,
-      TotInvVal: totInvVal,
+      Discount: money.toNumber(invoiceDiscount),
+      OthChrg: money.isPositive(othChrg) ? money.toNumber(othChrg) : undefined,
+      RndOffAmt: money.isZero(rndOffAmt) ? undefined : money.toNumber(rndOffAmt),
+      TotInvVal: money.toNumber(totInvVal),
     },
   };
 }

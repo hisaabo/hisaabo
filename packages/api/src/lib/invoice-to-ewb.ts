@@ -18,6 +18,14 @@ import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
 import { money, splitDocumentGst } from "@hisaabo/shared";
 
+/** The payload built from a stored invoice does not add up to that invoice's stored total (an internal inconsistency). */
+export class EWBPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EWBPayloadError";
+  }
+}
+
 // ── Input types ───────────────────────────────────────────────────────────────
 
 export interface InvoiceForEWB {
@@ -29,6 +37,10 @@ export interface InvoiceForEWB {
   subtotal: string;
   taxAmount: string;
   totalAmount: string;
+  /** Invoice-level discount, additional charges and round-off as stored; they make up `otherValue` (absent = 0). */
+  discountAmount?: string | null;
+  additionalCharges?: string | null;
+  roundOff?: string | null;
   isReverseCharge: boolean;
   // Party
   partyGstin: string | null;
@@ -264,7 +276,27 @@ export function mapInvoiceToEWB(
 
   const totalTaxRounded = money.toNumber(money.sum(lineItems.map((li) => li.taxAmount)));
   const taxSplit = splitTax(totalTaxRounded, lineItems.map((li) => li.taxAmount), interState);
-  const totalValue = parseFloat(invoice.subtotal) || 0;
+  // The header is the stored invoice's. NIC: totInvValue = totalValue + cgstValue + sgstValue + igstValue + cessValue + otherValue,
+  // where totalValue is the taxable value (the items, net of line discounts) and otherValue carries what is not tax and not
+  // an item: additional charges + round-off - the invoice-level discount (it may be negative).
+  const totalValue = money.sum(itemList.map((i) => i.taxableAmount.toFixed(2)));
+  const otherValue = money.sub(
+    money.add(invoice.additionalCharges ?? "0", invoice.roundOff ?? "0"),
+    invoice.discountAmount ?? "0",
+  );
+  const totInvValue = money.add(invoice.totalAmount, "0");
+  const addsUpTo = money.add(
+    money.add(totalValue, money.sum([taxSplit.cgst, taxSplit.sgst, taxSplit.igst].map((v) => v.toFixed(2)))),
+    otherValue,
+  );
+  if (money.compare(addsUpTo, totInvValue) !== 0) {
+    throw new EWBPayloadError(
+      `The e-way bill for ${invoice.invoiceNumber} does not add up to the invoice total, so it was not sent: ` +
+        `totalValue ${totalValue} + GST ${money.sum([taxSplit.cgst, taxSplit.sgst, taxSplit.igst].map((v) => v.toFixed(2)))} + ` +
+        `otherValue ${otherValue} = ${addsUpTo}, but the stored total is ${totInvValue}. ` +
+        `The line amounts and the invoice totals disagree; correct the invoice before generating the e-way bill.`,
+    );
+  }
 
   return {
     supplyType:     isSale ? "O" : "I",
@@ -284,11 +316,13 @@ export function mapInvoiceToEWB(
     toPlace:        toCity.slice(0, 50),
     toPincode:      toPin,
     toStateCode:    toState,
-    totalValue:     Math.round(totalValue * 100) / 100,
+    totalValue:     money.toNumber(totalValue),
     cgstValue:      taxSplit.cgst,
     sgstValue:      taxSplit.sgst,
     igstValue:      taxSplit.igst,
     cessValue:      0,
+    otherValue:     money.toNumber(otherValue),
+    totInvValue:    money.toNumber(totInvValue),
     transMode:      transportModeCode(transport.transportMode),
     transDistance:  transport.distance,
     transporterId:  transport.transporterId,
