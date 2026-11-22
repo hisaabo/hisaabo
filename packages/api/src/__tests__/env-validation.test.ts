@@ -136,3 +136,31 @@ describe("validateEnv — multi-tenant encryption key", () => {
     expect(() => validateEnv()).not.toThrow();
   });
 });
+
+describe("validateEnv — NIC public key for e-invoicing", () => {
+  const IRP_KEYS = ["IRP_PUBLIC_KEY_PEM", "IRP_PUBLIC_KEY_PATH", "IRP_SANDBOX_PUBLIC_KEY_PEM", "IRP_SANDBOX_PUBLIC_KEY_PATH"] as const;
+  const savedIrp: Record<string, string | undefined> = {};
+  for (const k of IRP_KEYS) savedIrp[k] = process.env[k];
+  afterEach(() => {
+    for (const k of IRP_KEYS) {
+      if (savedIrp[k] === undefined) delete process.env[k];
+      else process.env[k] = savedIrp[k];
+    }
+  });
+
+  it("warns (and still boots) when a key is set but invalid, naming the variable", () => {
+    setProd("https://api.example.com");
+    process.env.IRP_PUBLIC_KEY_PEM = "not a key";
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    expect(() => validateEnv()).not.toThrow();
+    expect(warnMessages(warn).some((m) => /E-invoicing is not configured: the NIC public key is missing or invalid \(IRP_PUBLIC_KEY_PEM is set but is not a valid PEM/.test(m))).toBe(true);
+  });
+
+  it("says nothing when no key is set (e-invoicing is optional)", () => {
+    setProd("https://api.example.com");
+    for (const k of IRP_KEYS) delete process.env[k];
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    validateEnv();
+    expect(warnMessages(warn).some((m) => /NIC public key/.test(m))).toBe(false);
+  });
+});

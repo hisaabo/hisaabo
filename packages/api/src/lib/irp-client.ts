@@ -16,6 +16,7 @@ import { createHash, createCipheriv, createDecipheriv, publicEncrypt, constants,
 import { eq } from "drizzle-orm";
 import { eInvoiceConfigs, encryptField } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
+import { loadIrpPublicKey } from "./irp-public-key.js";
 
 // ── NIC IRP endpoints ─────────────────────────────────────────────────────────
 
@@ -27,17 +28,8 @@ const PRODUCTION_BASE = "https://einvoice1.gst.gov.in";
 // the outcome (cancelling an IRN) confirm it with isIRNCancelled afterwards.
 export const IRP_REQUEST_TIMEOUT_MS = 30_000;
 
-// NIC IRP sandbox RSA public key (PEM format) for encrypting AppKey
-// Source: https://einvoice1.gst.gov.in/Others/APIDOC
-const NIC_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3pMCDIFfrqFiTbAlPAtR
-zW2VFVFbQ4wjd8z3gqEnO2b6kf5kZjbRCJv7dO8BjPnJ/s7p8xfbUEuqtpDLIXX
-OFKAm6Qm7k5JknG0tkbwrEmEo7+h2MXk5W00x9vM77mZnFDKW8P8CaFPJLX1w5m
-pGH2CiMcYVN3SZIM0fzRZjjPuRnHTSwJjIHjAH0sFe4hHsS0sVIpCEn3tRl7b2K
-vHEiDLDfCZl2yPSTTW94XHQG3IJRJ0z0Hq7WQqQH3HXmn6PUPKBi4OSmqn9kGHa
-f4R9bImMnLKFYJdB7w1JwCO2M8CMrqLBOA9bGG5Q1u0FpNLGJj7tl9dMvr/k3i/
-MQIDAQAB
------END PUBLIC KEY-----`;
+// The NIC public key used to RSA-encrypt the credentials is operator configuration
+// (see irp-public-key.ts); none is bundled.
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -295,13 +287,17 @@ export class IRPClient {
   async authenticate(): Promise<void> {
     if (this.isTokenValid() && this.sek) return;
 
+    // The operator-configured NIC key for this environment. Loaded first, so a
+    // missing or invalid key is a clear IRPNotConfiguredError before anything else.
+    const publicKey = loadIrpPublicKey(this.config.isSandbox);
+
     // Generate fresh 32-byte AppKey
     this.appKey = randomBytes(32);
 
     // RSA-encrypt AppKey with NIC public key (PKCS1 v1.5)
     const encryptedAppKey = publicEncrypt(
       {
-        key: NIC_PUBLIC_KEY_PEM,
+        key: publicKey,
         padding: constants.RSA_PKCS1_PADDING,
       },
       this.appKey,
