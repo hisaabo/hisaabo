@@ -4,9 +4,10 @@
  * document-type rules (lib/party-balance.ts). Hand-computed; goes beyond the
  * golden scenarios 05B / 10 / 13.
  *
- * Two conventions (see party-balance.ts): `balance` is positive in the party's
- * natural direction (what a customer owes us / what we owe a supplier); the
- * ledger statements are debit-minus-credit, so a supplier we owe is NEGATIVE.
+ * ONE sign convention, the documented one (see party-balance.ts and the MCP /
+ * WebMCP text): every balance is SIGNED, debit minus credit. Positive = they owe
+ * you, negative = you owe them, for customers AND suppliers. The opening balance
+ * is used as stored (a supplier you owe 2000 is entered as -2000).
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { getTenantTestDb } from "../helpers/test-db.js";
@@ -79,29 +80,47 @@ describe("party balance ignores documents that never post", () => {
   });
 });
 
-describe("a supplier: purchase, purchase return, purchase-side debit note, payment made", () => {
+describe("a supplier we owe: purchase, purchase return, purchase-side debit note, payment made", () => {
   let w: GoldenWorld;
   let supplierId: string;
 
   beforeAll(async () => {
     w = await createGoldenWorld();
-    supplierId = (await addParty(w, "supplier", "MH", { openingBalance: "2000.00" })).id;
+    // We owe this supplier 2000 from before Hisaabo: negative, "you owe them".
+    supplierId = (await addParty(w, "supplier", "MH", { openingBalance: "-2000.00" })).id;
     const purchase = await addInvoice(w, "purchase", supplierId, GOODS("10"), { date: D(3) }); // 11800.00
     await addAdjustmentDoc(w, "purchaseReturn", "purchase", supplierId, GOODS("2"), { date: D(10) }); // 2360.00
     await addAdjustmentDoc(w, "debitNote", "purchase", supplierId, GOODS("1", "500.00"), { date: D(12) }); // 590.00
     await addPayment(w, { partyId: supplierId, invoiceId: purchase.id, amount: "5000.00", mode: "cash", date: D(15) });
   });
 
-  it("outstanding: 2000 opening + 11800 - 2360 - 590 - 5000 paid = 5850.00 owed", async () => {
+  it("balance is -5850.00 on every surface: -2000 opening - (11800 - 5000 paid) + 2360 + 590", async () => {
+    // The purchase is a credit (we owe more): -(11800 - 5000 paid) = -6800 still unpaid; the
+    // purchase return (+2360) and the purchase-side debit note (+590) are debits (we owe less).
     const b = await balances(w, supplierId, "supplier");
-    expect(b.byId).toBe("5850.00");
-    expect(b.inList).toBe("5850.00");
-  });
-
-  it("every ledger statement agrees: debit-minus-credit, so -5850.00 (opening -2000, purchase -11800, return +2360, DN +590, payment +5000)", async () => {
-    const b = await balances(w, supplierId, "supplier");
+    expect(b.byId).toBe("-5850.00");
+    expect(b.inList).toBe("-5850.00");
+    // The statements add the payment as its own debit row (+5000) instead of netting it
+    // against the invoice: -2000 - 11800 + 2360 + 590 + 5000 = -5850. Same number.
     expect(b.report).toBe("-5850.00");
     expect(b.tabClosing).toBe("-5850.00");
+  });
+
+  it("the 'outstanding' filter keeps a supplier we owe (balance not zero), and drops one that is settled", async () => {
+    const out = await w.caller.party.list({ filter: "outstanding", page: 1, limit: 50 });
+    expect(out.data.map((p) => p.id)).toContain(supplierId);
+
+    const w2 = await createGoldenWorld();
+    const settled = (await addParty(w2, "supplier", "MH")).id;
+    const purchase = await addInvoice(w2, "purchase", settled, GOODS("1"), { date: D(3) }); // 1180.00
+    await addPayment(w2, { partyId: settled, invoiceId: purchase.id, amount: "1180.00", mode: "cash", date: D(4) });
+    const out2 = await w2.caller.party.list({ filter: "outstanding", page: 1, limit: 50 });
+    expect(out2.data.map((p) => p.id)).not.toContain(settled);
+  });
+
+  it("the dashboard payable card is the positive mirror: 5850.00 owed to suppliers", async () => {
+    // 6800 unpaid on the purchase - 2360 purchase return - 590 debit note + 2000 opening owed
+    expect((await w.caller.dashboard.summary()).payable).toBe("5850.00");
   });
 
   it("the ledger report rows: purchase credit, return and debit note debit, payment debit, opening -2000", async () => {
@@ -115,14 +134,14 @@ describe("a supplier: purchase, purchase return, purchase-side debit note, payme
     expect(r?.summary).toEqual({ totalDebit: "7950.00", totalCredit: "11800.00", closingBalance: "-5850.00" });
   });
 
-  it("the CSV ledger starts from the signed opening balance too", async () => {
+  it("the CSV ledger starts from the opening balance as stored (-2000)", async () => {
     const csv = (await w.caller.party.ledgerReportCSV({ partyId: supplierId }))?.csv ?? "";
     const lines = csv.split("\n");
     expect(lines[1]).toMatch(/"Opening Balance","","","","-2000\.00"$/);
     expect(lines.at(-1)).toMatch(/-5850\.00"$/);
   });
 
-  it("the party statement report and the ledger PDF statement start from the signed opening too", async () => {
+  it("the party statement report and the ledger PDF statement start from the same opening (-2000)", async () => {
     // These two list invoices and payments only (no returns / notes): opening -2000,
     // purchase -11800, payment +5000 = -8800.
     const st = await w.caller.reports.partyStatement({ partyId: supplierId });
@@ -133,9 +152,9 @@ describe("a supplier: purchase, purchase return, purchase-side debit note, payme
     const pdf = await buildPartyLedgerStatement(db, w.businessId, {
       id: supplierId,
       type: "supplier",
-      openingBalance: "2000.00",
+      openingBalance: "-2000.00",
     });
-    expect(pdf.openingBalance).toBe("-2000.00");
+    expect(pdf.entries[0]?.runningBalance).toBe("-13800.00");
     expect(pdf.summary.closingBalance).toBe("-8800.00");
   });
 
@@ -147,7 +166,7 @@ describe("a supplier: purchase, purchase return, purchase-side debit note, payme
     expect((await w2.caller.party.ledger({ partyId: s })).data.at(-1)?.runningBalance).toBe("-6800.00");
     await w2.caller.payment.delete({ id: pay.id });
     expect((await w2.caller.party.ledger({ partyId: s })).data.at(-1)?.runningBalance).toBe("-11800.00");
-    expect((await w2.caller.party.getById({ id: s }))?.balance).toBe("11800.00");
+    expect((await w2.caller.party.getById({ id: s }))?.balance).toBe("-11800.00");
   });
 });
 

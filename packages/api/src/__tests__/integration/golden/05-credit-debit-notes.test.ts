@@ -255,8 +255,10 @@ describe("golden 05B: purchase return and purchase-side debit note", () => {
     expect(await outstandingTotal(w, "payable")).toBe("11800.00");
   });
 
-  it("supplier balance equals the ledger payable: 11800 - 2360 - 590 = 8850", async () => {
-    expect((await w.caller.party.getById({ id: supplierId }))?.balance).toBe("8850.00");
+  // Balances are signed, debit minus credit (positive = they owe you, negative = you owe
+  // them), for suppliers too: we owe the supplier 11800 - 2360 - 590 = 8850, so -8850.00.
+  it("supplier balance equals the ledger payable: -(11800 - 2360 - 590) = -8850", async () => {
+    expect((await w.caller.party.getById({ id: supplierId }))?.balance).toBe("-8850.00");
   });
 
   it("the supplier ledger agrees (Dr-positive, so the payable is negative): -8850", async () => {
@@ -267,7 +269,7 @@ describe("golden 05B: purchase return and purchase-side debit note", () => {
 
   it("the party list balance agrees with getById", async () => {
     const list = await w.caller.party.list({ type: "supplier", page: 1, limit: 10 });
-    expect(list.data.find((p) => p.id === supplierId)?.balance).toBe("8850.00");
+    expect(list.data.find((p) => p.id === supplierId)?.balance).toBe("-8850.00");
   });
 
   it("GSTR-1 (outward supplies) lists no purchase-side debit notes or returns", async () => {

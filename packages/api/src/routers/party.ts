@@ -10,7 +10,7 @@ import { warnTallyCsvExportDeprecated } from "../lib/deprecations.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
-import { documentLedgerSide, invoiceBalanceSql, invoiceIsLedgerDebitSql, signedOpeningBalance, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
+import { documentLedgerSide, invoiceBalanceSql, invoiceIsLedgerDebitSql, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
 
 
 export const partyRouter = router({
@@ -35,7 +35,8 @@ export const partyRouter = router({
       } else if (effectiveFilter === "supplier") {
         conditions.push(eq(parties.type, "supplier"));
       } else if (effectiveFilter === "outstanding") {
-        // Parties whose balance (opening + the same signed document sum `balance` uses) is > 0
+        // Parties with a balance either way: opening + the same signed document sum `balance`
+        // uses, not zero (positive: they owe you, negative: you owe them).
         conditions.push(sql`(
           ${parties.openingBalance}::numeric + COALESCE((
             SELECT SUM(${invoiceBalanceSql()})
@@ -45,7 +46,7 @@ export const partyRouter = router({
               AND ${invoices.status} NOT IN ('cancelled')
               AND ${invoices.deletedAt} IS NULL
           ), 0)
-        ) > 0`);
+        ) <> 0`);
       } else if (effectiveFilter === "overdue") {
         // Parties that have at least one overdue invoice
         conditions.push(sql`EXISTS (
@@ -482,10 +483,9 @@ export const partyRouter = router({
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       // Compute running balance and summary using the money module. The statement is
-      // debit-minus-credit, so a supplier's opening balance (what we owe them) starts NEGATIVE,
-      // on the same side their purchase invoices post to.
-      const openingBalance = signedOpeningBalance(party.type, party.openingBalance);
-      let runningBalance = openingBalance;
+      // debit minus credit and the opening balance is used as stored: positive = they owe you,
+      // negative = you owe them (the documented convention, same as `balance`).
+      let runningBalance = party.openingBalance;
       const entriesWithBalance = entries.map(e => {
         runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
         return { ...e, runningBalance };
@@ -493,7 +493,7 @@ export const partyRouter = router({
 
       const totalDebit = money.sum(entries.map(e => e.debit));
       const totalCredit = money.sum(entries.map(e => e.credit));
-      const closingBalance = money.add(money.sub(openingBalance, totalCredit), totalDebit);
+      const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
 
       return {
         party: {
@@ -598,7 +598,7 @@ export const partyRouter = router({
         const yyyy = d.getFullYear();
         return `${dd}/${mm}/${yyyy}`;
       }
-      let runningBalance = signedOpeningBalance(party.type, party.openingBalance);
+      let runningBalance = party.openingBalance;
       const rows: string[] = [];
 
       // Opening balance row
@@ -824,8 +824,8 @@ export const partyRouter = router({
       const paymentDebit = party.type === "supplier" ? paymentSettledSql() : sql`0::numeric`;
       const paymentCredit = party.type === "supplier" ? sql`0::numeric` : paymentSettledSql();
 
-      // Debit-minus-credit running balance: a supplier's opening balance (what we owe) starts negative.
-      const openingBalanceNum = money.toNumber(signedOpeningBalance(party.type, party.openingBalance));
+      // Debit-minus-credit running balance from the opening balance as stored (positive: they
+      // owe you, negative: you owe them). Passed to SQL as the string it is, never as a float.
 
       // Build date filter conditions inline
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
@@ -880,7 +880,7 @@ export const partyRouter = router({
         with_balance AS (
           SELECT
             *,
-            ${openingBalanceNum}::numeric
+            ${party.openingBalance}::numeric
               + SUM(debit - credit) OVER (
                   ORDER BY entry_date ASC, document_number ASC
                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW

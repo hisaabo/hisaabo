@@ -43,7 +43,7 @@ Quotations, proforma invoices and delivery challans are not financial documents:
 
 The first row is always the **Opening Balance** entry. This is the balance you entered when creating the party — the amount outstanding before you started using Hisaabo.
 
-The ledger is debit minus credit, so a customer's opening balance (what they owe you) starts as a **debit** (positive), and a supplier's opening balance (what you owe them, entered as a positive number) starts as a **credit** (negative), on the same side as the supplier's purchase invoices.
+The ledger is debit minus credit and starts from the opening balance exactly as you entered it: positive when they owe you (**To receive**), negative when you owe them (**To pay**).
 
 ### Invoice rows
 
@@ -65,7 +65,7 @@ The final balance in the ledger is the current outstanding amount:
 - **Negative** (Cr): You owe the party money. For a supplier, this means you have unpaid bills ("You will pay" on mobile).
 - **Zero**: All invoices are fully paid — no outstanding balance.
 
-The **Balance** shown on the party's profile is the same amount stated as what is owed: for a supplier it is shown as a positive number (the amount you owe), whereas the ledger shows it as a negative running balance.
+The **Balance** on the party's profile and in the party list uses the same sign: a supplier you owe ₹14,000 shows **-₹14,000** there too.
 
 ## Filtering the ledger
 
@@ -92,7 +92,7 @@ Tap the **Share** button on the ledger view to open the native share sheet with 
 The running balance is computed as:
 
 ```
-balance = openingBalance            (customer: +opening, supplier: -opening)
+balance = openingBalance            (as entered: positive = they owe you, negative = you owe them)
          + sum(sale invoice and sale debit note totals)
          - sum(credit note and sales return totals)
          - sum(purchase invoice totals)

@@ -132,11 +132,10 @@ describe("golden 14: credit note and sales return of a purchase invoice reverse 
     expect(r.invoiceCount).toBe(0);
   });
 
-  it("every party surface says the supplier is owed 8260: 11800 - 2360 - 1180", async () => {
-    expect((await w.caller.party.getById({ id: supplierId }))?.balance).toBe("8260.00");
+  it("every party surface says we owe the supplier 8260: -(11800 - 2360 - 1180), signed", async () => {
+    expect((await w.caller.party.getById({ id: supplierId }))?.balance).toBe("-8260.00");
     const list = await w.caller.party.list({ type: "supplier", page: 1, limit: 10 });
-    expect(list.data.find((p) => p.id === supplierId)?.balance).toBe("8260.00");
-    // The ledger is debit-minus-credit: the payable is negative.
+    expect(list.data.find((p) => p.id === supplierId)?.balance).toBe("-8260.00");
     expect((await w.caller.party.ledgerReport({ partyId: supplierId }))?.summary.closingBalance).toBe("-8260.00");
     const tab = await w.caller.party.ledger({ partyId: supplierId });
     expect(tab.data.map((r) => [r.type, r.debit, r.credit, r.runningBalance])).toEqual([

@@ -75,7 +75,7 @@ resp = httpx.get(
       method: "query",
       path: "party.getById",
       title: "Get Party",
-      description: "Fetch a party by ID with their calculated ledger balance. The balance is `openingBalance` plus the unpaid amount (total minus paid) of every invoice and sale-side debit note, minus the unpaid amount of every credit note, sales return, purchase return and purchase-side debit note. Quotations, proformas and delivery challans never count. It is positive in the party's own direction: what a customer owes you, or what you owe a supplier.",
+      description: "Fetch a party by ID with their calculated ledger balance. The balance is `openingBalance` plus the unpaid amount (total minus paid) of every invoice and sale-side debit note, minus the unpaid amount of every credit note, sales return, purchase return and purchase-side debit note. Quotations, proformas and delivery challans never count. It is signed, debit minus credit, for customers and suppliers alike: positive = they owe you (receivable), negative = you owe them (payable), so a supplier you owe 14000 has a balance of `-14000.00`.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -203,7 +203,7 @@ resp = httpx.post(
       },
       gotchas: [
         "GSTIN is validated against the regex `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$`. Pass an empty string `\"\"` to clear it.",
-        "`openingBalance` represents money already owed before starting to use Hisaabo, in the party's own direction: for a customer what they owe you, for a supplier what you owe them (positive). Use a negative value for the opposite (a customer's advance, a supplier's advance).",
+        "`openingBalance` represents money already owed before starting to use Hisaabo. It is signed: positive = they owe you, negative = you owe them (for a supplier you owe, send a negative value). The party balance and every ledger statement use it as stored.",
         "An audit log entry is created for party creation.",
       ],
     },
@@ -415,7 +415,7 @@ resp = httpx.post(
       method: "query",
       path: "party.ledgerReport",
       title: "Ledger Report",
-      description: "Full ledger for a party with date range. Returns interleaved invoices, payments, credit notes, and sales returns sorted chronologically, with running balance, plus summary totals and closing balance. Credit notes and sales returns appear as credit entries that reduce what a customer owes; purchase returns and purchase-side debit notes appear as debit entries that reduce what you owe a supplier. The running balance is debit minus credit, so a supplier you owe is negative: the opening balance enters as `+openingBalance` for a customer and `-openingBalance` for a supplier.",
+      description: "Full ledger for a party with date range. Returns interleaved invoices, payments, credit notes, and sales returns sorted chronologically, with running balance, plus summary totals and closing balance. Credit notes and sales returns appear as credit entries that reduce what a customer owes; purchase returns and purchase-side debit notes appear as debit entries that reduce what you owe a supplier. The running balance is debit minus credit and starts from `openingBalance` as stored, so a supplier you owe is negative.",
       auth: "business",
       requiredRole: "viewer",
       input: [

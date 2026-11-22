@@ -11,22 +11,21 @@
  * from a purchase invoice reverses the purchase. Quotations, proformas and
  * delivery challans never count.
  *
- * Two conventions, both pinned by the golden suite:
+ * ONE sign convention everywhere, the one the product documents (MCP, WebMCP,
+ * docs): a balance is SIGNED, debit minus credit. POSITIVE = they owe you
+ * (receivable), NEGATIVE = you owe them (payable), for customers and suppliers
+ * alike. The opening balance is used exactly as stored (positive: they owe you,
+ * negative: you owe them). So a supplier you owe 14,000 shows -14000.00 on the
+ * party page, the party list and in the ledger statements.
  *
- *  1. "Outstanding" (`party.getById` / `party.list` `balance`): opening balance +
- *     the unpaid part of every posting document. Invoices and sale-side debit
- *     notes ADD to it; credit notes, sales returns, purchase returns and
- *     purchase-side debit notes REDUCE it.
- *
- *  2. "Ledger statement" (`party.ledger`, `party.ledgerReport`,
- *     `reports.partyStatement`, the PDF): debit-minus-credit running balance, the
- *     way the books see the party. `documentLedgerSide` says which side a
- *     document lands on.
+ * `party.getById` / `party.list` `balance` = opening + `invoiceBalanceSql` summed
+ * over the party's documents (what is still unpaid on them). The statements add
+ * the payments themselves as ledger rows instead, so the two agree whenever every
+ * payment is allocated to an invoice.
  */
 
 import { sql, type SQL } from "drizzle-orm";
 import { invoices } from "@hisaabo/db";
-import { money } from "@hisaabo/shared";
 import { classifyLedgerDocument } from "./ledger-documents.js";
 
 /** Document types that move a party's balance; everything else never posts. */
@@ -37,15 +36,6 @@ export const BALANCE_DOCUMENT_TYPES = [
   "purchase_return",
   "debit_note",
 ] as const;
-
-/**
- * True when the document REDUCES what the party owes (or is owed): credit notes,
- * sales returns, purchase returns and purchase-side debit notes (we debit the
- * supplier, so we owe them less). Invoices and sale-side debit notes add.
- */
-export function isBalanceReduction(documentType: string, type: string): boolean {
-  return classifyLedgerDocument(documentType, type)?.kind === "reversal";
-}
 
 /**
  * Which side of the party's ledger a document lands on, or `null` when it
@@ -59,16 +49,6 @@ export function documentLedgerSide(documentType: string, type: string): "debit" 
   if (!cls) return null;
   const forwardIsDebit = cls.side === "sale";
   return (cls.kind === "reversal" ? !forwardIsDebit : forwardIsDebit) ? "debit" : "credit";
-}
-
-/**
- * The opening balance as the debit-minus-credit statements start it. The stored
- * value is "what they owe us" for a customer and "what we owe them" for a
- * supplier, both positive, so a supplier's opening is a CREDIT: negative.
- */
-export function signedOpeningBalance(partyType: string, openingBalance: string): string {
-  const opening = money.add(openingBalance, "0");
-  return partyType === "supplier" ? money.sub("0", opening) : opening;
 }
 
 const POSTING_TYPES_SQL = sql`('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')`;
@@ -86,17 +66,17 @@ export function invoiceIsLedgerDebitSql(): SQL<boolean> {
 }
 
 /**
- * SQL: what one `invoices` row adds to (+) or takes from (-) the party's
- * outstanding balance: the unpaid part (total - amount paid), signed by whether
- * the document reduces what is owed, and 0 for documents that never post. Sum it
- * over a party's non-cancelled, non-deleted rows and add the opening balance.
+ * SQL: what one `invoices` row adds to the party's SIGNED balance: the unpaid
+ * part (total - amount paid), positive when the document lands on the debit side
+ * (`invoiceIsLedgerDebitSql`), negative when it lands on the credit side, and 0
+ * for documents that never post. Sum it over a party's non-cancelled,
+ * non-deleted rows and add the opening balance, exactly as stored.
  */
 export function invoiceBalanceSql(): SQL<string> {
   return sql<string>`CASE
     WHEN ${invoices.documentType} NOT IN ${POSTING_TYPES_SQL} THEN 0
-    WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
-      OR (${invoices.documentType} = 'debit_note' AND ${invoices.type} = 'purchase')
-      THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-    ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+    WHEN ${invoiceIsLedgerDebitSql()}
+      THEN (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+    ELSE -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
   END`;
 }

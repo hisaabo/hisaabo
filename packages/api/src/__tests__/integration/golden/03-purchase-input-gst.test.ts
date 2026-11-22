@@ -72,7 +72,9 @@ describe("golden 03: purchase with input GST, paid", () => {
   });
 
   it("before payment the supplier is owed the full 11800", () => {
-    expect(balanceBeforePayment).toBe("11800.00");
+    // The party balance is signed (positive = they owe you, negative = you owe them): -11800.00.
+    // The aging report's payable total is a positive amount.
+    expect(balanceBeforePayment).toBe("-11800.00");
     expect(payableBeforePayment).toBe("11800.00");
   });
 

@@ -40,7 +40,7 @@ Tap **Parties** in the bottom tab bar, then tap the floating **+** button. A ful
 | Billing Address | Invoice billing address |
 | Shipping Address | Delivery address (if different from billing) |
 | City, Pincode | Address details |
-| Opening Balance | What the party owes you (customer) or what you owe them (supplier), as of the day you start using Hisaabo. See [Opening balance](#opening-balance) |
+| Opening Balance | An amount plus **To receive** (they owe you) or **To pay** (you owe them), as of the day you start using Hisaabo. See [Opening balance](#opening-balance) |
 | Credit Period (days) | Number of days before invoices become overdue. Used to auto-set due dates. |
 | Credit Limit | Maximum outstanding amount allowed. Shown as a warning (not a hard block). |
 | Category | Free-text category for grouping parties |
@@ -56,14 +56,12 @@ A party is either a **customer** or a **supplier**, but the same entity can be b
 
 The opening balance represents the amount outstanding before you started using Hisaabo.
 
-Enter it in the party's own direction, as a positive number:
+Enter an amount and choose a direction. The form stores it as one signed number, the same convention used everywhere in Hisaabo (party balance, ledger, API, MCP): **positive = they owe you, negative = you owe them**, for customers and suppliers alike.
 
-- **Customer**: what the customer owes you. For example, if a customer had an unpaid invoice of ₹5,000 when you migrated to Hisaabo, enter `5000`.
-- **Supplier**: what you owe the supplier. For example, if you had an outstanding bill to a supplier of ₹12,000, enter `12000`. Purchase invoices add to it, payments you make reduce it.
+- **To receive** (positive): they owe you. For example, if a customer had an unpaid invoice of ₹5,000 when you migrated to Hisaabo, enter `5000` and choose **To receive**.
+- **To pay** (negative): you owe them. For example, if you had an outstanding bill to a supplier of ₹12,000, enter `12000` and choose **To pay**; it is stored as `-12000`.
 
-A negative opening balance means the opposite: a customer you owe (for example an advance they paid) or a supplier who owes you (an advance you paid).
-
-The opening balance is included in the party's balance. In the party's ledger (debit minus credit) a supplier's opening balance starts on the credit side, so it shows as a negative running balance, like the supplier's purchase invoices.
+The opening balance is included in the party's balance and is the first row of its ledger. A supplier you owe ₹14,000 shows a balance of **-₹14,000** (payable), and a customer who owes you ₹14,000 shows **₹14,000** (receivable).
 
 ## Viewing a party
 

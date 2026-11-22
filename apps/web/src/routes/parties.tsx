@@ -12,6 +12,8 @@ import type { PartyType } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { InputField, TextareaField } from "@/components/ui/FormField";
+import { OpeningBalanceField } from "@/components/OpeningBalanceField";
+import { composeOpeningBalance, type OpeningBalanceDirection } from "@hisaabo/shared";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -1162,7 +1164,10 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // Unsigned amount + direction; composeOpeningBalance turns them into the stored signed value.
   const [openingBalance, setOpeningBalance] = useState("");
+  const [openingDirection, setOpeningDirection] = useState<OpeningBalanceDirection>("receive");
+  const [openingDirectionTouched, setOpeningDirectionTouched] = useState(false);
   const [gstin, setGstin] = useState("");
   const [pan, setPan] = useState("");
   const [tan, setTan] = useState("");
@@ -1200,6 +1205,8 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
     setPhone("");
     setEmail("");
     setOpeningBalance("");
+    setOpeningDirection("receive");
+    setOpeningDirectionTouched(false);
     setGstin("");
     setPan("");
     setTan("");
@@ -1230,7 +1237,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
       name,
       phone: phone || undefined,
       email: email || undefined,
-      openingBalance: openingBalance || "0",
+      openingBalance: composeOpeningBalance(openingBalance, openingDirection),
       gstin: gstin || undefined,
       pan: pan || undefined,
       tan: tan ? tan.toUpperCase() : undefined,
@@ -1281,7 +1288,12 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
             { value: "supplier", label: "Supplier" },
           ]}
           value={partyType}
-          onChange={(v) => setPartyType(v as PartyType)}
+          onChange={(v) => {
+            setPartyType(v as PartyType);
+            // Until the user picks a direction, follow the party type: what you owe a supplier
+            // is the usual opening balance, what a customer owes you is the other.
+            if (!openingDirectionTouched) setOpeningDirection(v === "supplier" ? "pay" : "receive");
+          }}
         />
 
         {/* Base fields — 2 column */}
@@ -1301,23 +1313,23 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
             placeholder="+91 98765 43210"
           />
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <InputField
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="email@example.com"
-          />
-          <InputField
-            label="Opening Balance"
-            type="number"
-            step="0.01"
-            value={openingBalance}
-            onChange={(e) => setOpeningBalance(e.target.value)}
-            placeholder="0.00"
-          />
-        </div>
+        <InputField
+          label="Email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="email@example.com"
+        />
+        <OpeningBalanceField
+          amount={openingBalance}
+          direction={openingDirection}
+          partyType={partyType}
+          onAmountChange={setOpeningBalance}
+          onDirectionChange={(d) => {
+            setOpeningDirectionTouched(true);
+            setOpeningDirection(d);
+          }}
+        />
         <InputField
           label="GSTIN"
           value={gstin}

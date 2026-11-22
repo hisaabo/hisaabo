@@ -842,7 +842,7 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 
   // Running-balance statement: payments reduce the balance by what they settled
   // (cash + TDS), so the closing balance and the UPI QR below exclude withheld TDS.
-  const { entries: entriesWithBalance, summary: ledgerSummary, openingBalance: statementOpening } = await buildPartyLedgerStatement(
+  const { entries: entriesWithBalance, summary: ledgerSummary } = await buildPartyLedgerStatement(
     db, businessId, party, { from: fromDate, to: toDate },
   );
   const { totalDebit, totalCredit, closingBalance } = ledgerSummary;
@@ -867,7 +867,7 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     businessName: biz.name,
     partyName: party.name,
     partyType: party.type,
-    openingBalance: statementOpening,
+    openingBalance: party.openingBalance,
     fromDate: fromParam || null,
     toDate: toParam || null,
     entries: entriesWithBalance,

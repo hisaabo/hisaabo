@@ -17,7 +17,6 @@ import {
 } from "@hisaabo/db";
 import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
 import { computeGrossProfit } from "../lib/gross-profit.js";
-import { signedOpeningBalance } from "../lib/party-balance.js";
 import { paymentLedgerLeg, paymentTdsSql } from "../lib/payment-settlement.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import {
@@ -1131,9 +1130,7 @@ export const reportsRouter = router({
         }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      // Debit-minus-credit: a supplier's opening balance (what we owe them) starts negative.
-      const openingBalance = signedOpeningBalance(party.type, party.openingBalance);
-      let runningBalance = openingBalance;
+      let runningBalance = party.openingBalance;
       const entriesWithBalance = entries.map((e) => {
         runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
         return { ...e, runningBalance };
@@ -1141,7 +1138,7 @@ export const reportsRouter = router({
 
       const totalDebit = money.sum(entries.map((e) => e.debit));
       const totalCredit = money.sum(entries.map((e) => e.credit));
-      const closingBalance = money.add(money.sub(openingBalance, totalCredit), totalDebit);
+      const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
 
       return {
         party: {
