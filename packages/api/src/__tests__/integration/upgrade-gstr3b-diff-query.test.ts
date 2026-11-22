@@ -32,8 +32,12 @@ useGoldenDb();
 const UPGRADING = fileURLToPath(new URL("../../../../../docs/UPGRADING.md", import.meta.url));
 
 function diffQuery(): string {
+  return sqlAfter("<!-- gstr3b-diff-query -->");
+}
+
+function sqlAfter(markerText: string): string {
   const md = readFileSync(UPGRADING, "utf8");
-  const marker = md.indexOf("<!-- gstr3b-diff-query -->");
+  const marker = md.indexOf(markerText);
   expect(marker).toBeGreaterThan(-1);
   const open = md.indexOf("```sql", marker);
   const close = md.indexOf("```", open + 6);
@@ -100,5 +104,56 @@ describe("docs/UPGRADING.md: the per-month GSTR-3B old-vs-new query", () => {
       sql.raw(`SELECT * FROM (${diffQuery()}) q WHERE business_id = '${w2.businessId}'`),
     )) as unknown as unknown[];
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("docs/UPGRADING.md: the opening-balance review query and the per-party sign flip", () => {
+  async function seed() {
+    const w = await createGoldenWorld();
+    const mk = (type: "customer" | "supplier", name: string, openingBalance: string) =>
+      w.caller.party.create({ type, name, state: "Maharashtra", stateCode: "27", openingBalance });
+    const supPos = await mk("supplier", "Supplier positive", "14000.00"); // typed as "we owe them" under 0.10.0
+    await mk("supplier", "Supplier negative", "-3000.00"); // already the documented sign
+    await mk("supplier", "Supplier zero", "0");
+    await mk("customer", "Customer positive", "500.00"); // the usual direction
+    const custNeg = await mk("customer", "Customer negative", "-200.00"); // an advance (or a sign typed the other way)
+    return { w, supPos, custNeg };
+  }
+
+  it("lists suppliers with a positive and customers with a negative opening balance, and only them", async () => {
+    const { w } = await seed();
+    const rows = (await getTenantTestDb().execute(
+      sql.raw(`SELECT * FROM (${sqlAfter("<!-- opening-balance-review-query -->")}) q WHERE business_id = '${w.businessId}'`),
+    )) as unknown as Array<Record<string, string>>;
+    expect(rows.map((r) => [r.party, r.opening_balance])).toEqual([
+      ["Customer negative", "-200.00"],
+      ["Supplier positive", "14000.00"],
+    ]);
+    expect(rows.map((r) => r.meaning_now)).toEqual([
+      "negative: YOU now owe the customer this",
+      "positive: the supplier now OWES YOU this",
+    ]);
+  });
+
+  it("the optional flip statement flips exactly the party it names, and flipping twice restores it", async () => {
+    const { w, supPos } = await seed();
+    const flip = sqlAfter("<!-- opening-balance-flip -->")
+      .replace("<party_id from the query>", supPos.id)
+      .replace("<business_id from the query>", w.businessId);
+    const db = getTenantTestDb();
+    await db.execute(sql.raw(flip));
+    expect((await w.caller.party.getById({ id: supPos.id }))?.openingBalance).toBe("-14000.00");
+    // the other parties are untouched
+    const list = await w.caller.party.list({ page: 1, limit: 50 });
+    const seeded = list.data.filter((p) => /^(Customer|Supplier) /.test(p.name)); // not the walk-in party
+    expect(seeded.map((p) => [p.name, p.openingBalance]).sort()).toEqual([
+      ["Customer negative", "-200.00"],
+      ["Customer positive", "500.00"],
+      ["Supplier negative", "-3000.00"],
+      ["Supplier positive", "-14000.00"],
+      ["Supplier zero", "0.00"],
+    ]);
+    await db.execute(sql.raw(flip));
+    expect((await w.caller.party.getById({ id: supPos.id }))?.openingBalance).toBe("14000.00");
   });
 });

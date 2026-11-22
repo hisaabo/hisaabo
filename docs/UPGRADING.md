@@ -172,7 +172,7 @@ What was wrong, and what you see now:
 
 #### What to do after upgrading
 
-1. **Find the months that change.** Run this read-only query once in each database (every tenant database when multi-tenant). It lists, per business and month, the GSTR-3B output tax and input credit the old rules produced and the corrected ones, and only months where the net tax payable differs. Figures are totals over CGST + SGST + IGST (the head split follows the same rules); months are calendar months in UTC, which is what the reports use on the Docker image.
+1. **Find the months that change.** Save the query below as `gstr3b-diff.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, see [Running it on every tenant](#running-the-queries-on-every-tenant) below). It lists, per business and month, the GSTR-3B output tax and input credit the old rules produced and the corrected ones, and only months where the net tax payable differs. Figures are totals over CGST + SGST + IGST (the head split follows the same rules); months are calendar months in UTC, which is what the reports use on the Docker image.
 
    <!-- gstr3b-diff-query -->
    ```sql
@@ -216,10 +216,50 @@ What was wrong, and what you see now:
    ```
 
    A positive `change` means more tax payable than before, a negative one less. It does not show the odd-paisa CGST / SGST difference (a paisa per affected invoice).
+
+   <a id="running-the-queries-on-every-tenant"></a>
+   **Running it on every tenant (multi-tenant).** Connected with `psql` to the **control database** as the control role, in the directory that holds `gstr3b-diff.sql`, this generates one `\c` + `\i` pair per tenant database and runs them (a `psql` `\gexec` cannot be used here: it runs generated SQL in the *same* database and cannot switch databases):
+
+   ```
+   \t on
+   \a
+   \o each-tenant.psql
+   SELECT format(E'\\echo == %s\n\\c %I %I %s %s\n\\i gstr3b-diff.sql',
+                 slug, db_name, current_user, coalesce(db_host, 'localhost'), coalesce(db_port, '5432'))
+   FROM tenants WHERE db_name IS NOT NULL ORDER BY slug;
+   \o
+   \t off
+   \a
+   \i each-tenant.psql
+   ```
+
+   It reconnects as the same role to each tenant's host, port and database (set `PGPASSWORD` or use a `.pgpass` entry so it does not prompt per tenant) and prints one `== <slug>` heading per tenant followed by that tenant's rows. The same loop runs the opening-balance review query in step 5: replace `gstr3b-diff.sql` with its file name.
 2. **Re-open every GSTR-3B and GSTR-1 you have already filed** for the months it lists (GST, pick the month) and compare with what was filed. Differences come from credit notes, returns, debit notes, purchase-type documents that are not bills, and odd-paisa GST; if one is material, your CA decides whether to amend.
 3. Open the **trial balance** and **balance sheet**: they now balance for invoices with a round-off, discount or charges. New rows (Round Off, Discount Allowed, Other Charges) appear in the P&L when you used those fields. If **Suspense / Unreconciled** shows a balance, a document does not add up: the API log names it.
 4. **ITC utilisation recorded twice before this release** is not rewritten automatically. Open ITC, **Utilization**, pick the period, and save it again: the doubled journal is reversed and one correct journal is posted.
-5. **Opening balances** keep the documented sign: positive = they owe you, negative = you owe them, for customers and suppliers. The new party form asks for an amount and **To receive** / **To pay**, so you can no longer get the sign backwards. Because supplier balances now follow the same rule as everything else, a supplier you owe now shows as a negative balance; nothing was entered differently, only the display and filters changed.
+5. **Review supplier and customer opening balances. Their meaning may have changed for you.** The documented convention (docs, API, CLI, MCP) is one signed number for everyone: **positive = they owe you, negative = you owe them**. Hisaabo 0.10.0 showed a bare "Opening Balance" box with no direction, and its party page added a supplier's purchases to whatever you typed, so a supplier's opening balance entered as a **positive** number (for example `14000`, meant as "we owe them 14,000") behaved as an amount you owe. Under the convention it now means **they owe you 14,000**: the supplier's balance and statement start from the other side. Customers are the mirror image (a negative opening balance means you owe the customer). Nothing is changed automatically, because only you know what each number meant. Run this read-only query (same way as step 1) to list the candidates, the rows whose sign differs from the usual direction:
+
+   <!-- opening-balance-review-query -->
+   ```sql
+   SELECT b.name AS business, p.id AS party_id, p.business_id, p.type, p.name AS party,
+          p.opening_balance,
+          CASE WHEN p.type = 'supplier' THEN 'positive: the supplier now OWES YOU this' ELSE 'negative: YOU now owe the customer this' END AS meaning_now
+   FROM parties p JOIN businesses b ON b.id = p.business_id
+   WHERE (p.type = 'supplier' AND p.opening_balance::numeric > 0)
+      OR (p.type = 'customer' AND p.opening_balance::numeric < 0)
+   ORDER BY b.name, p.type, p.name
+   ```
+
+   For each row, decide what the number was meant to be. If it is right as it stands (an advance you paid a supplier is a positive supplier balance; an advance a customer paid you is a negative customer balance), leave it. If it was typed as "the amount I owe the supplier" (or "the amount the customer owes me" typed negative), flip its sign **after confirming**, either by editing the party in the mobile app (its edit screen has **To receive** / **To pay**) or with this optional per-party statement, run in the right database:
+
+   <!-- opening-balance-flip -->
+   ```sql
+   UPDATE parties
+   SET opening_balance = -opening_balance, updated_at = now()
+   WHERE id = '<party_id from the query>' AND business_id = '<business_id from the query>';
+   ```
+
+   There is deliberately no bulk migration. The statement is safe to run once per party; running it twice flips it back.
 
 #### Points to confirm with your CA
 
