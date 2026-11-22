@@ -413,6 +413,8 @@ export function buildBrowserTool(
         if (staleBefore) return staleResult(staleBefore);
 
         const isWrite = isWriteTool(def);
+        // Refuse input that cannot work before anything else: no prompt, no budget, no token.
+        if (isWrite) def.validate?.(input ?? {}, ctx);
         // Do not even ask the user for something the session has no budget left to do.
         if (isWrite && isWriteBudgetExhausted()) {
           return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true };

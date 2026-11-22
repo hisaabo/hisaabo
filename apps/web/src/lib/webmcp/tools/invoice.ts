@@ -314,17 +314,22 @@ const invoiceCreate: WebMcpToolDefinition = {
       details,
     };
   },
-  execute: async (input, ctx) => {
-    const partyId = str(input.partyId);
+  validate: (input, ctx) => {
+    if (!str(input.partyId)) throw new Error("partyId is required — find it with party_list.");
     const type = enumOf(input.type, INVOICE_TYPES);
-    const lineItems = objectArray(input.lineItems);
-    if (!partyId) throw new Error("partyId is required — find it with party_list.");
     if (!type) throw new Error("type must be 'sale' or 'purchase'.");
     const documentType = enumOf(input.documentType, DOCUMENT_TYPES) ?? "invoice";
     if (!canCreateDocumentType(ctx.role, documentType, type)) {
       throw new Error(SELLER_PURCHASE_DENIED_MESSAGE);
     }
+    const lineItems = objectArray(input.lineItems);
     if (!lineItems || lineItems.length === 0) throw new Error("At least one line item is required.");
+  },
+  execute: async (input, ctx) => {
+    invoiceCreate.validate!(input, ctx);
+    const partyId = str(input.partyId)!;
+    const type = enumOf(input.type, INVOICE_TYPES)!;
+    const lineItems = objectArray(input.lineItems)!;
 
     return await ctx.client.invoice.create.mutate({
       partyId,
@@ -379,16 +384,21 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
       changes: [{ field: "Status", before: invoice?.status ?? "unknown", after: status }],
     };
   },
-  execute: async (input, ctx) => {
-    const id = str(input.invoiceId);
-    if (!id) throw new Error("invoiceId is required.");
+  validate: (input) => {
+    if (!str(input.invoiceId)) throw new Error("invoiceId is required.");
     if (input.status === "cancelled") {
       throw new Error(
         "Cancelling an invoice is not available to browser agents. Ask the user to cancel it from the Invoices page; app_navigate can open it for them.",
       );
     }
-    const status = enumOf(input.status, SETTABLE_STATUSES);
-    if (!status) throw new Error(`status must be one of: ${SETTABLE_STATUSES.join(", ")}.`);
+    if (!enumOf(input.status, SETTABLE_STATUSES)) {
+      throw new Error(`status must be one of: ${SETTABLE_STATUSES.join(", ")}.`);
+    }
+  },
+  execute: async (input, ctx) => {
+    invoiceUpdateStatus.validate!(input, ctx);
+    const id = str(input.invoiceId)!;
+    const status = enumOf(input.status, SETTABLE_STATUSES)!;
     return await ctx.client.invoice.updateStatus.mutate({ id, status });
   },
 };

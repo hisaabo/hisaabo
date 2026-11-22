@@ -147,9 +147,12 @@ const itemCreate: WebMcpToolDefinition = {
     if (str(input.hsn)) details.push(`HSN: ${str(input.hsn)}`);
     return { headline: `Add ${itemType} “${name}” to the catalog`, details };
   },
+  validate: (input) => {
+    if (!str(input.name)) throw new Error("name is required.");
+  },
   execute: async (input, ctx) => {
-    const name = str(input.name);
-    if (!name) throw new Error("name is required.");
+    itemCreate.validate!(input, ctx);
+    const name = str(input.name)!;
 
     return await ctx.client.item.create.mutate({
       name,

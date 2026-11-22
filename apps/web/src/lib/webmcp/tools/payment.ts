@@ -228,13 +228,16 @@ const paymentCreate: WebMcpToolDefinition = {
     }
     return { headline, details };
   },
+  validate: (input) => {
+    if (!str(input.partyId)) throw new Error("partyId is required — find it with party_list.");
+    if (!str(input.amount)) throw new Error("amount is required, as a decimal string such as '5000.00'.");
+    if (!enumOf(input.mode, PAYMENT_MODES)) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+  },
   execute: async (input, ctx) => {
-    const partyId = str(input.partyId);
-    const amount = str(input.amount);
-    const mode = enumOf(input.mode, PAYMENT_MODES);
-    if (!partyId) throw new Error("partyId is required — find it with party_list.");
-    if (!amount) throw new Error("amount is required, as a decimal string such as '5000.00'.");
-    if (!mode) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+    paymentCreate.validate!(input, ctx);
+    const partyId = str(input.partyId)!;
+    const amount = str(input.amount)!;
+    const mode = enumOf(input.mode, PAYMENT_MODES)!;
 
     const allocations = objectArray(input.allocations)?.map((a) => ({
       invoiceId: str(a.invoiceId) ?? "",

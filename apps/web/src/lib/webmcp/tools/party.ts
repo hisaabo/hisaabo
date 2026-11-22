@@ -149,11 +149,14 @@ const partyCreate: WebMcpToolDefinition = {
     if (int(input.creditPeriodDays) !== undefined) details.push(`Credit period: ${int(input.creditPeriodDays)} days`);
     return { headline: `Create ${type} “${name}”`, details };
   },
+  validate: (input) => {
+    if (!enumOf(input.type, PARTY_TYPES)) throw new Error("type must be 'customer' or 'supplier'.");
+    if (!str(input.name)) throw new Error("name is required.");
+  },
   execute: async (input, ctx) => {
-    const type = enumOf(input.type, PARTY_TYPES);
-    const name = str(input.name);
-    if (!type) throw new Error("type must be 'customer' or 'supplier'.");
-    if (!name) throw new Error("name is required.");
+    partyCreate.validate!(input, ctx);
+    const type = enumOf(input.type, PARTY_TYPES)!;
+    const name = str(input.name)!;
 
     return await ctx.client.party.create.mutate({
       type,

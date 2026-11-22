@@ -127,6 +127,14 @@ export interface WebMcpToolDefinition {
   /** Omit to allow every signed-in member. */
   requires?: WebMcpPermission;
   /**
+   * Write tools only. Reject input the tool can already tell is unusable (a missing id,
+   * an enum value it refuses) by throwing an agent-readable Error. It runs BEFORE the
+   * user is asked: a prompt for something certain to fail teaches people to click
+   * Allow without reading. `execute` runs the same checks, so calling it directly is
+   * still safe.
+   */
+  validate?: (input: Record<string, unknown>, ctx: WebMcpToolContext) => void;
+  /**
    * Write tools only. Resolve the input into what a person needs to approve it
    * (names, totals, before → after). Return null to fall back to the plain input
    * summary. It may read (that is how names are resolved) but must never write.
