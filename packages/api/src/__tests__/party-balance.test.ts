@@ -25,7 +25,7 @@ describe("documentLedgerSide (debit-minus-credit statement)", () => {
     ["debit_note", "purchase", "debit"], // was "credit": a purchase-side debit note reduces the payable
     ["credit_note", "purchase", "debit"], // raised from a purchase invoice: reverses the purchase
     ["sales_return", "purchase", "debit"],
-    ["purchase_return", "sale", "credit"],
+    ["purchase_return", "sale", "debit"], // always purchase-side: reduces what we owe, whatever its type
   ])("%s on a %s document lands on the %s side", (documentType, type, expected) => {
     expect(documentLedgerSide(documentType, type)).toBe(expected);
   });
@@ -48,7 +48,7 @@ describe("the SQL fragments", () => {
 
   it("invoiceIsLedgerDebitSql: a sale invoice / sale debit note, or any reversal of a purchase, debits", () => {
     expect(render(invoiceIsLedgerDebitSql())).toBe(
-      `( ("invoices"."type" = 'sale' AND "invoices"."document_type" IN ('invoice', 'debit_note')) OR ("invoices"."type" = 'purchase' AND "invoices"."document_type" IN ('credit_note', 'sales_return', 'purchase_return', 'debit_note')) )`,
+      `( ("invoices"."type" = 'sale' AND "invoices"."document_type" IN ('invoice', 'debit_note')) OR ("invoices"."type" = 'purchase' AND "invoices"."document_type" IN ('credit_note', 'sales_return', 'debit_note')) OR "invoices"."document_type" = 'purchase_return' )`,
     );
   });
 

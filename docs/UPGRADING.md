@@ -182,10 +182,11 @@ What was wrong, and what you see now:
             i.type::text AS type,
             i.document_type::text AS document_type,
             i.tax_amount::numeric AS tax,
-            -- the side a document belongs to, by its type (the ledger's rule)
+            -- the side a document belongs to, by its type (the ledger's rule); a purchase
+            -- return is purchase-side whatever type it was stored with
             CASE
-              WHEN i.document_type IN ('invoice', 'credit_note', 'sales_return', 'purchase_return') THEN i.type::text
-              WHEN i.document_type = 'debit_note' THEN i.type::text
+              WHEN i.document_type = 'purchase_return' THEN 'purchase'
+              WHEN i.document_type IN ('invoice', 'credit_note', 'sales_return', 'debit_note') THEN i.type::text
             END AS side,
             -- credit notes / returns, and a debit note raised against a supplier, take tax back
             (i.document_type IN ('credit_note', 'sales_return', 'purchase_return')

@@ -197,6 +197,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         if (!canCreateDocumentType(ctx.role, docType, input.type)) {
           throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
         }
+        // A purchase return is a purchase-side document whatever `type` the caller sent (the CLI
+        // used to send "sale" for every document): store and post it as purchase, so the ledger,
+        // GSTR-1 / 3B, the party balance and the ITC ledger all see the same side. Credit notes
+        // and sales returns legitimately take either type (the type of the invoice they adjust).
+        const docSide: "sale" | "purchase" = docType === "purchase_return" ? "purchase" : input.type;
         const doc = await ctx.db.transaction(async (tx) => {
           // Security: validate that partyId belongs to the current business.
           const [partyCheck] = await tx.select({ id: parties.id })
@@ -354,7 +359,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             .values({
               businessId: ctx.businessId,
               partyId: input.partyId,
-              type: input.type,
+              type: docSide,
               // ALWAYS use config.documentType — never trust client-supplied value
               documentType: docType as DocumentType,
               invoiceNumber: docNumber,
@@ -387,7 +392,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             businessId: ctx.businessId,
             documentId: result.id,
             documentType: docType,
-            type: input.type,
+            type: docSide,
             partyId: input.partyId,
             documentDate: result.invoiceDate,
             taxTotal: totals.taxTotal,

@@ -333,7 +333,7 @@ export async function generateGSTR1(
     .where(and(
       eq(invoices.businessId, businessId),
       eq(invoices.type, "sale"),
-      inArray(invoices.documentType, ["credit_note", "sales_return", "purchase_return", "debit_note"]),
+      inArray(invoices.documentType, ["credit_note", "sales_return", "debit_note"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),

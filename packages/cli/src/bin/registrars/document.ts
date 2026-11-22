@@ -95,7 +95,7 @@ export function registerDocumentCommands(program: Command): void {
       .option("--rate <n>", "Rate per item (repeatable)", (v, a: string[]) => [...a, v], [] as string[])
       .option("--notes <text>", "Notes")
       .option("--discount <pct>", "Discount percent")
-      .option("--type <type>", "sale or purchase (default: sale)")
+      .option("--type <type>", "sale or purchase (default: sale; purchase for a purchase return)")
       .option("-y, --yes", "Skip confirmation")
       .action(async (opts) => {
         const { docCreateCommand } = await import("../../commands/document/factory.js");

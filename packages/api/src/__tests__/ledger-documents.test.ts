@@ -63,7 +63,8 @@ describe("classifyLedgerDocument", () => {
     ["debit_note", "sale", { side: "sale", kind: "addition" }],
     ["debit_note", "purchase", { side: "purchase", kind: "reversal" }],
     ["purchase_return", "purchase", { side: "purchase", kind: "reversal" }],
-    ["purchase_return", "sale", { side: "sale", kind: "reversal" }],
+    // a purchase return is purchase-side whatever type it carries (the CLI used to send "sale")
+    ["purchase_return", "sale", { side: "purchase", kind: "reversal" }],
   ])("%s on a %s document", (documentType, type, expected) => {
     expect(classifyLedgerDocument(documentType, type)).toEqual(expected);
   });

@@ -124,7 +124,8 @@ export const dashboardRouter = router({
       }).from(invoices)
         .where(and(
           eq(invoices.businessId, ctx.businessId),
-          eq(invoices.type, "purchase"),
+          // a purchase return is purchase-side whatever `type` it was sent with
+          sql`(${invoices.type} = 'purchase' OR ${invoices.documentType} = 'purchase_return')`,
           sql`${invoices.documentType} IN ('invoice', 'debit_note', 'credit_note', 'sales_return', 'purchase_return')`,
           isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,

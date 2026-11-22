@@ -56,12 +56,14 @@ const POSTING_TYPES_SQL = sql`('invoice', 'credit_note', 'sales_return', 'purcha
 /**
  * SQL boolean: the document lands on the DEBIT side of the party's ledger
  * (`documentLedgerSide` === "debit"). A reversal debits when it reverses a
- * purchase; a sale invoice and a sale-side debit note debit.
+ * purchase (a purchase return always does, whatever its `type`); a sale invoice
+ * and a sale-side debit note debit.
  */
 export function invoiceIsLedgerDebitSql(): SQL<boolean> {
   return sql<boolean>`(
     (${invoices.type} = 'sale' AND ${invoices.documentType} IN ('invoice', 'debit_note'))
-    OR (${invoices.type} = 'purchase' AND ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return', 'debit_note'))
+    OR (${invoices.type} = 'purchase' AND ${invoices.documentType} IN ('credit_note', 'sales_return', 'debit_note'))
+    OR ${invoices.documentType} = 'purchase_return'
   )`;
 }
 

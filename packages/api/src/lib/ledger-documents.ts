@@ -132,7 +132,10 @@ export interface LedgerDocumentClass {
  * a sale.
  *
  *   invoice                                       -> `invoice`, side by type
- *   credit_note, sales_return, purchase_return    -> `reversal`, side by type
+ *   credit_note, sales_return                     -> `reversal`, side by type
+ *   purchase_return                               -> purchase `reversal`, ALWAYS: whatever `type`
+ *       it carries (the CLI used to send "sale" for every document), a purchase return
+ *       sends goods back to a supplier; it is never a sale-side document
  *   debit_note, type sale                         -> sale `addition`: the buyer owes us more
  *   debit_note, type purchase                     -> purchase `reversal`: we debit the
  *       supplier, so we owe less and our input credit falls, like a purchase return
@@ -144,8 +147,9 @@ export function classifyLedgerDocument(documentType: string, type: string): Ledg
       return { side, kind: "invoice" };
     case "credit_note":
     case "sales_return":
-    case "purchase_return":
       return { side, kind: "reversal" };
+    case "purchase_return":
+      return { side: "purchase", kind: "reversal" };
     case "debit_note":
       return side === "purchase" ? { side, kind: "reversal" } : { side, kind: "addition" };
     default:
