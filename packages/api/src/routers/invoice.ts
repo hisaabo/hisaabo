@@ -16,6 +16,7 @@ import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 import { isIntraStateSupply } from "../lib/gst-split.js";
 
@@ -532,13 +533,17 @@ export const invoiceRouter = router({
         }
 
         try {
-          const [config] = await db
+          const [rawConfig] = await db
             .select()
             .from(eInvoiceConfigs)
             .where(and(eq(eInvoiceConfigs.businessId, businessId), eq(eInvoiceConfigs.isEnabled, true)))
             .limit(1);
 
-          if (!config) return; // E-invoicing not configured/enabled
+          if (!rawConfig) return; // E-invoicing not configured/enabled
+
+          // The IRP credentials are stored encrypted (field-encryption.ts); eInvoice.generate,
+          // retryFailed and cancel decrypt them before handing them to IRPClient, and so must this.
+          const config = decryptEInvoiceConfig(rawConfig);
 
           // Same rule as eInvoice.generate / retryFailed / cancel: without the NIC public
           // key (lib/irp-public-key.ts) this server cannot sign in to the IRP, so do not
