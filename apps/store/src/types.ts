@@ -50,7 +50,19 @@ export interface StoreItem {
   unit: string;
   category?: string;
   inStock: boolean;
+  /**
+   * NOT "running low". The API sets this for items whose stock is zero or less
+   * in a store that accepts orders anyway ("allow negative stock"): they are
+   * `inStock` and `lowStock` together, so a store that holds no inventory
+   * reports it on every item. See stock.ts.
+   */
   lowStock?: boolean;
+  /**
+   * Reserved for the API: true only when the item tracks stock and its
+   * quantity is above zero but at or below the item's low-stock alert level.
+   * Not sent yet, so no "low stock" badge is shown until it is. See stock.ts.
+   */
+  runningLow?: boolean;
   sortOrder: number;
   taxPercent?: string;
   taxInclusive?: boolean;
