@@ -7,27 +7,34 @@
  * deprecated).
  */
 
-/** `reports.tallyExport` requires both bounds; "All" has neither, so it starts here. */
-export const TALLY_EXPORT_ALL_TIME_FROM = "2000-01-01T00:00:00.000Z";
+/**
+ * `reports.tallyExport` requires both bounds, but "All" (and a half-filled custom
+ * range) has none. A missing bound becomes one of these, which lie outside any
+ * date a voucher can carry, so "All" cuts nothing off, future-dated entries
+ * included.
+ */
+export const TALLY_EXPORT_UNBOUNDED_FROM = "1900-01-01T00:00:00.000Z";
+export const TALLY_EXPORT_UNBOUNDED_TO = "9999-12-31T23:59:59.999Z";
+
+type Range = { fromDate?: string; toDate?: string };
+
+/** Fill in the bounds `reports.tallyExport` requires; a missing side is unbounded. */
+export function resolveTallyRange(range: Range): { fromDate: string; toDate: string } {
+  return {
+    fromDate: range.fromDate || TALLY_EXPORT_UNBOUNDED_FROM,
+    toDate: range.toDate || TALLY_EXPORT_UNBOUNDED_TO,
+  };
+}
 
 /**
- * Fill in the bounds `reports.tallyExport` requires. The date-range bar yields
- * `undefined` for the "All" preset (and for an unfilled custom range): the start
- * becomes {@link TALLY_EXPORT_ALL_TIME_FROM} and the end becomes the end of
- * today (UTC, like every other preset boundary), so a later-dated entry is never
- * silently cut off.
+ * Name of the downloaded file. The server names the file after the dates it was
+ * given, which would read "1900-01-01-to-9999-12-31" for an open range, so a
+ * missing side is named here instead.
  */
-export function resolveTallyRange(
-  range: { fromDate?: string; toDate?: string },
-  now: Date = new Date(),
-): { fromDate: string; toDate: string } {
-  const endOfToday = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999),
-  ).toISOString();
-  return {
-    fromDate: range.fromDate || TALLY_EXPORT_ALL_TIME_FROM,
-    toDate: range.toDate || endOfToday,
-  };
+export function tallyExportFilename(range: Range, serverFilename: string): string {
+  if (!range.fromDate && !range.toDate) return "tally-export-all.xml";
+  if (range.fromDate && range.toDate) return serverFilename;
+  return `tally-export-${range.fromDate?.slice(0, 10) ?? "start"}-to-${range.toDate?.slice(0, 10) ?? "latest"}.xml`;
 }
 
 /** Number of vouchers in a generated Tally XML document (ledger masters are not counted). */

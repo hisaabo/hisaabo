@@ -13,7 +13,12 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
-import { countTallyVouchers, resolveTallyRange, tallyXmlBlob } from "@/lib/tally-export";
+import {
+  countTallyVouchers,
+  resolveTallyRange,
+  tallyExportFilename,
+  tallyXmlBlob,
+} from "@/lib/tally-export";
 
 export function TallyExportPanel() {
   const [downloading, setDownloading] = useState(false);
@@ -28,6 +33,7 @@ export function TallyExportPanel() {
     try {
       const result = await utils.reports.tallyExport.fetch(resolveTallyRange({ fromDate, toDate }));
       if (!result) return;
+      const filename = tallyExportFilename({ fromDate, toDate }, result.filename);
 
       const vouchers = countTallyVouchers(result.xml);
       if (vouchers === 0) {
@@ -38,7 +44,7 @@ export function TallyExportPanel() {
       const url = URL.createObjectURL(tallyXmlBlob(result.xml));
       const a = document.createElement("a");
       a.href = url;
-      a.download = result.filename;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
       toast.success(`Tally export downloaded — ${vouchers} ${vouchers === 1 ? "voucher" : "vouchers"}`);
@@ -61,6 +67,11 @@ export function TallyExportPanel() {
           customTo={customTo}
           onCustomChange={setCustomRange}
         />
+        {!fromDate && !toDate && (
+          <p className="text-xs text-text-tertiary mt-3">
+            Every voucher on record, including future-dated entries.
+          </p>
+        )}
       </div>
 
       {/* Format + download */}

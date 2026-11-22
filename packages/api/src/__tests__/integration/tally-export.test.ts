@@ -70,6 +70,44 @@ describe("reports.tallyExport manual journal entries", () => {
   });
 });
 
+describe("reports.tallyExport with the web's unbounded 'All' range", () => {
+  // apps/web/src/lib/tally-export.ts sends these for "All": they must accept the
+  // server's datetime schema and cut nothing off, future-dated vouchers included.
+  const UNBOUNDED_FROM = "1900-01-01T00:00:00.000Z";
+  const UNBOUNDED_TO = "9999-12-31T23:59:59.999Z";
+
+  it("includes entries dated far in the past and far in the future", async () => {
+    const c = caller();
+    for (const [narration, date] of [
+      ["TALLY-JE-ANCIENT", "1999-01-05"],
+      ["TALLY-JE-FUTURE", "2090-06-15"],
+    ] as const) {
+      await c.journal.create({
+        entryDate: new Date(date).toISOString(),
+        narration,
+        lines: [
+          { accountId: cashId, debit: "55.00", credit: "0" },
+          { accountId: capitalId, debit: "0", credit: "55.00" },
+        ],
+      });
+    }
+
+    const { xml } = await c.reports.tallyExport({ fromDate: UNBOUNDED_FROM, toDate: UNBOUNDED_TO });
+
+    expect(xml).toContain("TALLY-JE-ANCIENT");
+    expect(xml).toContain("TALLY-JE-FUTURE");
+  });
+
+  it("a bounded range still excludes them", async () => {
+    const { xml } = await caller().reports.tallyExport({
+      fromDate: new Date("2031-03-01").toISOString(),
+      toDate: new Date("2031-03-31").toISOString(),
+    });
+    expect(xml).not.toContain("TALLY-JE-ANCIENT");
+    expect(xml).not.toContain("TALLY-JE-FUTURE");
+  });
+});
+
 describe("reports.tallyExport after journal.delete", () => {
   it("keeps the deleted (voided) entry and its reversal in the XML so the books still net to zero", async () => {
     const c = caller();

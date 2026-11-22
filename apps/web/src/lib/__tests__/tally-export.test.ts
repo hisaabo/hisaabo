@@ -1,50 +1,77 @@
 import { describe, it, expect } from "vitest";
 import {
-  TALLY_EXPORT_ALL_TIME_FROM,
+  TALLY_EXPORT_UNBOUNDED_FROM,
+  TALLY_EXPORT_UNBOUNDED_TO,
   countTallyVouchers,
   resolveTallyRange,
+  tallyExportFilename,
   tallyXmlBlob,
 } from "../tally-export";
 
 describe("resolveTallyRange", () => {
-  const now = new Date("2026-11-22T08:15:00.000Z");
-
   it("passes explicit bounds through untouched", () => {
     const range = { fromDate: "2026-04-01T00:00:00.000Z", toDate: "2027-03-31T23:59:59.999Z" };
-    expect(resolveTallyRange(range, now)).toEqual(range);
+    expect(resolveTallyRange(range)).toEqual(range);
   });
 
-  it("fills both bounds for the 'All' preset (no dates)", () => {
-    expect(resolveTallyRange({}, now)).toEqual({
-      fromDate: TALLY_EXPORT_ALL_TIME_FROM,
-      toDate: "2026-11-22T23:59:59.999Z",
+  it("makes the 'All' preset (no dates) unbounded on both sides", () => {
+    expect(resolveTallyRange({})).toEqual({
+      fromDate: TALLY_EXPORT_UNBOUNDED_FROM,
+      toDate: TALLY_EXPORT_UNBOUNDED_TO,
     });
   });
 
-  it("fills only the missing bound", () => {
-    expect(resolveTallyRange({ fromDate: "2026-04-01T00:00:00.000Z" }, now)).toEqual({
+  it("leaves nothing out: the unbounded range covers future-dated entries too", () => {
+    const { toDate, fromDate } = resolveTallyRange({});
+    // Not "end of today": a voucher dated years ahead is inside the range.
+    expect(new Date(toDate).getTime()).toBeGreaterThan(new Date("2100-01-01").getTime());
+    expect(new Date(fromDate).getTime()).toBeLessThan(new Date("1971-01-01").getTime());
+  });
+
+  it("opens only the missing side", () => {
+    expect(resolveTallyRange({ fromDate: "2026-04-01T00:00:00.000Z" })).toEqual({
       fromDate: "2026-04-01T00:00:00.000Z",
-      toDate: "2026-11-22T23:59:59.999Z",
+      toDate: TALLY_EXPORT_UNBOUNDED_TO,
     });
-    expect(resolveTallyRange({ toDate: "2026-06-30T23:59:59.999Z" }, now)).toEqual({
-      fromDate: TALLY_EXPORT_ALL_TIME_FROM,
+    expect(resolveTallyRange({ toDate: "2026-06-30T23:59:59.999Z" })).toEqual({
+      fromDate: TALLY_EXPORT_UNBOUNDED_FROM,
       toDate: "2026-06-30T23:59:59.999Z",
     });
   });
 
   it("treats empty strings (an unfilled custom range) like missing bounds", () => {
-    expect(resolveTallyRange({ fromDate: "", toDate: "" }, now).fromDate).toBe(TALLY_EXPORT_ALL_TIME_FROM);
+    expect(resolveTallyRange({ fromDate: "", toDate: "" })).toEqual(resolveTallyRange({}));
   });
 
   it("produces datetimes the server schema (z.string().datetime()) accepts", () => {
-    const { fromDate, toDate } = resolveTallyRange({}, now);
+    const { fromDate, toDate } = resolveTallyRange({});
     for (const v of [fromDate, toDate]) {
       expect(new Date(v).toISOString()).toBe(v);
     }
   });
+});
 
-  it("ends 'today' on the UTC day, even late in the evening UTC", () => {
-    expect(resolveTallyRange({}, new Date("2026-11-22T23:30:00.000Z")).toDate).toBe("2026-11-22T23:59:59.999Z");
+describe("tallyExportFilename", () => {
+  const server = "tally-export-2026-04-01-to-2027-03-31.xml";
+
+  it("keeps the server's name when both bounds were given", () => {
+    expect(
+      tallyExportFilename({ fromDate: "2026-04-01T00:00:00.000Z", toDate: "2027-03-31T23:59:59.999Z" }, server),
+    ).toBe(server);
+  });
+
+  it("names an unbounded 'All' export plainly instead of 1900-01-01-to-9999-12-31", () => {
+    expect(tallyExportFilename({}, "tally-export-1900-01-01-to-9999-12-31.xml")).toBe("tally-export-all.xml");
+    expect(tallyExportFilename({ fromDate: "", toDate: "" }, "x.xml")).toBe("tally-export-all.xml");
+  });
+
+  it("names a half-open range after the side that was given", () => {
+    expect(tallyExportFilename({ fromDate: "2026-04-01T00:00:00.000Z" }, "x.xml")).toBe(
+      "tally-export-2026-04-01-to-latest.xml",
+    );
+    expect(tallyExportFilename({ toDate: "2026-06-30T23:59:59.999Z" }, "x.xml")).toBe(
+      "tally-export-start-to-2026-06-30.xml",
+    );
   });
 });
 

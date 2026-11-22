@@ -27,7 +27,7 @@ vi.mock("@/lib/trpc", () => ({
 vi.mock("@/hooks/useToast", () => ({ toast: toastApi }));
 
 import { TallyExportPanel } from "../TallyExportPanel";
-import { TALLY_EXPORT_ALL_TIME_FROM } from "@/lib/tally-export";
+import { TALLY_EXPORT_UNBOUNDED_FROM, TALLY_EXPORT_UNBOUNDED_TO } from "@/lib/tally-export";
 
 const XML_ONE_VOUCHER = [
   '<?xml version="1.0" encoding="UTF-8"?>',
@@ -106,17 +106,28 @@ describe("TallyExportPanel", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:tally");
   });
 
-  it("gives the 'All' preset the bounds the server requires", async () => {
+  it("'All' is unbounded on both sides (future-dated vouchers included) and is saved as tally-export-all.xml", async () => {
     localStorage.setItem("hisaabo-daterange-tally-export", "all");
-    fetchTallyExport.mockResolvedValue({ xml: XML_ONE_VOUCHER, filename: "x.xml" });
+    fetchTallyExport.mockResolvedValue({
+      xml: XML_ONE_VOUCHER,
+      filename: "tally-export-1900-01-01-to-9999-12-31.xml",
+    });
     render(<TallyExportPanel />);
+    expect(screen.getByText(/Every voucher on record, including future-dated entries/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Download Tally XML/ }));
 
     await waitFor(() => expect(fetchTallyExport).toHaveBeenCalledTimes(1));
-    const arg = fetchTallyExport.mock.calls[0]![0] as { fromDate: string; toDate: string };
-    expect(arg.fromDate).toBe(TALLY_EXPORT_ALL_TIME_FROM);
-    expect(arg.toDate).toMatch(/T23:59:59\.999Z$/);
+    expect(fetchTallyExport.mock.calls[0]![0]).toEqual({
+      fromDate: TALLY_EXPORT_UNBOUNDED_FROM,
+      toDate: TALLY_EXPORT_UNBOUNDED_TO,
+    });
+    await waitFor(() => expect(downloadedAs).toBe("tally-export-all.xml"));
+  });
+
+  it("does not show the 'every voucher' note for a bounded preset", () => {
+    render(<TallyExportPanel />); // default preset: This FY
+    expect(screen.queryByText(/Every voucher on record/)).toBeNull();
   });
 
   it("does not download an empty export, and says why", async () => {

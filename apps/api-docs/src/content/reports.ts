@@ -1016,7 +1016,7 @@ with open(data["filename"], "w") as f:
       },
       gotchas: [
         "This is the Tally export to use: it produces the XML Tally Prime imports (Gateway of Tally > Import > Data). The web Reports > Tally Export tab downloads it. The older CSV endpoint, `party.tallyExport`, is deprecated because Tally cannot import CSV.",
-        "Both `fromDate` and `toDate` are required (ISO datetimes). The web app fills in the bounds for its \"All\" preset (2000-01-01 to the end of today).",
+        "Both `fromDate` and `toDate` are required (ISO datetimes). For an open-ended export send a very early `fromDate` and a very late `toDate`: the web app's \"All\" preset sends 1900-01-01T00:00:00.000Z to 9999-12-31T23:59:59.999Z, which cuts nothing off (future-dated vouchers included), and saves the file as `tally-export-all.xml`.",
         "There is no row limit. `party.tallyExport` capped the export at 1,000 rows per voucher type by default.",
         "Manual journal entries are included alongside derived vouchers. Voided entries are included together with their reversing entries, so they net to zero in Tally.",
         "Withheld customer TDS is a ledger line of the receipt voucher (Dr TDS Receivable, account 1600).",
