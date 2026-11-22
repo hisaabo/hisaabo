@@ -23,9 +23,9 @@ export interface NotificationWorkerDecision {
  *   unset / empty               on for self-hosted single-tenant, OFF when MULTI_TENANT=true
  *
  * The multi-tenant default is off because today's dispatcher scans every active
- * tenant database (NOTIFICATIONS_FULL_SWEEP_SECONDS) and churns the tenant
- * connection pool (TENANT_POOL_MAX); an operator who upgrades with an untouched
- * env must not get that load. Cloud operators opt in with
+ * tenant database (NOTIFICATIONS_FULL_SWEEP_SECONDS), one short-lived connection
+ * per tenant; an operator who upgrades with an untouched env must not get that
+ * load. Cloud operators opt in with
  * NOTIFICATIONS_WORKER=true until the queue-backed dispatcher lands
  * (docs/architecture/notifications.md §6). While it is off, events queue in
  * notification_outbox and are delivered once a worker is enabled.

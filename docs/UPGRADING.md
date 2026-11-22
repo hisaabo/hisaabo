@@ -7,7 +7,8 @@ A bug-fix release. It is a drop-in image bump (pull, restart); the migration ste
 ### What is fixed
 
 - **Multi-tenant: intermittent `CONNECTION_ENDED` errors.** The API keeps a cache of tenant database pools (`TENANT_POOL_MAX`, default 50). When the cache was full, serving another tenant evicted the least recently used pool and **closed** it, even while a request that had already taken that pool was still working. That request's next query, or its next transaction, failed with `write CONNECTION_ENDED`. With more tenants than pool slots (for example 229 tenants), and the recurring-invoice scheduler walking every tenant each minute, this was easy to hit. An evicted pool is now just dropped from the cache: requests holding it finish normally, and its connections close by themselves after 20 idle seconds.
-- **Multi-tenant: the recurring-invoice scheduler no longer uses the shared pool cache.** It visits each tenant with its own single-connection client and closes it afterwards, so its minute-by-minute sweep no longer evicts the pools live requests are using. Self-hosted (single-tenant) installs behave as before.
+- **Multi-tenant: background loops over every tenant no longer use the shared pool cache.** The recurring-invoice scheduler, the notification dispatcher and collections sweep, the legacy store-slug scan, the shipping-webhook owner lookup and the `rotate-key` / `encrypt-sensitive-fields` tools visit each tenant with their own single-connection client and close it afterwards, so a sweep no longer evicts the pools live requests are using. Self-hosted (single-tenant) installs behave as before.
+- **A recurring template that cannot generate no longer writes a `failed` run every minute.** The failure is recorded once per distinct error for that occurrence; the template stays due and is retried quietly.
 - **Recurring invoices could be generated twice when more than one API replica was running.** The row lock that was meant to prevent it was released before the invoice was generated. Each occurrence is now claimed and generated in one transaction under the template's row lock, and a unique index on the occurrence rejects a second run as a backstop. "Run now" clicked twice quickly now creates two successive invoices (two occurrences) instead of racing for the same one.
 - **E-invoice submission after invoice creation** takes its own tenant database handle when it runs, instead of reusing the request's, which could already be gone.
 
@@ -34,18 +35,18 @@ ORDER BY first_at DESC;
 
 ### Multi-tenant: size the tenant connection pools
 
-The defaults (`TENANT_POOL_MAX=50`, `TENANT_POOL_PER_DB_MAX=5`) allow one API process up to 250 tenant connections, more than Postgres' default `max_connections` of 100. Idle pools hold no connections, so a quiet system never gets near that, but a busy period can. The ceiling is the **product** of the two settings, so never raise `TENANT_POOL_MAX` alone.
+The defaults (`TENANT_POOL_MAX=50`, `TENANT_POOL_PER_DB_MAX=5`, and the new `TENANT_POOL_DRAINING_MAX`, which defaults to `TENANT_POOL_MAX`) allow one API process up to `(50 + 50) x 5 = 500` tenant connections, far above Postgres' default `max_connections` of 100. Idle pools hold no connections, so a quiet system never gets near that, but a busy period can. **Never raise `TENANT_POOL_MAX` alone**: the bound is `(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX`.
 
-For about 230 tenants on `max_connections = 100`, set:
+For about 230 tenants on `max_connections = 100` (one API process and one worker), set:
 
 ```
-TENANT_POOL_MAX=20
+TENANT_POOL_MAX=10
 TENANT_POOL_PER_DB_MAX=2
 ```
 
-That caps live tenant pools at 40 connections and leaves room for the control and queue connections (about 15 per API process, about 25 for a worker), pools that were evicted and are still draining, and operators. On a server with `max_connections = 300`, `TENANT_POOL_MAX=100` with `TENANT_POOL_PER_DB_MAX=2` (ceiling 200) keeps most active tenants cached. Keep `TENANT_POOL_PER_DB_MAX` at 2 or more, and add the connections of every API replica and worker when you add them up. The full budget is in [DEPLOYMENT.md](DEPLOYMENT.md#tenant-connection-budget-multi-tenant).
+That bounds tenant connections at `(10 + 10) x 2 = 40`. Add about 15 for the API's control, queue and cache connections, about 25 for the worker (conservative: today the worker only runs the system ping job), about 5 for background tenant visits, about 10 for operators and 3 reserved by Postgres, and you are at about 98. It is tight: a second API replica does not fit until `max_connections` is raised. On a server with `max_connections = 300`, `TENANT_POOL_MAX=50` with `TENANT_POOL_PER_DB_MAX=2` (bound 200) keeps most active tenants cached. Keep `TENANT_POOL_PER_DB_MAX` at 2 or more, and add every replica and worker when you add things up. The full budget, and what to do when the API logs `[tenant-pool] ... ended the oldest`, is in [DEPLOYMENT.md](DEPLOYMENT.md#tenant-connection-budget-multi-tenant).
 
-Because eviction no longer closes a pool, a cache miss now leaves the evicted pool's connections open for up to 20 seconds instead of closing them at once. With a cache that is large enough for the tenants active together this is invisible; with a very small cache and many active tenants it can briefly add up, which is one more reason to size both settings as above. To check, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;` during a busy period.
+How eviction behaves: an evicted pool is not closed, so a request still using it is not affected, and its connections close by themselves after 20 idle seconds. At most `TENANT_POOL_DRAINING_MAX` evicted pools are allowed to drain at once; beyond that the oldest is closed after its running queries finish (up to 30 seconds). Only in such a storm, where more pools are evicted inside 20 seconds than the cap allows, can a request that holds the closed pool fail with `CONNECTION_ENDED`, and only if it starts a new query or transaction after that. To check connections during a busy period, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
 ### Upgrade
 
