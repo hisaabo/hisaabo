@@ -304,6 +304,7 @@ The `calcLineItem` and `calcInvoiceTotals` functions in `calc.ts` use the `money
 - Target state: Use `money.sum()` and `money.add()` throughout, accumulate paise integers.
 - Evidence: `gst-reports.ts` lines 198-219 (totals), 411-425 (ITC calculation).
 - Remediation: Replace `parseFloat` + `+=` pattern with `money.add()` accumulation.
+- **Status (0.10.1): resolved** for `generateGSTR1` and `generateGSTR3B`. Every total, group and head is accumulated as integer paise through `money.add` / `money.sub` / `money.sum`, and CGST/SGST are split with the shared `money.splitHalf`; the report types still expose JS numbers, converted once at the end with `money.toNumber`. The CSV `toFixed(2)` calls and the portal-JSON helpers are unchanged.
 - Effort: 1 day.
 
 ### 4.2 NUMERIC(15,2) Constraint

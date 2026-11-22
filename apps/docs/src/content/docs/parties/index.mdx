@@ -40,7 +40,7 @@ Tap **Parties** in the bottom tab bar, then tap the floating **+** button. A ful
 | Billing Address | Invoice billing address |
 | Shipping Address | Delivery address (if different from billing) |
 | City, Pincode | Address details |
-| Opening Balance | Amount the party owes you (positive) or you owe them (negative) as of the day you start using Hisaabo |
+| Opening Balance | What the party owes you (customer) or what you owe them (supplier), as of the day you start using Hisaabo. See [Opening balance](#opening-balance) |
 | Credit Period (days) | Number of days before invoices become overdue. Used to auto-set due dates. |
 | Credit Limit | Maximum outstanding amount allowed. Shown as a warning (not a hard block). |
 | Category | Free-text category for grouping parties |
@@ -56,10 +56,14 @@ A party is either a **customer** or a **supplier**, but the same entity can be b
 
 The opening balance represents the amount outstanding before you started using Hisaabo.
 
-- **Positive opening balance**: The party owes you money (receivable). For example, if a customer had an unpaid invoice of ₹5,000 when you migrated to Hisaabo, enter `5000`.
-- **Negative opening balance**: You owe the party money (payable). For example, if you had an outstanding bill to a supplier of ₹12,000, enter `-12000`.
+Enter it in the party's own direction, as a positive number:
 
-The opening balance is included in the party's running balance calculation.
+- **Customer**: what the customer owes you. For example, if a customer had an unpaid invoice of ₹5,000 when you migrated to Hisaabo, enter `5000`.
+- **Supplier**: what you owe the supplier. For example, if you had an outstanding bill to a supplier of ₹12,000, enter `12000`. Purchase invoices add to it, payments you make reduce it.
+
+A negative opening balance means the opposite: a customer you owe (for example an advance they paid) or a supplier who owes you (an advance you paid).
+
+The opening balance is included in the party's balance. In the party's ledger (debit minus credit) a supplier's opening balance starts on the credit side, so it shows as a negative running balance, like the supplier's purchase invoices.
 
 ## Viewing a party
 
@@ -92,10 +96,10 @@ The ledger shows every transaction affecting the party's balance in chronologica
 | Credit | Amount you paid or received |
 | Balance | Running balance after this transaction |
 
-The ledger starts with the opening balance entry, then lists invoices and payments. The final row shows the current outstanding balance.
+The ledger starts with the opening balance entry, then lists invoices, credit and debit notes, returns and payments. The final row shows the current outstanding balance. Quotations, proforma invoices and delivery challans never count toward a balance.
 
 :::tip[Positive vs negative balance]
-A positive running balance means the party owes you money. A negative running balance means you owe them money. For suppliers, a negative balance (you owe them) is normal.
+A positive running balance means the party owes you money. A negative running balance means you owe them money. For suppliers, a negative balance (you owe them) is normal. A supplier's opening balance is the amount you owe them: enter it as a positive number and the ledger starts it on the credit (negative) side.
 :::
 
 ## Filtering the party list

@@ -754,7 +754,7 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.balanceSheet?input={p
       method: "query",
       path: "reports.profitAndLoss",
       title: "Profit & Loss",
-      description: "Income statement (P&L) for a date range, based on the Chart of Accounts. Returns income and expense line items with gross profit and net profit calculations. Gross profit is calculated as Sales (4000) minus direct costs (5000 Purchases + 5100 Direct Expenses).",
+      description: "Income statement (P&L) for a date range, based on the Chart of Accounts. Returns income and expense line items with gross profit and net profit calculations. Gross profit is net sales (4000 Sales + 4010 Sales Returns) minus net direct costs (5000 Purchases + 5010 Purchase Returns + 5100 Direct Expenses). Invoice-level round-off, discount and additional charges post to 5030 Round Off, 5020 Discount Allowed / 4200 Discount Received and 4020 Other Charges / 5100 Direct Expenses.",
       auth: "business",
       input: [
         { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
@@ -790,7 +790,7 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.profitAndLoss?input={
       },
       gotchas: [
         "Income accounts: `amount = credit - debit` (credit-normal). Expense accounts: `amount = debit - credit` (debit-normal).",
-        "`grossProfit = Sales (4000) - Sales Returns (4010) - Purchases (5000) - Direct Expenses (5100)`.",
+        "`grossProfit = (Sales 4000 + Sales Returns 4010) - (Purchases 5000 + Purchase Returns 5010 + Direct Expenses 5100)`; 4010 and 5010 amounts are negative on their own accounts, so returns reduce the totals.",
         "`netProfit = totalIncome - totalExpenses`.",
       ],
       relatedEndpoints: ["reports-balance-sheet"],

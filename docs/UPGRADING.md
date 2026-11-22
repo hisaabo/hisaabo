@@ -1,5 +1,45 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to v0.10.1
+
+A correctness release: no new environment variables, no configuration or compose changes. The API's migration step applies one small data-only migration on first boot (see [What the migration does](#what-the-migration-does)); re-running it is a no-op. Back up before you upgrade, as always.
+
+### Corrected accounting and GST figures
+
+> **Warning: figures for past periods will change. Review previously filed returns.**
+> Hisaabo does not store GSTR-1, GSTR-3B, party balances or the trial balance. It recomputes them from your invoices, notes and payments every time you open them. After this upgrade the **past periods** are recomputed with the corrected rules below, so a GSTR-3B or GSTR-1 you have already filed can now show different numbers from the ones you filed, and party balances, party statements, the P&L, the trial balance and the balance sheet can differ from what you saw before. Before you file the next return or an amendment, re-open the months you have already filed, compare them with what was filed, and take any difference to your CA.
+
+What was wrong, and what you see now:
+
+| Where | Before | Now |
+|---|---|---|
+| **Round-off, invoice discount, additional charges (books)** | An invoice, credit note, debit note or return that carried a round-off, an invoice-level discount or additional charges was posted to the ledger without them, so the trial balance and balance sheet were out of balance by exactly that amount. | They post to accounts of their own, mirrored for notes and returns: round-off to **Round Off** (5030, either sign), the discount to **Discount Allowed** (5020) on sales and **Discount Received** (4200) on purchases, additional charges to **Other Charges** (4020) on sales and **Direct Expenses** (5100) on purchases. Every document balances, and net profit now includes them. The GST on the document is unchanged (it is computed before the invoice-level discount, as the invoice shows). |
+| **Gross profit** | Sales returns were never deducted and purchase returns were ignored. | Gross profit is (Sales + Sales Returns) - (Purchases + Purchase Returns + Direct Expenses). |
+| **GSTR-3B, input tax credit (Table 4)** | Purchase returns and purchase-side debit notes were **added** to the credit, overstating it. | They **reduce** it, by head (CGST, SGST, IGST), as in your books. |
+| **GSTR-3B, output tax (Table 3.1(a), Tax Payable, Net Tax)** | Credit notes, sales returns and sale-side debit notes were ignored, overstating the tax when you issued credit notes. | Taxable value and tax are **net of credit notes and sales returns and include sale-side debit notes**, per head. GSTR-1 still lists the invoices gross and the notes in their own section. |
+| **CGST / SGST on an odd paisa** | GSTR-1 and GSTR-3B rounded the odd paisa up for both heads: an invoice with GST of 102.59 reported 51.30 + 51.30 = 102.60. | CGST 51.29 + SGST 51.30 = 102.59, exactly as on the invoice and in the books. GSTR-1 and GSTR-3B totals go down by one paisa per affected invoice. |
+| **GSTR-1, debit notes** | Purchase-side debit notes and purchase returns, which you issue to a supplier, were listed as outward debit notes. | Only sale-side debit notes are listed. |
+| **Party balance (party page, party list, "Outstanding" filter)** | Quotations, proformas and delivery challans were counted, and a purchase-side debit note was added to what you owe a supplier instead of reducing it. | Only invoices, credit notes, sales returns, purchase returns and debit notes count. Credit notes, returns and purchase-side debit notes reduce the balance. The balance is still shown as a positive number for what a customer owes you and what you owe a supplier. |
+| **Party statement, ledger and ledger PDF, for suppliers** | A supplier's opening balance started the statement on the wrong side: a supplier you owed 10,000 with a 4,000 purchase closed at 6,000. | The statement is debit minus credit, so it starts a supplier at the opening balance as a **credit** and closes at -14,000 (the Cr / "You will pay" side), the same amount the party page shows as owed. Customers are unchanged. On the party page's Ledger tab, payments to a supplier were also shown as credits, purchase-side debit notes were on the wrong side and deleted payments were listed; all three are fixed. |
+| **ITC utilisation** | Recording a period's utilisation a second time posted the credit a second time, and Input GST went negative. | Recording a period again **replaces** its journal: the earlier one is reversed (marked void, with a mirror entry; nothing is deleted) and the new one posted. Recording zero amounts clears the period. |
+
+#### What the migration does
+
+`0023_ledger_adjustment_accounts` (`0010_ledger_adjustment_accounts` for tenant databases) only adds the three system accounts above (4020 Other Charges, 5020 Discount Allowed, 5030 Round Off) to every existing business. It is idempotent and rewrites no document. If a business already has an account of its own coded 4020, 5020 or 5030 it is left untouched, and the adjustment then posts to Other Income (4100) or Miscellaneous Expenses (5990) instead of failing.
+
+#### What to do after upgrading
+
+1. **Re-open every GSTR-3B and GSTR-1 you have already filed** (GST, pick the month) and compare with what was filed. Differences come from credit notes, returns, debit notes and odd-paisa GST; if one is material, your CA decides whether to amend.
+2. Open the **trial balance** and **balance sheet**: they now balance for invoices with a round-off, discount or charges. New rows (Round Off, Discount Allowed, Other Charges) appear in the P&L when you used those fields.
+3. **ITC utilisation recorded twice before this release** is not rewritten automatically. Open ITC, **Utilization**, pick the period, and save it again: the doubled journal is reversed and one correct journal is posted.
+4. **Supplier opening balances** are read as the amount you owe the supplier, entered as a positive number (a customer's is what they owe you). If you entered a supplier's opening balance as a negative number, check the supplier's statement.
+
+#### Points to confirm with your CA
+
+- A **purchase-side debit note** (a debit note you raise against a supplier) is treated like a purchase return: it reduces input credit in GSTR-3B Table 4, matching the books. Under the GST law a *debit note issued by the supplier* increases credit; Hisaabo's purchase-side debit note is the one you issue.
+- An **invoice-level discount** is booked after GST (as a Discount Allowed expense); it does not reduce the taxable value or the GST on the invoice.
+- **Round Off** is an expense account that can carry either sign; a net credit shows as a negative expense.
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.

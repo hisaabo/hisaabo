@@ -25,7 +25,7 @@ You can enter any tax percentage up to 56% (to accommodate cess-inclusive rates)
 
 Hisaabo determines CGST+SGST versus IGST using **2-digit GST state codes**:
 
-- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each = tax / 2)
+- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each = tax / 2; when the tax is an odd number of paise the extra paisa goes to SGST, e.g. ₹102.59 = CGST ₹51.29 + SGST ₹51.30)
 - If the state codes differ → **inter-state** → IGST (= full tax)
 
 ### Example
@@ -90,7 +90,7 @@ A credit note reduces the customer's outstanding amount. Common uses:
 
 Create a credit note by selecting document type **Credit Note** when creating a document. Link it to the original invoice using the **Reference Document** field.
 
-In GSTR-1, credit notes appear under section CDN (Credit/Debit Notes) with the original invoice number. They reduce your output tax liability.
+In GSTR-1, credit notes appear under section CDN (Credit/Debit Notes) with the original invoice number. GSTR-3B reports the month's output tax net of them, so they reduce your output tax liability.
 
 ### Debit notes
 
@@ -100,7 +100,7 @@ A debit note increases the customer's outstanding amount. Common uses:
 
 Create a debit note by selecting document type **Debit Note**. Like credit notes, link to the original invoice.
 
-In GSTR-1, debit notes appear under CDN and increase your output tax liability.
+In GSTR-1, debit notes appear under CDN and GSTR-3B adds them to your output tax. Only sale-side debit notes count as outward supplies; a debit note you raise against a supplier reduces your input tax credit instead.
 
 ## How GST appears on the PDF
 
