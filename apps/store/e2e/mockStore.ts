@@ -17,6 +17,8 @@ window.turnstile = {
   reset() {},
 };`;
 
+const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
+
 export interface MockOptions extends FixtureOptions {
   /** Let Google Fonts through (screenshots); tests block it to stay hermetic. */
   fonts?: boolean;
@@ -27,7 +29,9 @@ export async function mockStoreApi(page: Page, opts: MockOptions = {}): Promise<
   const catalog = buildCatalog(opts);
 
   if (!opts.fonts) {
-    await page.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+    // Match the exact hostname, not a substring of the URL: an unanchored pattern would also
+    // swallow any URL that merely contains "fonts.googleapis.com" in its path or query.
+    await page.route((url) => FONT_HOSTS.has(url.hostname), (r) => r.abort());
   }
   await page.route("https://challenges.cloudflare.com/**", (r) =>
     r.fulfill({ contentType: "application/javascript", body: TURNSTILE_STUB }),
