@@ -1,10 +1,9 @@
 /**
- * Rate limiting and double-submit protection on the browser side.
+ * Rate limiting on the browser side.
  *
  *   - a token bucket caps approved writes per minute and answers the agent in plain words
- *   - approved writes execute one at a time (the second waits for the first), which is
- *     what lets the server-side idempotency key catch a duplicated call
- *   - the write tools send an idempotency key that is stable for an identical request
+ *   - approved writes execute one at a time: a second write never races the first
+ *     (retries of one write are covered in idempotency.test.ts)
  *   - the API's own 429 reaches the agent as a readable error
  */
 
@@ -18,8 +17,6 @@ import {
   toErrorResult,
 } from "../runtime";
 import { resetWriteBudget } from "../budget";
-import { deriveIdempotencyKey, idempotencyKeyFor } from "../tools/shared";
-import { webMcpTools } from "../tools";
 import type { WebMcpToolContext, WebMcpToolDefinition } from "../types";
 
 const opts = () => ({ signal: new AbortController().signal });
@@ -176,79 +173,6 @@ describe("approved writes run one at a time", () => {
     const [bad, good] = await Promise.all([failing.execute({}, opts()), fine.execute({}, opts())]);
     expect(bad).toMatchObject({ isError: true });
     expect(good).not.toMatchObject({ isError: true });
-  });
-
-  it("a duplicated tool call reaches the API twice, in order, with the SAME idempotency key", async () => {
-    const seen: string[] = [];
-    const create = {
-      ...(webMcpTools.find((t) => t.name === "party_create") as WebMcpToolDefinition),
-    };
-    // Stand in for the API: the first call creates, the second (same key) is the replay.
-    const created = new Map<string, string>();
-    const idempotentCreate = writeDef(async (input, c) => {
-      const key = deriveIdempotencyKey("party_create", c.businessId, input);
-      seen.push(key);
-      if (!created.has(key)) created.set(key, `party-${created.size + 1}`);
-      return { id: created.get(key) };
-    });
-    expect(create.name).toBe("party_create");
-
-    const tool = buildBrowserTool(idempotentCreate, ctx());
-    const [a, b] = await Promise.all([
-      tool.execute({ type: "customer", name: "Acme" }, opts()),
-      tool.execute({ type: "customer", name: "Acme" }, opts()),
-    ]);
-    expect(seen[0]).toBe(seen[1]);
-    expect(created.size).toBe(1);
-    expect(text(a)).toContain("party-1");
-    expect(text(b)).toContain("party-1");
-  });
-});
-
-describe("idempotency keys sent by the write tools", () => {
-  const KEY_RE = /^[A-Za-z0-9_.:-]{8,100}$/;
-
-  it("derives a well-formed key that is stable for an identical request", () => {
-    const input = { partyId: "p", type: "sale", lineItems: [{ itemName: "A", quantity: "1", unitPrice: "10.00" }] };
-    const a = deriveIdempotencyKey("invoice_create", "biz-1", input);
-    expect(a).toMatch(KEY_RE);
-    expect(deriveIdempotencyKey("invoice_create", "biz-1", { ...input })).toBe(a);
-    // Field order and an explicit idempotencyKey do not matter.
-    expect(
-      deriveIdempotencyKey("invoice_create", "biz-1", {
-        lineItems: [{ unitPrice: "10.00", quantity: "1", itemName: "A" }],
-        type: "sale",
-        idempotencyKey: "anything-else",
-        partyId: "p",
-      }),
-    ).toBe(a);
-  });
-
-  it("changes when the request, the business or the tool changes", () => {
-    const input = { partyId: "p", amount: "10.00" };
-    const base = deriveIdempotencyKey("payment_create", "biz-1", input);
-    expect(deriveIdempotencyKey("payment_create", "biz-1", { ...input, amount: "10.01" })).not.toBe(base);
-    expect(deriveIdempotencyKey("payment_create", "biz-2", input)).not.toBe(base);
-    expect(deriveIdempotencyKey("invoice_create", "biz-1", input)).not.toBe(base);
-  });
-
-  it("honours a well-formed key from the agent and ignores a malformed one", () => {
-    expect(idempotencyKeyFor("invoice_create", "biz-1", { idempotencyKey: "my-attempt-0002" })).toBe("my-attempt-0002");
-    const derived = deriveIdempotencyKey("invoice_create", "biz-1", { idempotencyKey: "short" });
-    expect(idempotencyKeyFor("invoice_create", "biz-1", { idempotencyKey: "short" })).toBe(derived);
-    expect(idempotencyKeyFor("invoice_create", "biz-1", { idempotencyKey: "has spaces in it" })).toMatch(KEY_RE);
-  });
-
-  it("is declared on invoice_create and payment_create, and nowhere else", () => {
-    for (const t of webMcpTools) {
-      const has = t.inputSchema.properties?.idempotencyKey !== undefined;
-      expect(has, t.name).toBe(t.name === "invoice_create" || t.name === "payment_create");
-    }
-    for (const name of ["invoice_create", "payment_create"]) {
-      const def = webMcpTools.find((t) => t.name === name)!;
-      expect(def.description).toMatch(/Safe to retry/);
-      expect(def.inputSchema.required).not.toContain("idempotencyKey");
-    }
   });
 });
 

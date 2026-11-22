@@ -428,11 +428,12 @@ export const paymentAllocationSchema = z.object({
 
 /**
  * Optional client-supplied idempotency key for create mutations (invoice.create,
- * payment.create). Reusing a key with the SAME input returns the record the first
- * call created instead of creating a second one; reusing it with DIFFERENT input
- * is a CONFLICT. Keys are remembered for a short window (see
- * IDEMPOTENCY_WINDOW_MINUTES), per business and user. Used by the browser-agent
- * (WebMCP) tools so a retried or double-submitted call cannot double-book.
+ * payment.create). Strictly opt-in: without a key every call creates a record.
+ * Reusing a key with the SAME input is a replay: nothing new is created and the
+ * live record comes back flagged `idempotentReplay: true`; reusing it with
+ * DIFFERENT input is a CONFLICT. Keys are remembered for a short window (see
+ * IDEMPOTENCY_WINDOW_MINUTES), per business and user, as a record id only. The
+ * browser-agent (WebMCP) tools send one only when the agent passes it.
  */
 export const IDEMPOTENCY_WINDOW_MINUTES = 15;
 export const idempotencyKeySchema = z

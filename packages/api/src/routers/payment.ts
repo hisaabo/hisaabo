@@ -6,7 +6,7 @@ import { createPaymentSchema, idempotencyInputSchema, updatePaymentSchema, pagin
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
-import { claimIdempotencyKey, completeIdempotencyKey } from "../lib/idempotency.js";
+import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
@@ -140,7 +140,8 @@ async function assertBankAccountUsable(tx: PaymentTx, ability: AppAbility, busin
   if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
 }
 
-type PaymentRow = typeof payments.$inferSelect;
+/** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
+type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -329,10 +330,10 @@ export const paymentRouter = router({
     requireCan(ctx.ability, "create", "Payment");
     const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "payment.create", key: input.idempotencyKey, input };
     const created = await ctx.db.transaction(async (tx) => {
-      // An idempotency key that was already used with this exact input returns the
-      // first call's payment here, before anything is written or any side effect runs.
-      const claim = await claimIdempotencyKey<PaymentRow>(tx, idempotency);
-      if (claim.kind === "replay") return { replayed: true as const, payment: claim.value };
+      // An idempotency key that was already used with this exact input is a replay:
+      // recognised here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, resourceId: claim.resourceId };
 
       // Security: validate that partyId belongs to the current business.
       const [partyCheck] = await tx.select({ id: parties.id, name: parties.name, type: parties.type })
@@ -517,10 +518,20 @@ export const paymentRouter = router({
         }
       }
 
-      await completeIdempotencyKey(tx, claim, payment);
+      await completeIdempotencyKey(tx, claim, payment.id);
       return { replayed: false as const, payment };
     });
-    if (created.replayed) return created.payment;
+    if (created.replayed) {
+      // Answer with the LIVE payment, flagged as a replay; if it was deleted since, say so.
+      const [live] = await ctx.db
+        .select()
+        .from(payments)
+        .where(and(eq(payments.id, created.resourceId), eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)))
+        .limit(1);
+      if (!live) throw replayedRecordGone("payment");
+      const replay: WithReplayFlag<typeof live> = { ...live, idempotentReplay: true };
+      return replay;
+    }
     const payment = created.payment;
 
     await logAudit(ctx.db, {
@@ -534,7 +545,9 @@ export const paymentRouter = router({
       source: ctx.source,
     });
 
-    return payment;
+    // A caller that sent a key is told this call really created the record.
+    const response: WithReplayFlag<typeof payment> = input.idempotencyKey ? { ...payment, idempotentReplay: false } : payment;
+    return response;
   }),
 
   getById: viewerProcedure

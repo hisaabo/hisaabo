@@ -601,14 +601,17 @@ export const auditLog = pgTable("audit_log", {
 
 // ── Idempotency keys ──────────────────────────────────────────
 //
-// Remembers the response of a create mutation (invoice.create, payment.create)
-// under a client-supplied key, so a retried or double-submitted call returns the
-// record the first call made instead of creating a second one. The claim row is
-// written in the SAME transaction as the record it protects: either both exist
-// or neither does, so there is no "in progress" state to get stuck in. Rows are
-// short-lived (expiresAt) and purged opportunistically by the next keyed write
-// in the business. Scoped per business, user and procedure, so one user can
-// never read another's stored response. See packages/api/src/lib/idempotency.ts.
+// Remembers WHICH record a create mutation (invoice.create, payment.create)
+// made under a client-supplied key, so a retried or double-submitted call with
+// the same key and the same input is recognised as a replay instead of creating
+// a second record. Only the record's id is kept, never a copy of the response,
+// so nothing the record contains (names, amounts, notes) is retained here: a
+// replay re-reads the live record. The claim row is written in the SAME
+// transaction as the record it protects: either both exist or neither does, so
+// there is no "in progress" state to get stuck in. Rows are short-lived
+// (expiresAt), purged by the next keyed write in the business and by an hourly
+// sweep. Scoped per business, user and procedure.
+// See packages/api/src/lib/idempotency.ts.
 
 export const idempotencyKeys = pgTable("idempotency_keys", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -619,8 +622,8 @@ export const idempotencyKeys = pgTable("idempotency_keys", {
   key: text("key").notNull(),
   // sha256 of the canonical input: same key + different input is rejected, not replayed.
   requestHash: text("request_hash").notNull(),
-  // superjson of what the first call returned; null only inside the claiming transaction.
-  response: text("response"),
+  // The record the first call created (an invoice or payment id); null only inside the claiming transaction.
+  resourceId: uuid("resource_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 }, (t) => [

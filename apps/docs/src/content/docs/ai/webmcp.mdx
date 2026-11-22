@@ -70,7 +70,7 @@ The browser surface is **curated**, not a mirror of the MCP server: it offers th
 | `dashboard_summary` | Read | `readOnlyHint`, `untrustedContentHint` | No | Sales, cash position, receivables for a period |
 | `invoice_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Invoices, filterable by status, party and date |
 | `invoice_get` | Read | `readOnlyHint`, `untrustedContentHint` | No | One invoice with its line items and tax breakdown |
-| `invoice_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Creates an invoice. Safe to retry, see below |
+| `invoice_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Creates an invoice. Opt-in `idempotencyKey` for safe retries, see below |
 | `invoice_update_status` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Marks an invoice sent, back to draft or unfulfilled. It **cannot cancel or void** an invoice |
 | `party_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Customers and suppliers, with outstanding balances |
 | `party_get` | Read | `readOnlyHint`, `untrustedContentHint` | No | One party with contact details and balance |
@@ -80,7 +80,7 @@ The browser surface is **curated**, not a mirror of the MCP server: it offers th
 | `item_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Creates a catalogue item |
 | `payment_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Recorded payments |
 | `payment_unpaid_invoices` | Read | `readOnlyHint`, `untrustedContentHint` | No | Invoices still awaiting payment |
-| `payment_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Records a payment against one or more invoices, optionally with the TDS the customer withheld. Safe to retry, see below |
+| `payment_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Records a payment against one or more invoices, optionally with the TDS the customer withheld. Opt-in `idempotencyKey` for safe retries, see below |
 | `tds_section_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | The active TDS sections a customer receipt may use |
 | `expense_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Recorded expenses |
 | `expense_categories` | Read | `readOnlyHint`, `untrustedContentHint` | No | Your expense categories |
@@ -97,9 +97,11 @@ Tools your role cannot use are not registered, so the agent is never offered a c
 | Seller manager | 19: no `expense_create` |
 | Seller | 15: no reports, no expenses, no `item_create` |
 
-### Retrying is safe
+### Retrying safely (opt-in)
 
-An agent that times out will retry, and some agents emit the same call twice. `invoice_create` and `payment_create` send an idempotency key derived from the request, so repeating the **identical** call within 15 minutes returns the invoice or payment the first call created — same number, same record — instead of booking a second one, and nothing is audited or stock-adjusted twice. Writes also run one at a time, so a duplicate always reaches the server after the original has committed. To deliberately create a second identical record, the agent passes a new `idempotencyKey`.
+An agent that times out will retry, and some agents emit the same call twice. `invoice_create` and `payment_create` accept an optional `idempotencyKey`, and **only** the agent can opt in: Hisaabo never guesses a key. Without one, every call creates a record, so two identical cash sales that you approve twice are two invoices.
+
+The tool descriptions tell the agent to pass a **fresh** key (for example a new UUID) for every record it intends to create, and to reuse that same key only to retry the same request. A retry with the same key and the same input within 15 minutes does not create anything: the server recognises it, re-reads the **live** record (its status may have moved on) and returns it flagged `idempotentReplay: true`. The agent is told in plain words, "No new record was created; this matches an earlier request with the same idempotencyKey. Pass a new key to create another", nothing is audited or stock-adjusted twice, and the replay does not use up one of the session's 20 writes. The same key with different input is an error, and a key whose record has since been deleted is a `CONFLICT` rather than a quiet new record. The server keeps only the id of the record against the key, never a copy of it, for the 15 minutes. Writes also run one at a time, so a duplicate always reaches the server after the original has committed.
 
 ---
 

@@ -3,16 +3,19 @@
  *
  * An agent that times out and retries, or fires the same call twice, must not
  * book the same invoice or payment twice. The caller passes an optional
- * `idempotencyKey`; this module makes "same key, same input" return the record
- * the first call created, and "same key, different input" a CONFLICT.
+ * `idempotencyKey`; this module makes "same key, same input" a REPLAY of the
+ * record the first call created, and "same key, different input" a CONFLICT.
+ *
+ * Idempotency is strictly opt-in. Without a key every call creates a record, as
+ * always: two identical cash sales are two sales. Nothing here ever infers a key.
  *
  * HOW IT STAYS CORRECT
  *
  *   claimIdempotencyKey()     runs as the FIRST statement of the creating
  *                             transaction. It inserts a claim row; the unique
  *                             index (business, user, procedure, key) is the lock.
- *   completeIdempotencyKey()  runs as the LAST statement, storing the response on
- *                             the claim row, in the same transaction.
+ *   completeIdempotencyKey()  runs as the LAST statement, storing the id of the
+ *                             record that was created, in the same transaction.
  *
  * Because claim and record commit or roll back together there is no "in
  * progress" state to get stuck in: if the create fails, the claim vanishes and a
@@ -21,15 +24,19 @@
  * it. A replay returns BEFORE any side effect (audit log, notifications,
  * background jobs), so a duplicate is invisible to the books.
  *
- * Keys are scoped per business AND user (one user can never read another's
- * stored response) and live for IDEMPOTENCY_WINDOW_MINUTES; expired rows are
- * purged by the next keyed write in the business.
+ * WHAT IS KEPT. Only the record's id (and a hash of the request, to tell a retry
+ * from a different request that reuses the key). Never a copy of the response, so
+ * a claim row retains none of the record's contents (party names, amounts, notes).
+ * The caller re-reads the LIVE record by id on replay, and answers CONFLICT if it
+ * no longer exists.
+ *
+ * Keys are scoped per business AND user, live for IDEMPOTENCY_WINDOW_MINUTES, and
+ * expired rows are purged by the next keyed write in the business.
  */
 
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, eq, lt, sql } from "drizzle-orm";
-import superjson from "superjson";
 import { idempotencyKeys } from "@hisaabo/db";
 import { IDEMPOTENCY_WINDOW_MINUTES } from "@hisaabo/shared";
 import type { TenantDatabase } from "../trpc.js";
@@ -48,13 +55,13 @@ export interface IdempotencyRequest {
   input: unknown;
 }
 
-export type IdempotencyClaim<T> =
+export type IdempotencyClaim =
   /** No key was given: do the work as usual, store nothing. */
   | { kind: "none" }
   /** First time this key is seen: do the work, then call completeIdempotencyKey. */
   | { kind: "claimed"; id: string }
-  /** The key was already used with the same input: return `value`, do nothing else. */
-  | { kind: "replay"; value: T };
+  /** The key was already used with the same input: re-read the record `resourceId` and return it, do nothing else. */
+  | { kind: "replay"; resourceId: string };
 
 /** JSON with sorted keys and no `idempotencyKey`, so equal requests hash equally however the client ordered fields. */
 export function canonicalize(value: unknown): string {
@@ -81,10 +88,7 @@ export function hashRequest(input: unknown): string {
  * Claim `key` for this request. Call inside the creating transaction, before
  * doing any work. See the file header for the guarantees.
  */
-export async function claimIdempotencyKey<T = unknown>(
-  tx: Executor,
-  req: IdempotencyRequest,
-): Promise<IdempotencyClaim<T>> {
+export async function claimIdempotencyKey(tx: Executor, req: IdempotencyRequest): Promise<IdempotencyClaim> {
   if (!req.key) return { kind: "none" };
 
   const requestHash = hashRequest(req.input);
@@ -125,7 +129,7 @@ export async function claimIdempotencyKey<T = unknown>(
     )
     .limit(1);
 
-  if (!existing || existing.response === null) {
+  if (!existing || existing.resourceId === null) {
     throw new TRPCError({
       code: "CONFLICT",
       message: "This idempotency key is being used by another request right now. Retry in a moment.",
@@ -135,23 +139,24 @@ export async function claimIdempotencyKey<T = unknown>(
     throw new TRPCError({
       code: "CONFLICT",
       message:
-        "This idempotencyKey was already used for a different request. Send a new key for a new request, or repeat the original request exactly to get its result back.",
+        "This idempotencyKey was already used for a different request. Send a new key for a new request, or repeat the original request exactly to get its record back.",
     });
   }
-  return { kind: "replay", value: superjson.parse<T>(existing.response) };
+  return { kind: "replay", resourceId: existing.resourceId };
 }
 
-/** Store the response on the claim row. Call as the last statement of the creating transaction. */
-export async function completeIdempotencyKey(
-  tx: Executor,
-  claim: IdempotencyClaim<unknown>,
-  response: unknown,
-): Promise<void> {
+/** Record which record was created. Call as the last statement of the creating transaction. */
+export async function completeIdempotencyKey(tx: Executor, claim: IdempotencyClaim, resourceId: string): Promise<void> {
   if (claim.kind !== "claimed") return;
-  await tx
-    .update(idempotencyKeys)
-    .set({ response: superjson.stringify(response) })
-    .where(eq(idempotencyKeys.id, claim.id));
+  await tx.update(idempotencyKeys).set({ resourceId }).where(eq(idempotencyKeys.id, claim.id));
+}
+
+/** The error for a replay whose record has since been deleted: never silently create a new one. */
+export function replayedRecordGone(what: string): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `The ${what} created by this idempotencyKey no longer exists, so nothing was created. Send a new idempotencyKey to create another.`,
+  });
 }
 
 /** Rows currently held for a business (used by tests and diagnostics). */

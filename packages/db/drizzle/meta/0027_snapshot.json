@@ -5046,9 +5046,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "response": {
-          "name": "response",
-          "type": "text",
+        "resource_id": {
+          "name": "resource_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },

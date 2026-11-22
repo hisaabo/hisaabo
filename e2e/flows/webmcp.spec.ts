@@ -378,17 +378,17 @@ test.describe("WebMCP: confirmed and declined writes", () => {
     for (const name of names) expect(await partiesNamed(name)).toHaveLength(0);
   });
 
-  test("a duplicated call books one invoice, not two", async ({ page }) => {
+  test("two identical calls without a key book two invoices: a repeat sale is a sale", async ({ page }) => {
     await openApp(page, { path: "/invoices" });
     await expect.poll(() => registeredToolNames(page)).toContain("invoice_create");
     const before = await invoiceCountFor(seed.partyId);
     const input = {
       partyId: seed.partyId,
       type: "sale",
-      lineItems: [{ itemName: `Double submit ${Date.now()}`, quantity: "1", unitPrice: "100.00", taxPercent: "0" }],
+      lineItems: [{ itemName: `Cash sale ${Date.now()}`, quantity: "1", unitPrice: "100.00", taxPercent: "0" }],
     };
 
-    // The agent fires the same call twice. Two prompts queue; the user approves both.
+    // Two identical cash sales: two prompts queue and the user approves both.
     const first = startToolCall(page, "invoice_create", input);
     const second = startToolCall(page, "invoice_create", input);
     await expect(page.getByText("2 pending")).toBeVisible();
@@ -398,10 +398,44 @@ test.describe("WebMCP: confirmed and declined writes", () => {
     const [a, b] = await Promise.all([first, second]);
     expect(a.isError).toBeFalsy();
     expect(b.isError).toBeFalsy();
-    const idA = envelope<{ data: { id: string; invoiceNumber: string } }>(a).data;
-    const idB = envelope<{ data: { id: string; invoiceNumber: string } }>(b).data;
-    expect(idB.id).toBe(idA.id);
-    expect(idB.invoiceNumber).toBe(idA.invoiceNumber);
+    const recordA = envelope<{ data: { id: string; invoiceNumber: string } }>(a).data;
+    const recordB = envelope<{ data: { id: string; invoiceNumber: string } }>(b).data;
+    expect(recordB.id).not.toBe(recordA.id);
+    expect(recordB.invoiceNumber).not.toBe(recordA.invoiceNumber);
+    expect(await invoiceCountFor(seed.partyId)).toBe(before + 2);
+  });
+
+  test("the same explicit idempotencyKey books one invoice, and the second call says it was a replay", async ({ page }) => {
+    await openApp(page, { path: "/invoices" });
+    await expect.poll(() => registeredToolNames(page)).toContain("invoice_create");
+    const before = await invoiceCountFor(seed.partyId);
+    const input = {
+      partyId: seed.partyId,
+      type: "sale",
+      idempotencyKey: `e2e-retry-${Date.now()}`,
+      lineItems: [{ itemName: `Retried sale ${Date.now()}`, quantity: "1", unitPrice: "100.00", taxPercent: "0" }],
+    };
+
+    // The agent retries the same intent with the same key (say, after a timeout); the user approves both prompts.
+    const first = startToolCall(page, "invoice_create", input);
+    const second = startToolCall(page, "invoice_create", input);
+    await expect(page.getByText("2 pending")).toBeVisible();
+    await page.getByRole("button", { name: "Allow" }).click();
+    await page.getByRole("button", { name: "Allow" }).click();
+
+    const results = await Promise.all([first, second]);
+    for (const r of results) expect(r.isError).toBeFalsy();
+    const bodies = results.map((r) => envelope<{ data: Record<string, unknown> }>(r).data);
+    const replays = bodies.filter((d) => d.idempotentReplay === true);
+    const creates = bodies.filter((d) => d.idempotentReplay === false);
+    expect(replays).toHaveLength(1);
+    expect(creates).toHaveLength(1);
+
+    // The replay says so in words and points at the invoice that already exists.
+    expect(replays[0].notice).toMatch(/No new record was created.*same idempotencyKey.*Pass a new key to create another/);
+    const existing = replays[0].record as { id: string; invoiceNumber: string };
+    expect(existing.id).toBe(creates[0].id);
+    expect(existing.invoiceNumber).toBe(creates[0].invoiceNumber);
     expect(await invoiceCountFor(seed.partyId)).toBe(before + 1);
   });
 });

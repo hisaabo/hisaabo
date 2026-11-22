@@ -14,7 +14,9 @@ import { calcInvoiceTotals, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAG
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
-  idempotencyKeyFor,
+  assertIdempotencyKey,
+  describeCreateResult,
+  idempotencyKeyOf,
   idempotencyKeyProp,
   enumArray,
   enumOf,
@@ -253,7 +255,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     "Set type='sale' for billing a customer and type='purchase' for recording a supplier's bill. partyId must come from party_list (create the party first if they are new); itemId on a line must come from item_list.",
     "Money and tax rates are decimal strings with 2 decimals ('15000.00', '18.00'); quantities allow 3 ('1.000'). Never send numbers or currency symbols. Totals, GST split and the invoice number are computed server-side — do not try to pass them.",
     "documentType defaults to 'invoice'; use 'quotation' to draft a quote instead, which creates no receivable.",
-    "Safe to retry: repeating the IDENTICAL call within 15 minutes (a timeout, a duplicated call) returns the invoice the first call created, with the same number, instead of booking a second one. To deliberately create a second identical invoice, pass a new idempotencyKey.",
+    "Retrying safely: pass a fresh idempotencyKey (for example a new UUID) for every invoice you intend to create, and reuse that same key only to retry that same request after a timeout. A retry with the same key within 15 minutes returns the invoice the first call created (same number, flagged idempotentReplay, no new record) instead of booking a second one. Without a key every call creates an invoice, so two identical sales are two invoices.",
     "Example: { partyId: '3f1c…', type: 'sale', lineItems: [{ itemName: 'Web Design', quantity: '1.000', unitPrice: '15000.00', taxPercent: '18.00' }], dueDate: '2026-10-14T00:00:00.000Z' }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -324,6 +326,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     }
     const lineItems = objectArray(input.lineItems);
     if (!lineItems || lineItems.length === 0) throw new Error("At least one line item is required.");
+    assertIdempotencyKey(input);
   },
   execute: async (input, ctx) => {
     invoiceCreate.validate!(input, ctx);
@@ -331,7 +334,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     const type = enumOf(input.type, INVOICE_TYPES)!;
     const lineItems = objectArray(input.lineItems)!;
 
-    return await ctx.client.invoice.create.mutate({
+    const created = await ctx.client.invoice.create.mutate({
       partyId,
       type,
       documentType: enumOf(input.documentType, DOCUMENT_TYPES),
@@ -343,9 +346,10 @@ const invoiceCreate: WebMcpToolDefinition = {
       invoiceDiscount: str(input.invoiceDiscount),
       invoiceDiscountType: enumOf(input.invoiceDiscountType, DISCOUNT_TYPES),
       roundOff: str(input.roundOff),
-      // A retry of the identical call returns the first invoice instead of a second one.
-      idempotencyKey: idempotencyKeyFor("invoice_create", ctx.businessId, input),
+      // Only when the agent chose one: a retry with it returns the first invoice instead of a second.
+      idempotencyKey: idempotencyKeyOf(input),
     });
+    return describeCreateResult(created);
   },
 };
 

@@ -104,12 +104,15 @@ describe("invoice.create with an idempotency key", () => {
     expect(second.id).toBe(first.id);
     expect(second.invoiceNumber).toBe(first.invoiceNumber);
     expect(second.totalAmount).toBe("1180.00");
+    // The first call says it created the record; the retry says it did not.
+    expect(first.idempotentReplay).toBe(false);
+    expect(second.idempotentReplay).toBe(true);
     expect(await invoiceCount(party.id)).toBe(1);
     // The replay is invisible to the audit trail.
     expect(await auditRows("invoice.create", first.id)).toHaveLength(1);
   });
 
-  it("restores dates and numbers in the replayed record", async () => {
+  it("answers a replay with the live record, typed like a fresh one", async () => {
     const party = await customer();
     const input = invoiceInput(party.id, { idempotencyKey: newKey("dates"), dueDate: "2026-12-01T00:00:00.000Z" });
     const first = await caller().invoice.create(input);
@@ -117,7 +120,50 @@ describe("invoice.create with an idempotency key", () => {
     expect(second.dueDate).toBeInstanceOf(Date);
     expect(second.dueDate!.toISOString()).toBe(first.dueDate!.toISOString());
     expect(second.createdAt).toBeInstanceOf(Date);
-    expect(second).toEqual(first);
+    const { idempotentReplay: _a, ...firstRecord } = first;
+    const { idempotentReplay: _b, ...secondRecord } = second;
+    expect(secondRecord).toEqual(firstRecord);
+  });
+
+  it("re-reads the LIVE invoice on replay instead of returning a snapshot", async () => {
+    const party = await customer();
+    const input = invoiceInput(party.id, { idempotencyKey: newKey("live") });
+    const first = await caller().invoice.create(input);
+    expect(first.status).toBe("draft");
+
+    await caller().invoice.updateStatus({ id: first.id, status: "sent" });
+    const replay = await caller().invoice.create(input);
+
+    expect(replay.id).toBe(first.id);
+    expect(replay.idempotentReplay).toBe(true);
+    expect(replay.status).toBe("sent");
+  });
+
+  it("is a CONFLICT, not a new invoice, when the replayed invoice has since been deleted", async () => {
+    const party = await customer();
+    const input = invoiceInput(party.id, { idempotencyKey: newKey("gone") });
+    const first = await caller().invoice.create(input);
+    await getTenantTestDb().update(invoices).set({ deletedAt: new Date() }).where(eq(invoices.id, first.id));
+
+    await expect(caller().invoice.create(input)).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringMatching(/no longer exists, so nothing was created/),
+    });
+    expect(await invoiceCount(party.id)).toBe(1);
+  });
+
+  it("keeps only the record id in the claim row, never a copy of the response", async () => {
+    const party = await customer();
+    const key = newKey("pii");
+    const first = await caller().invoice.create(invoiceInput(party.id, { idempotencyKey: key, notes: "Private note for Acme" }));
+
+    const [row] = await getTenantTestDb().select().from(idempotencyKeys).where(eq(idempotencyKeys.key, key));
+    expect(row.resourceId).toBe(first.id);
+    expect(Object.keys(row).sort()).toEqual(
+      ["businessId", "createdAt", "expiresAt", "id", "key", "requestHash", "resourceId", "scope", "userId"].sort(),
+    );
+    expect(JSON.stringify(row)).not.toContain("Private note");
+    expect(JSON.stringify(row)).not.toContain(party.name);
   });
 
   it("consumes the invoice number once and moves stock once", async () => {
@@ -170,12 +216,15 @@ describe("invoice.create with an idempotency key", () => {
     expect(second.id).toBe(first.id);
   });
 
-  it("creates a new invoice each time when no key is sent (behaviour unchanged)", async () => {
+  it("creates a new invoice each time when no key is sent: two identical sales are two sales", async () => {
     const party = await customer();
     const a = await caller().invoice.create(invoiceInput(party.id));
     const b = await caller().invoice.create(invoiceInput(party.id));
     expect(b.id).not.toBe(a.id);
     expect(await invoiceCount(party.id)).toBe(2);
+    // And the response keeps its old shape: no replay marker unless a key was sent.
+    expect("idempotentReplay" in a).toBe(false);
+    expect("idempotentReplay" in b).toBe(false);
   });
 
   it("books exactly one invoice when two identical requests race", async () => {
@@ -293,6 +342,8 @@ describe("payment.create with an idempotency key", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.paymentNumber).toBe(first.paymentNumber);
+    expect(first.idempotentReplay).toBe(false);
+    expect(second.idempotentReplay).toBe(true);
     const rows = await getTenantTestDb().select({ id: payments.id }).from(payments).where(eq(payments.partyId, party.id));
     expect(rows).toHaveLength(1);
 
@@ -339,10 +390,25 @@ describe("payment.create with an idempotency key", () => {
     expect(payment.id).not.toBe(created.id);
   });
 
-  it("behaves exactly as before without a key", async () => {
+  it("behaves exactly as before without a key: two identical payments are two payments", async () => {
     const { party, invoice } = await openInvoice("1000.00");
     const a = await caller().payment.create({ partyId: party.id, invoiceId: invoice.id, amount: "100.00", mode: "cash" });
     const b = await caller().payment.create({ partyId: party.id, invoiceId: invoice.id, amount: "100.00", mode: "cash" });
     expect(b.id).not.toBe(a.id);
+    expect("idempotentReplay" in a).toBe(false);
+  });
+
+  it("answers a replay with the live payment, and a CONFLICT once it has been deleted", async () => {
+    const { party, invoice } = await openInvoice("1000.00");
+    const input = { partyId: party.id, invoiceId: invoice.id, amount: "300.00", mode: "upi" as const, idempotencyKey: newKey("pay-live") };
+    const first = await caller().payment.create(input);
+    await caller().payment.update({ id: first.id, notes: "edited after creation" });
+
+    const replay = await caller().payment.create(input);
+    expect(replay.id).toBe(first.id);
+    expect(replay.notes).toBe("edited after creation");
+
+    await getTenantTestDb().update(payments).set({ deletedAt: new Date() }).where(eq(payments.id, first.id));
+    await expect(caller().payment.create(input)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

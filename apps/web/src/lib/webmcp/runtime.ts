@@ -24,7 +24,7 @@ import {
   summarizeInput,
   type ConfirmRequest,
 } from "./confirm";
-import { consumeWrite, isWriteBudgetExhausted, writeBudgetExhaustedMessage, writesRemaining } from "./budget";
+import { consumeWrite, isWriteBudgetExhausted, refundWrite, writeBudgetExhaustedMessage, writesRemaining } from "./budget";
 import { fenceError, fenceValue } from "./fence";
 import type {
   WebMcpConfirmSummary,
@@ -104,6 +104,11 @@ function runExclusive<T>(task: () => Promise<T>): Promise<T> {
   const run = writeChain.then(task, task);
   writeChain = run.catch(() => undefined);
   return run;
+}
+
+/** A write tool returns `{ idempotentReplay: true, … }` when the server said the call repeated an earlier one. */
+function isReplay(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as { idempotentReplay?: unknown }).idempotentReplay === true;
 }
 
 function rateLimitedResult(retryAfterMs: number): WebMcpToolResult {
@@ -445,6 +450,12 @@ export function buildBrowserTool(
               return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true } as WebMcpToolResult;
             }
             const written = await def.execute(input ?? {}, ctx);
+            // A create that the server recognised as a replay (same idempotencyKey) made nothing new:
+            // it does not count against the session budget, and there is nothing for the UI to refresh.
+            if (isReplay(written)) {
+              refundWrite();
+              return toToolResult(written);
+            }
             fireInvalidate(ctx);
             return toToolResult(written);
           });

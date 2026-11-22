@@ -39,6 +39,15 @@ export function consumeWrite(): boolean {
   return true;
 }
 
+/**
+ * Give back one write. Used when an approved call turned out to be a replay of an
+ * earlier one (same idempotencyKey): it created nothing, so it must not run the
+ * agent's budget down.
+ */
+export function refundWrite(): void {
+  used = Math.max(0, used - 1);
+}
+
 /** Start a fresh session. Called when the user turns agent access on, and by tests. */
 export function resetWriteBudget(): void {
   used = 0;

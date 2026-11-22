@@ -6,7 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDa
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
-import { claimIdempotencyKey, completeIdempotencyKey } from "../lib/idempotency.js";
+import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
@@ -46,7 +46,8 @@ async function reverseInvoiceEffects(
   }
 }
 
-type InvoiceRow = typeof invoices.$inferSelect;
+/** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
+type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -256,10 +257,10 @@ export const invoiceRouter = router({
     }
     const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "invoice.create", key: input.idempotencyKey, input };
     const created = await ctx.db.transaction(async (tx) => {
-      // An idempotency key that was already used with this exact input returns the
-      // first call's invoice here, before anything is written or any side effect runs.
-      const claim = await claimIdempotencyKey<InvoiceRow>(tx, idempotency);
-      if (claim.kind === "replay") return { replayed: true as const, invoice: claim.value };
+      // An idempotency key that was already used with this exact input is a replay:
+      // recognised here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, resourceId: claim.resourceId };
 
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
@@ -497,10 +498,22 @@ export const invoiceRouter = router({
         }
       }
 
-      await completeIdempotencyKey(tx, claim, invoice);
+      await completeIdempotencyKey(tx, claim, invoice.id);
       return { replayed: false as const, invoice };
     });
-    if (created.replayed) return created.invoice;
+    if (created.replayed) {
+      // Answer with the LIVE invoice (its status may have moved on), flagged as a
+      // replay so the caller can tell nothing new was created. If it has since been
+      // deleted, say so rather than quietly creating another.
+      const [live] = await ctx.db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, created.resourceId), eq(invoices.businessId, ctx.businessId), isNull(invoices.deletedAt)))
+        .limit(1);
+      if (!live) throw replayedRecordGone("invoice");
+      const replay: WithReplayFlag<typeof live> = { ...live, idempotentReplay: true };
+      return replay;
+    }
     const invoice = created.invoice;
 
     await logAudit(ctx.db, {
@@ -683,7 +696,9 @@ export const invoiceRouter = router({
       }, 0);
     }
 
-    return invoice;
+    // A caller that sent a key is told this call really created the record.
+    const response: WithReplayFlag<typeof invoice> = input.idempotencyKey ? { ...invoice, idempotentReplay: false } : invoice;
+    return response;
   }),
 
   // Get the delivery method used on the most recent sale invoice for a party
