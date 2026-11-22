@@ -91,3 +91,45 @@ test("production Pages deploys happen only for a release tag; main goes to the p
     assert.match(wf, /\^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+/, `${name}: ref must be checked as a release tag`);
   }
 });
+
+/** The text of one step of a job, found by its `name:`. */
+function step(block: string, name: string): string {
+  const lines = block.split("\n");
+  const start = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+  assert.notEqual(start, -1, `step "${name}" not found`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {6}- /.test(lines[i]!)) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+test("a second run on the tag reuses the published images instead of failing, and re-verifies them", () => {
+  const docker = job(release, "docker");
+  // The decision comes from the script; force is the only way to overwrite.
+  assert.match(step(docker, "Check for already-published release images"), /scripts\/check-existing-images\.sh/);
+  assert.doesNotMatch(docker, /Refuse to overwrite/);
+  const reuse = /if: steps\.existing\.outputs\.reuse != 'true'/;
+  for (const name of [
+    "Image metadata (API)",
+    "Build & push API image",
+    "Sign API image (cosign, keyless)",
+    "Image metadata (ONCE)",
+    "Build & push ONCE image",
+    "Sign ONCE image (cosign, keyless)",
+  ]) {
+    assert.match(step(docker, name), reuse, `"${name}" must be skipped when the images are reused`);
+  }
+  // Verification is NOT skipped: a reused image is proven, with the existing digests.
+  const verify = step(docker, "Verify image signatures");
+  assert.doesNotMatch(verify, /^\s+if:/m);
+  assert.match(verify, /steps\.existing\.outputs\.api_digest/);
+  assert.match(verify, /steps\.existing\.outputs\.once_digest/);
+  assert.match(verify, /--certificate-github-workflow-sha/);
+  // The job outputs carry the existing digests when nothing was built.
+  assert.match(docker, /api_digest: \$\{\{ steps\.build_api\.outputs\.digest \|\| steps\.existing\.outputs\.api_digest \}\}/);
+  assert.match(docker, /once_digest: \$\{\{ steps\.build_once\.outputs\.digest \|\| steps\.existing\.outputs\.once_digest \}\}/);
+});

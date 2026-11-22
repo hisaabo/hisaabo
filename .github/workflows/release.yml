@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Overwrite image tags that already exist for this version (recovery from a partial failure only; releases are otherwise immutable)"
+        description: "Overwrite image tags that already exist for this version (recovery from a partial publish only; releases are otherwise immutable). Without it, a second run reuses the published images after re-verifying their signatures."
         type: boolean
         default: false
       skip_api_wait:
@@ -188,9 +188,11 @@ jobs:
     outputs:
       version: ${{ steps.rel.outputs.version }}
       api_image: ${{ steps.rel.outputs.api_image }}
-      api_digest: ${{ steps.build_api.outputs.digest }}
+      # Freshly built, or (a second run on the tag) the digests of the images
+      # that were already published.
+      api_digest: ${{ steps.build_api.outputs.digest || steps.existing.outputs.api_digest }}
       once_image: ${{ steps.rel.outputs.once_image }}
-      once_digest: ${{ steps.build_once.outputs.digest }}
+      once_digest: ${{ steps.build_once.outputs.digest || steps.existing.outputs.once_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -232,41 +234,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Release tags are immutable: self-hosters pin `:vX.Y.Z` and expect the
-      # same bytes forever. Fail BEFORE anything is pushed if either image
-      # already has this version, unless a maintainer explicitly forces it
-      # (workflow_dispatch input `force`, to recover a half-pushed release).
-      # Only a clear "not found" counts as absent; any other failure (network,
-      # registry error) fails closed, so a blip can never allow an overwrite.
-      # ("denied" means the package does not exist yet, i.e. the first release
-      # of an image; a genuine auth problem fails the push below instead.)
-      - name: Refuse to overwrite an existing release tag
+      # same bytes forever. See scripts/check-existing-images.sh:
+      #   neither image exists -> build, push and sign (below)
+      #   BOTH exist, no force -> reuse: nothing is rebuilt or pushed; the
+      #     existing signatures are verified and their digests flow on, so a
+      #     second run on the same tag (Re-run all jobs, or a dispatch with
+      #     skip_api_wait / api_wait_timeout_minutes) reaches wait-for-api
+      #   one exists, no force -> fail (partial publish)
+      #   force=true           -> re-push, loudly
+      # `force` stays a separate, explicit act: it is never implied by a re-run.
+      - name: Check for already-published release images
+        id: existing
         env:
           API_IMAGE: ${{ steps.rel.outputs.api_image }}
           ONCE_IMAGE: ${{ steps.rel.outputs.once_image }}
           FORCE: ${{ inputs.force }}
-        run: |
-          set -uo pipefail
-          existing=()
-          for image in "$API_IMAGE" "$ONCE_IMAGE"; do
-            ref="${image}:${REF_NAME}"
-            if out=$(docker buildx imagetools inspect "$ref" 2>&1); then
-              existing+=("$ref")
-            elif grep -qiE 'not found|manifest unknown|name unknown|denied|unauthorized' <<<"$out"; then
-              echo "${ref} does not exist yet"
-            else
-              echo "::error title=Cannot verify release tag::Could not determine whether ${ref} exists (failing closed): ${out}"
-              exit 1
-            fi
-          done
-          if [ "${#existing[@]}" -eq 0 ]; then
-            exit 0
-          fi
-          if [ "${FORCE:-}" = "true" ]; then
-            echo "::warning title=Overwriting release tag::force=true: re-pushing ${existing[*]}. Digest pins stay valid; tag pins will move."
-          else
-            echo "::error title=Release image tag already exists::Already published: ${existing[*]}. Release images are immutable: cut a new version instead. To recover a partially failed release, run this workflow on the tag via workflow_dispatch with force=true."
-            exit 1
-          fi
+        run: bash scripts/check-existing-images.sh
 
       # labels and annotations are generated independently, so each override
       # appears in both. source/revision/created/url come from the workflow
@@ -274,6 +257,7 @@ jobs:
       # (instead of the generated NOASSERTION).
       - name: Image metadata (API)
         id: meta_api
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.rel.outputs.api_image }}
@@ -298,6 +282,7 @@ jobs:
 
       - name: Build & push API image
         id: build_api
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -315,6 +300,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=api
 
       - name: Sign API image (cosign, keyless)
+        if: steps.existing.outputs.reuse != 'true'
         env:
           IMAGE: ${{ steps.rel.outputs.api_image }}
           DIGEST: ${{ steps.build_api.outputs.digest }}
@@ -322,6 +308,7 @@ jobs:
 
       - name: Image metadata (ONCE)
         id: meta_once
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.rel.outputs.once_image }}
@@ -346,6 +333,7 @@ jobs:
 
       - name: Build & push ONCE image
         id: build_once
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -364,26 +352,32 @@ jobs:
           cache-to: type=gha,mode=max,scope=once
 
       - name: Sign ONCE image (cosign, keyless)
+        if: steps.existing.outputs.reuse != 'true'
         env:
           IMAGE: ${{ steps.rel.outputs.once_image }}
           DIGEST: ${{ steps.build_once.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       # The last step of the job, and the gate for wait-for-api: prove each
-      # signature is verifiable with the same command the release notes give
-      # operators, so the upgrade they are about to do passes their own check.
-      # Retried because the transparency-log entry can lag the signing by a moment.
+      # signature is verifiable, for the images built just now AND for ones a
+      # previous run published (a reused image must be proven, not trusted). The
+      # certificate must name this workflow, at this tag, run on this commit, so
+      # an image from some other run or commit never passes. Retried because the
+      # transparency-log entry can lag the signing by a moment.
       - name: Verify image signatures
         env:
-          API_REF: ${{ steps.rel.outputs.api_image }}@${{ steps.build_api.outputs.digest }}
-          ONCE_REF: ${{ steps.rel.outputs.once_image }}@${{ steps.build_once.outputs.digest }}
+          API_REF: ${{ steps.rel.outputs.api_image }}@${{ steps.build_api.outputs.digest || steps.existing.outputs.api_digest }}
+          ONCE_REF: ${{ steps.rel.outputs.once_image }}@${{ steps.build_once.outputs.digest || steps.existing.outputs.once_digest }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+          REUSED: ${{ steps.existing.outputs.reuse }}
         run: |
           set -uo pipefail
           for ref in "$API_REF" "$ONCE_REF"; do
             for attempt in 1 2 3 4; do
               if cosign verify "$ref" \
-                --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/release.yml@" \
+                --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/${REF_NAME}$" \
+                --certificate-github-workflow-sha "$RELEASE_SHA" \
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null; then
                 echo "Signature verified: ${ref}"
                 continue 2
@@ -391,7 +385,11 @@ jobs:
               echo "Signature for ${ref} not verifiable yet (attempt ${attempt}/4)"
               sleep 10
             done
-            echo "::error title=Image signature missing::${ref} is not verifiable with cosign. The API wait must not start for an unverifiable image."
+            if [ "$REUSED" = "true" ]; then
+              echo "::error title=Existing image signature not verifiable::${ref} was published by an earlier run but has no signature from this workflow at ${REF_NAME} (${RELEASE_SHA}). Nothing was rebuilt. Repair it deliberately: run this workflow on the tag via workflow_dispatch with force=true."
+            else
+              echo "::error title=Image signature missing::${ref} is not verifiable with cosign. The API wait must not start for an unverifiable image."
+            fi
             exit 1
           done
 

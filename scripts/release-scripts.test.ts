@@ -44,6 +44,23 @@ cat "$FAKE_GH_PAGES"
 `,
   );
   chmodSync(join(fakeBin, "gh"), 0o755);
+  // `docker buildx imagetools inspect <ref>`: FAKE_DOCKER_API / FAKE_DOCKER_ONCE decide, per image,
+  // between exists | missing | error | baddigest.
+  writeFileSync(
+    join(fakeBin, "docker"),
+    `#!/usr/bin/env bash
+ref="\${@: -1}"
+if [[ "$ref" == *"/hisaabo-api:"* ]]; then mode="\${FAKE_DOCKER_API:-missing}"; digest="sha256:\${FAKE_DOCKER_API_DIGEST:-1111111111111111111111111111111111111111111111111111111111111111}"
+else mode="\${FAKE_DOCKER_ONCE:-missing}"; digest="sha256:2222222222222222222222222222222222222222222222222222222222222222"; fi
+case "$mode" in
+  exists) printf 'Name:      %s\\nMediaType: application/vnd.oci.image.index.v1+json\\nDigest:    %s\\n' "$ref" "$digest" ;;
+  baddigest) printf 'Name:      %s\\nDigest:    nonsense\\n' "$ref" ;;
+  missing) echo "ERROR: $ref: not found" >&2; exit 1 ;;
+  *) echo "ERROR: dial tcp: i/o timeout" >&2; exit 1 ;;
+esac
+`,
+  );
+  chmodSync(join(fakeBin, "docker"), 0o755);
 });
 
 after(() => rmSync(work, { recursive: true, force: true }));
@@ -220,4 +237,77 @@ test("release-tag --skip-release-check bypasses the check", () => {
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(tagExists(git, clone), true);
   assert.equal(ghCalls(), "");
+});
+
+// ── check-existing-images.sh: what the docker job does about existing images ──
+
+const API = "ghcr.io/o/hisaabo-api";
+const ONCE = "ghcr.io/o/hisaabo";
+const DIGEST_API = "sha256:" + "1".repeat(64);
+const DIGEST_ONCE = "sha256:" + "2".repeat(64);
+
+function images(modes: { api: string; once: string }, extra: Record<string, string> = {}) {
+  const out = join(work, "images-output");
+  rmSync(out, { force: true });
+  const e = env([[]], {
+    API_IMAGE: API,
+    ONCE_IMAGE: ONCE,
+    REF_NAME: "v1.2.3",
+    FAKE_DOCKER_API: modes.api,
+    FAKE_DOCKER_ONCE: modes.once,
+    GITHUB_OUTPUT: out,
+    ...extra,
+  });
+  const r = sh("check-existing-images.sh", [], e);
+  let outputs = "";
+  try {
+    outputs = readFileSync(out, "utf8");
+  } catch {
+    // no outputs written
+  }
+  return { ...r, outputs };
+}
+
+test("check-existing-images: no image yet -> build (reuse=false)", () => {
+  const r = images({ api: "missing", once: "missing" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs, "reuse=false\n");
+});
+
+test("check-existing-images: both exist and no force -> reuse them, emit their digests, build nothing", () => {
+  const r = images({ api: "exists", once: "exists" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs, `reuse=true\napi_digest=${DIGEST_API}\nonce_digest=${DIGEST_ONCE}\n`);
+  assert.match(r.stdout, /nothing is rebuilt or pushed/);
+});
+
+test("check-existing-images: force=true re-pushes over existing images, loudly", () => {
+  const r = images({ api: "exists", once: "exists" }, { FORCE: "true" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs, "reuse=false\n");
+  assert.match(r.stdout, /::warning title=Overwriting release tag::force=true/);
+});
+
+test("check-existing-images: a partial publish fails and names force as the explicit repair", () => {
+  for (const modes of [
+    { api: "exists", once: "missing" },
+    { api: "missing", once: "exists" },
+  ]) {
+    const r = images(modes);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /partially published/);
+    assert.match(r.stdout, /force=true/);
+    assert.equal(r.outputs, "");
+  }
+  // ... and force really does repair it.
+  assert.equal(images({ api: "exists", once: "missing" }, { FORCE: "true" }).outputs, "reuse=false\n");
+});
+
+test("check-existing-images: fails closed on a registry error or an unreadable digest", () => {
+  const net = images({ api: "error", once: "missing" });
+  assert.equal(net.status, 1);
+  assert.match(net.stdout, /failing closed/);
+  const bad = images({ api: "baddigest", once: "exists" });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /digest could not be read/);
 });
