@@ -458,16 +458,17 @@ describe("GSTR-1 — includes sales_return in credit note section", () => {
   });
 });
 
-// ── GSTR-1 — purchase_return in debit note section ────────────────────────────
+// ── GSTR-1 — purchase-side documents are not outward supplies ─────────────────
 
-describe("GSTR-1 — includes purchase_return in debit note section", () => {
+describe("GSTR-1 — excludes purchase_return from the debit note section", () => {
   const PR_YEAR = 2025;
   const PR_MONTH = 12; // December 2025
 
   beforeAll(async () => {
     const tenantDb = getTenantTestDb();
 
-    // Create a purchase_return in the test month so it appears in debit note section
+    // A purchase_return in the test month. It is a document WE issue to a supplier:
+    // it reverses input tax credit (GSTR-3B Table 4) and is not an outward supply.
     // 1 × 800 = 800 subtotal, 12% tax = 96
     await createInvoiceWithItems(
       tenantDb,
@@ -491,7 +492,7 @@ describe("GSTR-1 — includes purchase_return in debit note section", () => {
     );
   });
 
-  it("purchase_return appears alongside debit notes in ITC reversal", async () => {
+  it("purchase_return does not appear in the outward-supply debit notes or credit notes", async () => {
     const caller = createTestCaller({
       userId: world.ramesh.id,
       email: world.ramesh.email,
@@ -502,15 +503,8 @@ describe("GSTR-1 — includes purchase_return in debit note section", () => {
 
     const report = await caller.gst.gstr1({ year: PR_YEAR, month: PR_MONTH });
 
-    // The purchase_return must appear in the debitNotes array
-    expect(Array.isArray(report.debitNotes)).toBe(true);
-    expect(report.debitNotes.length).toBeGreaterThanOrEqual(1);
-
-    // Each entry must have the expected shape
-    const prEntry = report.debitNotes[0]!;
-    expect(typeof prEntry.invoiceNumber).toBe("string");
-    expect(typeof prEntry.totalAmount).toBe("string");
-    expect(parseFloat(prEntry.totalAmount)).toBeGreaterThan(0);
+    expect(report.debitNotes).toEqual([]);
+    expect(report.creditNotes).toEqual([]);
   });
 });
 

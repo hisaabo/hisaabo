@@ -1,6 +1,7 @@
 import { logger } from "./logger.js";
 import { opsConfig } from "../ops/config.js";
 import { describeApiPublicUrlFallback, isValidHttpUrl } from "./public-url.js";
+import { irpPublicKeyEnvNames, loadIrpPublicKey } from "./irp-public-key.js";
 
 interface EnvCheck {
   key: string;
@@ -102,6 +103,20 @@ export function validateEnv(opts: { role?: "api" | "worker" } = {}): void {
     }
     if (!process.env.OPS_IP_ALLOWLIST) {
       logger.warn("QUEUE_DASHBOARD_ENABLED=true without OPS_IP_ALLOWLIST: /ops is reachable from any IP (still behind sign-in + TOTP). Set OPS_IP_ALLOWLIST to restrict it.");
+    }
+  }
+
+  // E-invoicing's NIC public key (IRP_*PUBLIC_KEY_*) is optional, but one that is SET and
+  // invalid would otherwise only show up when someone tries to e-invoice.
+  if (opts.role !== "worker") {
+    for (const isSandbox of [false, true]) {
+      const names = irpPublicKeyEnvNames(isSandbox);
+      if (!process.env[names.pem]?.trim() && !process.env[names.path]?.trim()) continue;
+      try {
+        loadIrpPublicKey(isSandbox);
+      } catch (err) {
+        logger.warn((err as Error).message);
+      }
     }
   }
 

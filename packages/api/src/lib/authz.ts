@@ -17,6 +17,7 @@
  *    cache bus AFTER their write settled (and the DB triggers do the same for
  *    out-of-process writers via NOTIFY).
  *  - The business entry only holds immutable facts (existence + creator);
+ *    where the creator rule applies (multi-org self-hosted only),
  *    "creator is still a member" is evaluated on every call against the
  *    membership cache, so removing the creator denies the very next call.
  */
@@ -25,6 +26,7 @@ import { controlDb, tenants, tenantMembers, businesses, type TenantDatabase } fr
 import { eq, and } from "drizzle-orm";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
+import { creatorRuleApplies } from "./tenant-businesses.js";
 
 export interface Membership {
   role: string;
@@ -117,8 +119,12 @@ export async function getActiveMembership(
 }
 
 /**
- * Business belongs to the caller's tenant: it exists in the tenant DB and its
- * creator is (still) a member of `tenantId` (shared-DB self-hosted safety).
+ * Business belongs to the caller's tenant: it exists in the tenant DB and, only
+ * where one database holds several organisations (multi-org self-hosted), its
+ * creator is (still) a member of `tenantId`. On cloud and on a single-org
+ * self-hosted install the database is the tenant boundary, so a business whose
+ * creator was removed stays accessible to the remaining members. See
+ * tenant-businesses.ts (creatorRuleApplies).
  */
 export async function getBusinessAccess(
   db: TenantDatabase,
@@ -139,8 +145,10 @@ export async function getBusinessAccess(
   );
   if (!biz) return { ok: false, reason: "business_not_found" };
   // Re-evaluated every call (cached positive membership, 0 queries when warm).
-  const creator = await getMembership(tenantId, biz.createdByUserId);
-  if (!creator) return { ok: false, reason: "creator_not_member" };
+  if (await creatorRuleApplies()) {
+    const creator = await getMembership(tenantId, biz.createdByUserId);
+    if (!creator) return { ok: false, reason: "creator_not_member" };
+  }
   return { ok: true, createdByUserId: biz.createdByUserId };
 }
 

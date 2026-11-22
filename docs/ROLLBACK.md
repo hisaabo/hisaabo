@@ -122,7 +122,7 @@ docker compose start api
 
 ### Single-Tenant Restore (Multi-Tenant Deployments)
 
-In multi-tenant mode, each tenant has its own database (`tenant_<slug>`). Backups produce separate dump files per database, so you can restore a single tenant without affecting others.
+In multi-tenant mode, each tenant has its own database (`t_<32 hex>` for tenants created from v0.10.1, `tenant_<slug>` for earlier ones; the name is in `tenants.db_name`). Backups produce separate dump files per database, so you can restore a single tenant without affecting others.
 
 **This is the preferred approach when a single tenant's data is corrupted or needs rollback while all other tenants remain operational.**
 
@@ -155,6 +155,8 @@ docker compose exec backup restore-db.sh tenant_acme dump_tenant_acme_20260414_0
 # List available backups for a tenant
 docker compose exec backup ls -lht /var/backups/hisaabo/dump_tenant_acme_*
 ```
+
+A restored database comes back with default privileges (`--no-privileges`, and a freshly created database is connectable by every role). Restart the `api` container, or run `node packages/db/dist/migrate.mjs --restrict-tenant-db-access`, to close it to other tenants' roles again and re-grant its own role; see [Tenant databases and roles](DEPLOYMENT.md#tenant-databases-and-roles-multi-tenant).
 
 #### Verification
 
@@ -924,6 +926,10 @@ Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (mark
 
 ```sql
 BEGIN;
+-- 0024 / tenant 0011 (v0.10.1, ledger_adjustment_accounts): data only. It added system accounts
+-- 4020, 5020, 5030 and 2900 to chart_of_accounts; older code ignores them. Leave them in place:
+-- 0.10.1 journals and documents may already post to them, and deleting them breaks nothing but the
+-- ledger's fall-back to 5990 / 4100.
 -- 0023 / tenant 0010 (v0.10.1; older code ignores both, so this is optional)
 DROP INDEX IF EXISTS recurring_run_occurrence_uniq;
 ALTER TABLE recurring_invoice_runs DROP COLUMN IF EXISTS scheduled_for;

@@ -59,11 +59,12 @@ Each entry in `items` has these fields:
 | `price` | Price per `unit` as a string in the business currency, for example `"120.00"`. Treat it as text; do not do money arithmetic with floating point. |
 | `unit` | The item's base unit, for example `kg`. |
 | `taxPercent`, `taxInclusive` | Tax rate, and whether `price` already includes it. |
-| `inStock` | `false` means sold out. If the owner allows negative stock, sold-out items still report `inStock: true` (with `lowStock: true`) because the store keeps taking orders for them. |
+| `inStock` | `false` means sold out. If the owner allows negative stock, sold-out items still report `inStock: true` (with `lowStock: true`) because the store keeps taking orders for them. `lowStock` does not mean the item is running low: it means "none on hand, but orders are accepted". A store that keeps no inventory reports it on every item, so do not show a "low stock" warning from it; use `runningLow` for that. |
+| `runningLow` | `true` only when the item tracks stock, some is on hand, and the quantity is at or below the owner's low-stock alert level. Never `true` for a sold-out item, for an item with no alert level, or for a service, and never the same as `lowStock`. For a `variants` item it is `true` when everything still available is low. The quantity and the alert level themselves are never sent. The field is additive: a catalog from an older server omits it, so treat a missing value as `false`. |
 | `sortOrder` | The order the owner chose; items already arrive sorted by it. |
 | `itemMode` | `"simple"`, `"alt_units"` or `"variants"`. |
 | `unitVariants` | For `alt_units` items: the other units, each with `unit`, `price` and `conversionFactor`. |
-| `variantAttributes`, `variants` | For `variants` items: the attribute names (for example `["Size"]`) and each variant's `id`, `attributes`, `price` and `inStock`. |
+| `variantAttributes`, `variants` | For `variants` items: the attribute names (for example `["Size"]`) and each variant's `id`, `attributes`, `price`, `inStock` and `runningLow` (that variant's own low-stock flag). |
 | `images`, `primaryImageUrl` | Photos. The paths start with `/store/…`; put your API address in front of them to get a full URL. |
 
 ### Caching and rate limits

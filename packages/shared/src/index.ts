@@ -2,8 +2,10 @@ export * from "./validators.js";
 export { auditSources } from "./audit-source.js";
 export type { AuditSource } from "./audit-source.js";
 export * from "./money.js";
+export { composeOpeningBalance, splitOpeningBalance } from "./party-opening.js";
+export type { OpeningBalanceDirection } from "./party-opening.js";
 export { formatQuantity } from "./quantity.js";
-export { calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF } from "./calc.js";
+export { calcLineItem, calcInvoiceTotals, splitGstByLine, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF } from "./calc.js";
 export type { ValidateInvoiceTotalsOptions } from "./calc.js";
 export {
   checkInvoiceStatusTransition,

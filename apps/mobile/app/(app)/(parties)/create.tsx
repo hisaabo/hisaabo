@@ -18,6 +18,8 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { PermissionGate } from "../../../src/components/PermissionGate";
+import { OpeningBalanceField } from "../../../src/components/OpeningBalanceField";
+import { composeOpeningBalance, type OpeningBalanceDirection } from "@hisaabo/shared";
 
 type PartyType = "customer" | "supplier";
 
@@ -43,6 +45,10 @@ function CreatePartyScreenContent() {
   const [billingAddress, setBillingAddress] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
+  // Unsigned amount + direction; composeOpeningBalance turns them into the stored signed value.
+  const [openingAmount, setOpeningAmount] = useState("");
+  const [openingDirection, setOpeningDirection] = useState<OpeningBalanceDirection>("receive");
+  const [openingDirectionTouched, setOpeningDirectionTouched] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const phoneRef = useRef<TextInput>(null);
@@ -95,7 +101,7 @@ function CreatePartyScreenContent() {
       billingAddress: billingAddress.trim() || undefined,
       city: city.trim() || undefined,
       state: state.trim() || undefined,
-      openingBalance: "0",
+      openingBalance: composeOpeningBalance(openingAmount, openingDirection),
     });
   };
 
@@ -146,7 +152,10 @@ function CreatePartyScreenContent() {
                   styles.typeOption,
                   type === "customer" && styles.typeOptionActive,
                 ]}
-                onPress={() => setType("customer")}
+                onPress={() => {
+                  setType("customer");
+                  if (!openingDirectionTouched) setOpeningDirection("receive");
+                }}
                 activeOpacity={0.8}
               >
                 <Ionicons
@@ -168,7 +177,11 @@ function CreatePartyScreenContent() {
                   styles.typeOption,
                   type === "supplier" && styles.typeOptionActive,
                 ]}
-                onPress={() => setType("supplier")}
+                onPress={() => {
+                  setType("supplier");
+                  // Until a direction is picked, follow the party type: what you owe a supplier.
+                  if (!openingDirectionTouched) setOpeningDirection("pay");
+                }}
                 activeOpacity={0.8}
               >
                 <Ionicons
@@ -265,6 +278,23 @@ function CreatePartyScreenContent() {
                   <Text style={styles.errorText}>{errors.email}</Text>
                 )}
               </View>
+            </View>
+          </View>
+
+          {/* Opening Balance */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Balance</Text>
+            <View style={styles.card}>
+              <OpeningBalanceField
+                amount={openingAmount}
+                direction={openingDirection}
+                partyType={type}
+                onAmountChange={setOpeningAmount}
+                onDirectionChange={(d) => {
+                  setOpeningDirectionTouched(true);
+                  setOpeningDirection(d);
+                }}
+              />
             </View>
           </View>
 

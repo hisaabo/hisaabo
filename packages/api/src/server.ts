@@ -6,6 +6,7 @@ import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, lt, inArray, isNull, sql } from "drizzle-orm";
 import { parseCatalogIds, storeCatalogConditions } from "./lib/store-catalog-query.js";
+import { toPublicCatalogItems } from "./lib/store-catalog-items.js";
 import { buildPartyLedgerStatement } from "./lib/party-ledger.js";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -16,6 +17,7 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/authz.js";
+import { warnIfMultiOrgSelfHosted } from "./lib/tenant-businesses.js";
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
@@ -514,8 +516,11 @@ async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): 
 
 // ── Shared business access check for non-tRPC endpoints ─────────
 // Mirrors the hasBusinessAccess middleware in trpc.ts: verifies the business
-// exists in the tenant DB AND (for self-hosted shared-DB mode) that the
-// business creator is a member of the caller's tenant.
+// exists in the tenant DB AND, only where one database holds several
+// organisations (a self-hosted install with more than one tenant, now or ever),
+// that the business creator is a member of the caller's tenant. On cloud and on
+// a single-organisation install the database is the boundary and the creator
+// check is skipped (lib/tenant-businesses.ts creatorRuleApplies).
 async function verifyBusinessAccess(
   db: Awaited<ReturnType<typeof getTenantDb>>,
   businessId: string,
@@ -1310,6 +1315,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
       taxInclusive: items.taxInclusive,
       inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
       stockQty: items.stockQuantity,
+      // Read only to derive `runningLow`; never sent (see lib/store-stock.ts).
+      lowStockAlert: items.lowStockAlert,
+      itemType: items.itemType,
       sortOrder: items.storeSortOrder,
       itemMode: items.itemMode,
       unitVariants: items.unitVariants,
@@ -1343,6 +1351,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
         salePrice: itemVariants.salePrice,
         storePrice: itemVariants.storePrice,
         stockQuantity: itemVariants.stockQuantity,
+        lowStockAlert: itemVariants.lowStockAlert,
         storeEnabled: itemVariants.storeEnabled,
       }).from(itemVariants)
         .where(and(
@@ -1409,67 +1418,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
 
   const categories = categoryRows.map((r) => r.category).filter(Boolean) as string[];
 
-  // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
-  const allowNeg = biz.storeAllowNegativeStock;
-  const transformedItems = catalog
-    .filter((item) => {
-      // Variant items must have at least one store-enabled variant to appear
-      if (item.itemMode === "variants") {
-        const variants = variantsByItem.get(item.id);
-        return variants && variants.length > 0;
-      }
-      return true;
-    })
-    .map(({ stockQty: _stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
-      const images = imagesByItem.get(rest.id) ?? [];
-      const primary = images.find((im) => im.isPrimary) ?? images[0];
-      const base = {
-        ...rest,
-        inStock: rest.inStock || allowNeg,
-        lowStock: allowNeg && !rest.inStock,
-        images,
-        // Convenience thumbnail for the catalog grid + share/OG fallback.
-        primaryImageUrl: primary?.url ?? null,
-      };
-
-      if (rest.itemMode === "alt_units" && rawUnitVariants) {
-        // Expose unit variants with store-safe prices only
-        return {
-          ...base,
-          unitVariants: rawUnitVariants.map((uv) => ({
-            unit: uv.unit,
-            conversionFactor: uv.conversionFactor,
-            price: uv.salePrice,
-          })),
-        };
-      }
-
-      if (rest.itemMode === "variants") {
-        const variants = variantsByItem.get(rest.id) || [];
-        const variantData = variants.map((v) => ({
-          id: v.id,
-          attributes: v.attributeValues,
-          price: v.storePrice ?? v.salePrice ?? "0",
-          inStock: parseFloat(v.stockQuantity) > 0 || allowNeg,
-        }));
-        // Price = lowest variant price (for display/sorting)
-        const prices = variantData.map((v) => parseFloat(v.price));
-        const lowestPrice = prices.length > 0 ? Math.min(...prices).toFixed(2) : base.price;
-        // inStock = true if ANY variant is in stock
-        const anyInStock = variantData.some((v) => v.inStock);
-
-        return {
-          ...base,
-          price: lowestPrice,
-          inStock: anyInStock,
-          lowStock: allowNeg && !anyInStock,
-          variantAttributes: rawVarAttrs || [],
-          variants: variantData,
-        };
-      }
-
-      return base;
-    });
+  // What a customer may see of each item (and what is dropped): lib/store-catalog-items.ts.
+  // When allowNegativeStock is on, out-of-stock items stay orderable (inStock + lowStock).
+  const transformedItems = toPublicCatalogItems(catalog, {
+    allowNegativeStock: biz.storeAllowNegativeStock,
+    variantsByItem,
+    imagesByItem,
+  });
 
   return c.json(
     {
@@ -2373,6 +2328,12 @@ function notFoundResponse(c: Context) {
     logger.fatal("Refusing to start — fix the bundle/deploy layout and retry");
     process.exit(1);
   }
+}
+
+// A self-hosted database holding more than one organisation isolates them by
+// business-creator membership only (until businesses.tenant_id exists, 0.11.0).
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  void warnIfMultiOrgSelfHosted((msg, data) => logger.warn(data ?? {}, msg));
 }
 
 // ── Cross-process cache invalidation ─────────────────────────

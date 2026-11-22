@@ -110,14 +110,23 @@ export const dashboardRouter = router({
           sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`,
         )),
 
-      // Payable = current outstanding balance (balance sheet metric, NOT period-scoped)
-      // Purchase returns reduce the payable balance; invoices and debit notes add to it.
+      // Payable = current outstanding balance (balance sheet metric, NOT period-scoped), the
+      // positive mirror of the receivable above and of the signed party balance
+      // (lib/party-balance.ts): what we owe suppliers.
+      //   + outstanding of purchase invoices
+      //   - outstanding of purchase-side reversals (purchase returns, purchase debit notes, and
+      //     credit notes / sales returns raised from a purchase invoice)
+      //   - opening balances of suppliers (a supplier's opening is negative when we owe them)
+      // Quotations, challans and proformas of the purchase type are not payables.
       ctx.db.select({
-        total: sql<string>`coalesce(sum(CASE WHEN ${invoices.documentType} IN ('purchase_return') THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)::text`,
+        total: sql<string>`(coalesce(sum(CASE WHEN ${invoices.documentType} = 'invoice' THEN (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)
+          - coalesce((SELECT sum(${parties.openingBalance}::numeric) FROM ${parties} WHERE ${parties.businessId} = ${ctx.businessId} AND ${parties.type} = 'supplier'), 0))::text`,
       }).from(invoices)
         .where(and(
           eq(invoices.businessId, ctx.businessId),
-          eq(invoices.type, "purchase"),
+          // a purchase return is purchase-side whatever `type` it was sent with
+          sql`(${invoices.type} = 'purchase' OR ${invoices.documentType} = 'purchase_return')`,
+          sql`${invoices.documentType} IN ('invoice', 'debit_note', 'credit_note', 'sales_return', 'purchase_return')`,
           isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),

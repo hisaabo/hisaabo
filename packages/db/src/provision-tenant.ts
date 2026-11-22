@@ -8,19 +8,35 @@ if (process.env.NODE_ENV !== "production") {
 import postgres from "postgres";
 import { randomBytes, pbkdf2Sync, createHmac, createHash } from "node:crypto";
 import { migrateSingleTenantDb } from "./migrate.js";
+import { restrictTenantDatabaseAccess } from "./tenant-db-access.js";
 
 // ── Helpers ────────────────────────────────────────────────────
 
+export interface TenantDbNames {
+  dbName: string;
+  dbUser: string;
+}
+
+const GENERATED_NAME_RE = /^t_[0-9a-f]{32}(_u)?$/;
+
 /**
- * Sanitize an identifier so it is safe to embed in a double-quoted SQL identifier.
- * Allows only [a-z0-9_] — rejects anything else to prevent injection.
+ * Fresh physical database and role names for a new tenant: `t_<32 hex>` and
+ * `t_<32 hex>_u` (34 and 36 chars, inside Postgres' 63-byte identifier limit),
+ * from 128 random bits. Lowercase hex only, so nothing is truncated or case
+ * folded.
+ *
+ * They are random and independent of the slug (and of the tenant id, which does
+ * not exist yet when provisioning runs: the tenants row is inserted afterwards
+ * with these names), so two tenants with the same long name can never collide,
+ * and they are safe in a double-quoted SQL identifier.
+ *
+ * Tenants provisioned before 0.10.1 have `tenant_<slug>` names; those live in
+ * `tenants.db_name` / `tenants.db_user` and are always read from there, never
+ * re-derived.
  */
-function sanitizeIdentifier(value: string): string {
-  const clean = value.replace(/[^a-z0-9_]/g, "_");
-  if (!clean || clean.length > 63) {
-    throw new Error(`Invalid SQL identifier after sanitization: "${clean}"`);
-  }
-  return clean;
+export function generateTenantDbNames(): TenantDbNames {
+  const hex = randomBytes(16).toString("hex");
+  return { dbName: `t_${hex}`, dbUser: `t_${hex}_u` };
 }
 
 /**
@@ -85,7 +101,7 @@ export interface TenantDbConfig {
  * `provisionTenantDatabase` has already created the physical DB/USER. Since
  * CREATE DATABASE / CREATE USER are non-transactional, we must drop them
  * manually on outer-tx failure — otherwise the cluster accumulates orphan
- * `tenant_*` databases + roles forever.
+ * tenant databases + roles forever.
  *
  * Idempotent: uses IF EXISTS, terminates live connections before DROP, and
  * swallows any individual failure (we do not want to mask the caller's
@@ -140,14 +156,18 @@ export async function cleanupTenantDatabase(
  * Provisions a new PostgreSQL database for a tenant:
  *   1. Creates the database
  *   2. Creates a dedicated PG user with a random password
- *   3. Grants the user full access
+ *   3. Grants the user full access and closes the database to every other role
  *   4. Applies the tenant schema via programmatic migrations
+ *
+ * The database and role names are random (see generateTenantDbNames) and come
+ * back in the config; the caller stores them in `tenants.db_name` /
+ * `tenants.db_user`. `names` exists so tests can provoke a name collision; it is
+ * validated before it is interpolated into SQL.
  *
  * Only call this when MULTI_TENANT=true.
  */
 export async function provisionTenantDatabase(
-  tenantId: string,
-  tenantSlug: string,
+  names: TenantDbNames = generateTenantDbNames(),
 ): Promise<TenantDbConfig> {
   const controlUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
   if (!controlUrl) {
@@ -156,11 +176,10 @@ export async function provisionTenantDatabase(
 
   const { host, port, baseUrl } = parseConnectionUrl(controlUrl);
 
-  // Sanitize names for safe use in double-quoted SQL identifiers
-  const rawSlug = tenantSlug.toLowerCase();
-  const safeSuffix = sanitizeIdentifier(rawSlug.replace(/[^a-z0-9_]/g, "_").slice(0, 40));
-  const dbName = sanitizeIdentifier(`tenant_${safeSuffix}`);
-  const dbUser = sanitizeIdentifier(`tenant_${safeSuffix}_user`);
+  const { dbName, dbUser } = names;
+  if (!GENERATED_NAME_RE.test(dbName) || !GENERATED_NAME_RE.test(dbUser)) {
+    throw new Error("Invalid tenant database or role name");
+  }
   const dbPassword = randomBytes(32).toString("base64url");
 
   // Defence in depth: in multi-tenant mode never hand back a plaintext DB
@@ -194,7 +213,7 @@ export async function provisionTenantDatabase(
     });
 
     try {
-      // Create the database (identifier is sanitized above — safe to interpolate)
+      // Create the database (identifier is [a-z0-9_] only — safe to interpolate)
       await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
       created.database = true;
 
@@ -208,6 +227,11 @@ export async function provisionTenantDatabase(
 
       // Grant all privileges on the database to the dedicated user
       await adminClient.unsafe(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`);
+
+      // CREATE DATABASE leaves CONNECT and TEMPORARY granted to PUBLIC, i.e. to
+      // every other tenant's role. Close that door; the owner (this control
+      // role, which runs migrations and backups) and superusers keep access.
+      await restrictTenantDatabaseAccess(adminClient, dbName, dbUser);
     } finally {
       await adminClient.end();
     }

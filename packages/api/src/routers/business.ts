@@ -14,7 +14,7 @@ import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/fie
 import { cacheBus } from "../lib/cache/bus.js";
 import { requireTenantRole, getTenantRole, hasRole, ADMIN_ROLES } from "../lib/tenant-access.js";
 import { csvRow } from "@hisaabo/shared";
-import { getTenantMemberUserIds, businessTenantScope, assertBusinessInTenant } from "../lib/tenant-businesses.js";
+import { tenantBusinessScope, assertBusinessInTenant } from "../lib/tenant-businesses.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   await requireTenantRole({ user: { id: userId }, tenantId }, ADMIN_ROLES, "Only admins can manage businesses");
@@ -34,19 +34,22 @@ function carrierCredsFor(creds: Parameters<typeof decryptCarrierCredentials>[0],
 
 export const businessRouter = router({
   list: tenantProcedure.query(async ({ ctx }) => {
-    // Security: in cloud mode ctx.db is a per-tenant database, but in self-hosted
-    // mode every tenant shares one DB — so we MUST restrict to businesses owned by
-    // this tenant (creator ∈ tenant members), mirroring hasBusinessAccess. Without
-    // this filter a self-hosted tenant would see every other tenant's businesses.
+    // Security: in cloud mode ctx.db is a per-tenant database, but a self-hosted
+    // database that holds several organisations shares one DB — there we MUST
+    // restrict to businesses owned by this tenant (creator ∈ tenant members),
+    // mirroring hasBusinessAccess (tenantBusinessScope returns no restriction on
+    // cloud and single-organisation installs, where the database is the boundary
+    // and a business whose creator left must stay visible). Without this filter
+    // a multi-org self-hosted tenant would see every other tenant's businesses.
     // All businesses within a tenant are visible to every tenant member so that
     // they can switch between businesses.
     //
     // `logoData` is intentionally excluded — sending logo bytes over tRPC on
     // every list call is wasteful. Consumers fetch the logo via the dedicated
     // HTTP endpoint using logoUpdatedAt as a cache-bust key.
-    const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+    const bizScope = await tenantBusinessScope(ctx.tenantId);
     const { logoData: _logoData, ...cols } = getTableColumns(businesses);
-    const rows = await ctx.db.select(cols).from(businesses).where(businessTenantScope(memberIds));
+    const rows = await ctx.db.select(cols).from(businesses).where(bizScope);
     const isAdmin = hasRole(await getTenantRole(ctx.tenantId, ctx.user.id), ADMIN_ROLES);
     return rows.map((biz) => ({
       ...biz,
@@ -60,8 +63,8 @@ export const businessRouter = router({
     const limits = getLimits(row?.plan ?? "free");
     if (limits.maxBusinesses === Infinity) return true;
     // Count only this tenant's businesses (shared-DB safe — see list()).
-    const memberIds = await getTenantMemberUserIds(ctx.tenantId);
-    const [{ count: bizCount }] = await ctx.db.select({ count: count() }).from(businesses).where(businessTenantScope(memberIds));
+    const bizScope = await tenantBusinessScope(ctx.tenantId);
+    const [{ count: bizCount }] = await ctx.db.select({ count: count() }).from(businesses).where(bizScope);
     return bizCount < limits.maxBusinesses;
   }),
 
@@ -73,12 +76,12 @@ export const businessRouter = router({
       // foreign business resolves to null, matching the null-on-miss contract).
       //
       // logoData excluded — fetched via dedicated /api/businesses/:id/logo.
-      const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+      const bizScope = await tenantBusinessScope(ctx.tenantId);
       const { logoData: _logoData, ...cols } = getTableColumns(businesses);
       const [biz] = await ctx.db
         .select(cols)
         .from(businesses)
-        .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
+        .where(and(eq(businesses.id, input.id), bizScope))
         .limit(1);
       if (!biz) return null;
       const isAdmin = hasRole(await getTenantRole(ctx.tenantId, ctx.user.id), ADMIN_ROLES);
@@ -90,12 +93,14 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
-    await enforceBusinessLimit(ctx.tenantId!, ctx.db);
     // `business` is emitted after the transaction settled (authz business
     // entries are positive-only, so this keeps the contract rather than fixing
     // a stale negative).
     let createdBizId: string | undefined;
     const biz = await ctx.db.transaction(async (tx) => {
+      // The plan-limit check and the insert share this transaction under an
+      // advisory lock, so concurrent creates cannot both pass a limit of 1.
+      await enforceBusinessLimit(ctx.tenantId!, tx);
       const [biz] = await tx.insert(businesses).values({
         ...input,
         createdByUserId: ctx.user.id,
@@ -164,11 +169,11 @@ export const businessRouter = router({
 
       // Tenant-ownership scope: prevents a tenant admin from editing another
       // tenant's business by id in self-hosted shared-DB mode.
-      const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+      const bizScope = await tenantBusinessScope(ctx.tenantId);
       const [biz] = await ctx.db
         .update(businesses)
         .set({ ...data, updatedAt: new Date() })
-        .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
+        .where(and(eq(businesses.id, input.id), bizScope))
         .returning();
 
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
@@ -203,7 +208,7 @@ export const businessRouter = router({
 
       const { bytes, mime: actualMime } = validateLogoDataUrl(input.data.dataUrl);
 
-      const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+      const bizScope = await tenantBusinessScope(ctx.tenantId);
       const [biz] = await ctx.db
         .update(businesses)
         .set({
@@ -214,7 +219,7 @@ export const businessRouter = router({
           logoUpdatedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
+        .where(and(eq(businesses.id, input.id), bizScope))
         .returning({ id: businesses.id, logoUpdatedAt: businesses.logoUpdatedAt });
 
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
@@ -238,7 +243,7 @@ export const businessRouter = router({
     .mutation(async ({ input, ctx }) => {
       await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
 
-      const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+      const bizScope = await tenantBusinessScope(ctx.tenantId);
       const [biz] = await ctx.db
         .update(businesses)
         .set({
@@ -249,7 +254,7 @@ export const businessRouter = router({
           logoUpdatedAt: null,
           updatedAt: new Date(),
         })
-        .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
+        .where(and(eq(businesses.id, input.id), bizScope))
         .returning({ id: businesses.id });
 
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
@@ -275,11 +280,11 @@ export const businessRouter = router({
     .mutation(async ({ input, ctx }) => {
       await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
 
-      const memberIds = await getTenantMemberUserIds(ctx.tenantId);
+      const bizScope = await tenantBusinessScope(ctx.tenantId);
       const [biz] = await ctx.db
         .update(businesses)
         .set({ posEnabled: input.enabled, updatedAt: new Date() })
-        .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
+        .where(and(eq(businesses.id, input.id), bizScope))
         .returning({ id: businesses.id, posEnabled: businesses.posEnabled });
 
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });

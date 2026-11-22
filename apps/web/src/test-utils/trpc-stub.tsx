@@ -29,12 +29,15 @@ export const stub = {
   session: { role: null as string | null | undefined, isLoading: false },
   /** Arguments of every `mutate`/`mutateAsync` call, keyed by tRPC path. */
   mutations: {} as Record<string, unknown[]>,
+  /** Optional result per tRPC path: `mutate` hands it to the hook's `onSuccess`. */
+  mutationResults: {} as Record<string, unknown>,
   navigate: vi.fn() as (...args: unknown[]) => void,
   pathname: "/",
   search: {} as Record<string, unknown>,
   reset() {
     for (const k of Object.keys(this.data)) delete this.data[k];
     for (const k of Object.keys(this.mutations)) delete this.mutations[k];
+    for (const k of Object.keys(this.mutationResults)) delete this.mutationResults[k];
     this.session.role = null;
     this.session.isLoading = false;
     this.navigate = vi.fn();
@@ -91,10 +94,13 @@ const node = (path: string[]): unknown =>
           };
         }
         if (prop === "useMutation") {
-          return () => {
+          return (opts?: { onSuccess?: (result: unknown) => void }) => {
             useRef(null);
             return {
-              mutate: (args: unknown) => record(key, args),
+              mutate: (args: unknown) => {
+                record(key, args);
+                if (key in stub.mutationResults) opts?.onSuccess?.(stub.mutationResults[key]);
+              },
               mutateAsync: (args: unknown) => {
                 record(key, args);
                 return Promise.resolve(undefined);

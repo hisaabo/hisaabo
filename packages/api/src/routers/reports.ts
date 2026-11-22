@@ -16,6 +16,7 @@ import {
   journalEntryLines,
 } from "@hisaabo/db";
 import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
+import { computeGrossProfit } from "../lib/gross-profit.js";
 import { paymentLedgerLeg, paymentTdsSql } from "../lib/payment-settlement.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import {
@@ -1543,16 +1544,8 @@ export const reportsRouter = router({
       const totalIncome = money.sum(income.map((a) => a.amount));
       const totalExpenses = money.sum(expenseItems.map((a) => a.amount));
 
-      // Gross profit = Sales (4000) - Direct costs (5000 Purchases + 5100 Direct Expenses)
-      const salesAmt = income.find((a) => a.accountCode === "4000")?.amount ?? "0.00";
-      const salesReturnsAmt = expenseItems.find((a) => a.accountCode === "4010")?.amount ?? "0.00";
-      const purchasesAmt = expenseItems.find((a) => a.accountCode === "5000")?.amount ?? "0.00";
-      const directExpAmt = expenseItems.find((a) => a.accountCode === "5100")?.amount ?? "0.00";
-
-      const grossProfit = money.sub(
-        money.sub(salesAmt, salesReturnsAmt),
-        money.add(purchasesAmt, directExpAmt),
-      );
+      // Net sales (4000 + 4010 returns) less net direct costs (5000 + 5010 returns + 5100).
+      const grossProfit = computeGrossProfit(income, expenseItems);
 
       const netProfit = money.sub(totalIncome, totalExpenses);
 
@@ -2216,6 +2209,7 @@ export const reportsRouter = router({
         "2102": "Output IGST Payable",
         "2200": "TDS Payable",
         "2300": "Other Current Liabilities",
+        "2900": "Suspense / Unreconciled",
       };
 
       const workingCapitalChanges: Array<{ description: string; amount: string }> = [];

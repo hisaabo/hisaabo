@@ -472,7 +472,8 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
     }
 
     // ── Create ────────────────────────────────────────────────────
-    const type = opts.type ?? "sale";
+    // A purchase return goes back to a supplier: default it to purchase (the API forces it anyway).
+    const type = opts.type ?? (dt.nsKey === "purchaseReturn" ? "purchase" : "sale");
     if (type !== "sale" && type !== "purchase") fatalError("--type must be sale or purchase", EXIT.USAGE);
     const doc = await ns.create({
       type,

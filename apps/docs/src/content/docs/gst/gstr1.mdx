@@ -95,7 +95,7 @@ Items without an HSN code are reported under HSN `0000`. To get accurate HSN sum
 
 ### Credit Notes
 
-All documents with document type `credit_note` issued during the period.
+All sale-side documents with document type `credit_note` or `sales_return` issued during the period. A credit note or sales return you raise from a **purchase** invoice reverses that purchase: it is not an outward supply, so it is not listed here and instead reduces your input tax credit in GSTR-3B. Each row also carries the credit note's CGST, SGST and IGST, split the same way as the invoices (line by line, the odd paisa goes to CGST). GSTR-3B subtracts them from the month's output tax.
 
 | Column | Meaning |
 |---|---|
@@ -110,7 +110,7 @@ All documents with document type `credit_note` issued during the period.
 
 ### Debit Notes
 
-All documents with document type `debit_note` issued during the period. Same structure as credit notes.
+All **sale-side** documents with document type `debit_note` issued during the period. Same structure as credit notes. A debit note or purchase return you raise against a supplier is a purchase-side document: it is not an outward supply, so it is not listed here; it reduces your input tax credit in GSTR-3B instead.
 
 ## Summary totals
 

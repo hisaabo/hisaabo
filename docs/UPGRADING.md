@@ -8,6 +8,20 @@ A bug-fix release. Take the usual backup, then **upgrade the API first**: set `H
 
 - **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
 - **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
+- **Multi-tenant: new tenant databases get random names.** Until now a tenant's database and role were named from its slug (`tenant_<slug, lowercased, cut to 40 characters>`). When two sign-ups had the same long name (a slug base of 34 characters or more loses its random suffix after the cut) they were assigned the same database name, and the second sign-up failed on `CREATE DATABASE`. Tenants created from 0.10.1 on get `t_<32 random hex characters>` for the database and `t_<same hex>_u` for the role (34 and 36 characters, inside Postgres' 63-byte identifier limit). The slug shown in URLs and the UI is unchanged. **Existing tenants keep their `tenant_<slug>` names**: the API, the migration step, the admin dashboard and `rotate-key` always read the names from `tenants.db_name` and `tenants.db_user`, never derive them from a slug, and nothing is renamed. Anything of yours that guesses a tenant database from its slug (a script, a dashboard) must read `tenants.db_name` instead; with the new names it cannot work.
+- **Multi-tenant: tenant databases are closed to other roles.** `CREATE DATABASE` grants `CONNECT` and `TEMPORARY` on the new database to `PUBLIC`, i.e. to every role in the cluster, so any tenant's database role could open a session on every other tenant's database (row data was still protected by table privileges, but the door should not be open). From 0.10.1 provisioning grants `CONNECT` and `TEMPORARY` to the tenant's own role and revokes them from `PUBLIC`.
+- **Multi-tenant: the migration step applies this to every existing tenant database.** After the control and tenant migrations, every API start (and so every deploy) runs one idempotent pass over each database listed in `tenants`: `GRANT CONNECT, TEMPORARY` to the tenant's own role, then `REVOKE CONNECT, TEMPORARY ... FROM PUBLIC`, in one statement per database. The first pass after the upgrade closes the databases you already have; later passes change nothing (and also close a database that an older replica provisioned during a rolling deploy). It never fails startup: per-database errors are logged and counted. Look for this line in the API log:
+
+  ```
+  Tenant database access: closed to PUBLIC  {"total":228,"restricted":228,"missing":0,"skipped":0,"failed":0}
+  ```
+
+  `restricted` counts only databases **verified in the catalog** afterwards: the tenant role can connect and `PUBLIC` holds nothing. `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed or where the change had no effect (the log has one `could not restrict database` error per tenant with the reason). The usual cause is a control role that neither owns the database nor is a superuser: Postgres then only prints a warning ("no privileges could be revoked") and reports success while leaving the database open, which the pass detects and reports as `failed` ("PUBLIC can still connect ..."). Run the preflight query below before upgrading to find those databases. When several API instances start together, one runs the pass and the others log `Tenant database access: skipped, another instance is running the same pass` instead of waiting for it, so the pass never delays startup. To run the pass on its own, without migrations, and get exit code 1 if any database failed (or if another instance held the lock):
+
+  ```bash
+  docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+    node packages/db/dist/migrate.mjs --restrict-tenant-db-access
+  ```
 
 - **New: `WEBMCP_DISABLED`, a kill switch for browser AI agents (WebMCP, experimental, web only).** `true` stops the web app offering Hisaabo to anyone's browser agent on this server, and the API then refuses requests marked `X-Hisaabo-Agent: webmcp` with 403. It does not affect the MCP server or the CLI. It is also reported by `system.config` (`webmcpDisabled`). See [DEPLOYMENT.md](DEPLOYMENT.md#backend-docker--ghcr). Browser agent calls are capped at 120 per minute per address on top of the ordinary per-address limit (they are charged against both, so the marker never raises the total) and send `X-Hisaabo-Agent: webmcp`, which is in the credentialed CORS allow-list; if a reverse proxy in front of the API restricts custom request headers, allow `X-Hisaabo-Agent`.
 
@@ -25,9 +39,9 @@ Three additive schema migrations for the browser agent (WebMCP) hardening, plus 
 - `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Idempotency is strictly opt-in: clients that do not send a key behave exactly as before, and nothing derives a key. Repeating the identical request with the same key within 15 minutes creates nothing and answers with the live record flagged `idempotentReplay: true` (a keyed call that did create the record is flagged `false`; a deleted record is a `CONFLICT`). The table keeps only the record id and a hash of the request, never a copy of the response, and expired rows are purged by the next keyed write and by an hourly sweep.
 - `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me` and enforced by the API for agent-marked calls (FORBIDDEN). It rides in the cached membership entry, so the `hisaabo_cache_tenants` cache-invalidation trigger now also fires on changes to this column: the `*_webmcp_cache_invalidation_triggers` migrations re-install the (idempotent) cache triggers with the new column list; nothing else about them changes.
 
-The recurring-invoice fix adds its own:
+The recurring-invoice and ledger fixes add their own:
 
-One additive migration, applied automatically by the migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+Two additive migrations, applied automatically by the migration step. The first is `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted); the second, `ledger_adjustment_accounts` (`drizzle-tenant/0011`; `drizzle/0024`), is data-only and described under [Corrected accounting and GST figures](#corrected-accounting-and-gst-figures). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
 
 - **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
 - It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
@@ -61,9 +75,72 @@ That bounds tenant connections at `(10 + 10) x 2 = 40`. Add about 15 for the API
 
 How eviction behaves: an evicted pool is not closed, so a request still using it is not affected, and its connections close by themselves after 20 idle seconds. At most `TENANT_POOL_DRAINING_MAX` evicted pools are allowed to drain at once; beyond that the oldest is closed after its running queries finish (up to 30 seconds). Only in such a storm, where more pools are evicted inside 20 seconds than the cap allows, can a request that holds the closed pool fail with `CONNECTION_ENDED`, and only if it starts a new query or transaction after that. To check connections during a busy period, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
+### Before you start (multi-tenant)
+
+1. **Back up the control database and every tenant database** (`backup.sh`, see the 0.10.0 section below).
+2. **Multi-tenant only: preflight the control role.** The pass can only change databases that the `CONTROL_DATABASE_URL` role owns (or acts as the owner of through role membership), or that it can change as a superuser. Connected as that role to the **control database**, this catalog-only query must return no rows:
+
+   ```sql
+   SELECT t.slug, t.db_name, pg_get_userbyid(d.datdba) AS owner
+   FROM tenants t
+   JOIN pg_database d ON d.datname = t.db_name
+   WHERE NOT pg_has_role(current_user, d.datdba, 'USAGE');
+   ```
+
+   Every row is a tenant database the pass will report as `failed`. Fix it with `ALTER DATABASE "<db_name>" OWNER TO <control role>;` (as the current owner or a superuser) or run the control role as a superuser. It only sees databases on the control database's server; tenants with another `db_host` need the same check there.
+3. **Multi-tenant only: check that no two tenants share a database.** Each row of `tenants` must point at its own database. Two rows with the same host, port and database name would share data, and the access pass would treat them as one. On the control database this query must return no rows:
+
+   ```sql
+   SELECT coalesce(db_host, 'localhost') AS db_host, coalesce(db_port, '5432') AS db_port, db_name,
+          count(*) AS tenants, array_agg(slug ORDER BY slug) AS slugs
+   FROM tenants
+   WHERE db_name IS NOT NULL
+   GROUP BY 1, 2, 3
+   HAVING count(*) > 1;
+   ```
+
+   Provisioning always gives a tenant a database of its own, so a row here means a hand-edited or restored `tenants` table: fix it before upgrading (point each row at its own database, or remove the duplicate). A unique index on `(db_host, db_port, db_name)` is planned for 0.11.0; until then nothing in the database prevents it.
+4. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+
+### If you connect to tenant databases with a role other than the control role
+
+Who keeps access after the pass: the **tenant's own role** (explicitly), the **role that owns the database** (the role in `CONTROL_DATABASE_URL`, which ran `CREATE DATABASE`: `POSTGRES_USER` in the bundled compose file) and **superusers**. The API, the migration step, the admin dashboard (`admin`), `ops`, `rotate-key`, `scripts/backup.sh` (it connects as `DB_USER`, which defaults to `POSTGRES_USER`) and the restore sidecar all use one of those, so nothing in the stock deployment needs a change.
+
+If you added **another role** that connects to tenant databases (a read-only BI role, a monitoring or backup role, a pooler's auth role, an engineer's personal login), that role loses access to every tenant database on the first pass, until it is granted explicitly. Typical symptom: `FATAL: permission denied for database "tenant_acme"` / `User does not have CONNECT privilege`. Grant it per database, run on the control database:
+
+```sql
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', db_name, 'bi_reader')
+FROM tenants WHERE db_name IS NOT NULL \gexec
+```
+
+Explicit grants to a role survive every later pass (only `PUBLIC` is revoked). Postgres has no default privileges for databases, so a tenant created later needs the same grant: re-run the statement after new sign-ups, or from a periodic job. Do not work around this by granting `CONNECT` to `PUBLIC` again; the next pass would revoke it. Table privileges inside a tenant database are unchanged.
+
+To check a database by hand: `SELECT datname, datacl FROM pg_database WHERE datname LIKE 'tenant\_%' OR datname LIKE 't\_%';`. A closed database lists only its owner and its own role (for example `{hisaabo=CTc/hisaabo,tenant_acme_user=CTc/hisaabo}`), with no `=Tc/...` entry (the empty grantee is `PUBLIC`). The control database and the `postgres` maintenance database are not touched by this release and remain connectable by `PUBLIC`.
+
+After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLLBACK.md)), the restored database has the default privileges again: restart the `api` container, or run the command above, to close it.
+
 ### Upgrade
 
 Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No environment variable is required or changed; the two pool settings above are optional but recommended for multi-tenant installs with more tenants than pool slots.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f api
+```
+
+ONCE: pull the new image and restart it as usual; it runs the same migration step.
+
+Verify:
+
+- `curl http://127.0.0.1:3000/health` returns `ok`.
+- Multi-tenant: the log shows `Tenant database access: closed to PUBLIC` with `failed: 0`. Spot-check from the host: connect as one tenant's role to another tenant's database and expect `permission denied for database`.
+- Multi-tenant: sign in as a user whose organisation has a business, and open an invoice (it proves the tenant role still connects to its own database).
+- Create an organisation with a long name in a multi-tenant deployment; its row in `tenants` has a `t_...` `db_name`.
+
+### Rolling back
+
+Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
 
 ### What is fixed (reliability)
 
@@ -81,6 +158,211 @@ Take the usual backup first (the `backup.sh` command is under "Before you start"
 - **Bank reconciliation can skip duplicate statement lines (web: on by default; API: opt-in).** When asked to, confirming a column mapping leaves out any line that is already on file in another import of the same bank account (same day, debit, credit and reference number, or the same narration when there is no reference). Overlapping statements and re-uploaded files no longer double up. The 0.10.1 web app has a **Skip lines already imported from an earlier statement** checkbox on the mapping step, ticked by default, and always sends the choice. The API input `skipDuplicates` defaults to **`false`**, so a 0.10.0 web or desktop client talking to a 0.10.1 API (which never sends the flag) imports every line exactly as before; nothing is dropped unless the client asks. The result carries `duplicatesSkipped` and a `duplicates` list (up to 500 lines: file position, date, amounts, narration, and the earlier import that holds each one), and the review screen shows the count with an expandable list of what was skipped, so nothing disappears unseen. `totalLines` in the result and on the import counts the lines actually imported. Imports made before this release are not changed, and they count as "already on file" for later statements. If two statements legitimately contain identical lines with no reference, untick the checkbox (or send `skipDuplicates: false`) for that upload.
 - **Journal entries are never deleted.** `journal.delete` used to remove an entry and its lines with no trace. It now voids the entry, exactly like `journal.void`: a reversing entry is posted, the original is flagged voided, and both stay in the books, reports and Tally export (netting to zero). The response is still `{ success: true }` with extra fields (`voided`, `alreadyVoided`, `reversingEntryNumber`, ...). Calling it on an already voided entry is a no-op. **Both `journal.delete` and `journal.void` now refuse a reversal entry** (the entry a previous void posted) with `BAD_REQUEST`: before, `journal.void` would reverse it, which reinstated the original's effect in the ledger while the original stayed flagged voided. To correct a wrong void, post a new journal entry. **`journal.update` also refuses a reversal entry** (`BAD_REQUEST`, "post a new journal entry to correct it"), because editing it would break the pair's netting to zero. `journal.update` now checks that the entry is not voided under a row lock inside its transaction, so an edit racing a void can no longer rewrite the lines of an entry that was just reversed (the edit is refused instead). Every void, from `journal.void` or `journal.delete`, is now recorded in the audit log as `journal.void`, written in the same transaction as the void itself: the record cannot be missing, and if it cannot be written the void is rolled back with an error. The web app and the CLI only ever offered Void; there is no delete command. Scripts that called `journal.delete` expecting the entry to disappear from `journal.list` will now see it (and its reversal) listed as voided.
 - **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
+- **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start. That state is **latched**: the first time the API sees more than one row in `tenants` it writes a `system_config` row (`self_host_multi_org_seen`) and keeps the rule on even if the extra organisations are deleted later, because a hard-deleted organisation leaves its businesses in the shared database and they would otherwise appear in the surviving organisation. If you really did remove the extra organisations and their businesses, switch the rule off again with `DELETE FROM system_config WHERE key = 'self_host_multi_org_seen';` (it takes effect within about 15 seconds). Cloud and single-organisation installs never write the row.
+- **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
+
+### Corrected accounting and GST figures
+
+> **Warning: figures for past periods will change. Review previously filed returns.**
+> Hisaabo does not store GSTR-1, GSTR-3B, party balances or the trial balance. It recomputes them from your invoices, notes and payments every time you open them. After this upgrade the **past periods** are recomputed with the corrected rules below, so a GSTR-3B or GSTR-1 you have already filed can now show different numbers from the ones you filed, and party balances, party statements, the P&L, the trial balance and the balance sheet can differ from what you saw before. Before you file the next return or an amendment, re-open the months you have already filed, compare them with what was filed, and take any difference to your CA.
+
+What was wrong, and what you see now:
+
+| Where | Before | Now |
+|---|---|---|
+| **Round-off, invoice discount, additional charges (books)** | An invoice, credit note, debit note or return that carried a round-off, an invoice-level discount or additional charges was posted to the ledger without them, so the trial balance and balance sheet were out of balance by exactly that amount. | They post to accounts of their own, mirrored for notes and returns: round-off to **Round Off** (5030, either sign), the discount to **Discount Allowed** (5020) on sales and **Discount Received** (4200) on purchases, additional charges to **Other Charges** (4020) on sales and **Direct Expenses** (5100) on purchases. Every document balances, and net profit now includes them. The GST on the document is unchanged (it is computed before the invoice-level discount, as the invoice shows). |
+| **Gross profit** | Sales returns were never deducted and purchase returns were ignored. | Gross profit is (Sales + Sales Returns) - (Purchases + Purchase Returns + Direct Expenses). |
+| **GSTR-3B, input tax credit (Table 4)** | Purchase returns, purchase-side debit notes and credit notes / sales returns raised from a purchase invoice were **added** to the credit, overstating it, and so was **every other purchase-type document**: the query had no document-type filter, so purchase quotations, proformas and delivery challans counted as if they were bills. | They **reduce** it, by head (CGST, SGST, IGST), as in your books, and **purchase-type documents that are not invoices or reversals no longer count toward input credit at all**. |
+| **GSTR-3B, output tax (Table 3.1(a), Tax Payable, Net Tax)** | Credit notes, sales returns and sale-side debit notes were ignored, overstating the tax when you issued credit notes. | Taxable value and tax are **net of credit notes and sales returns and include sale-side debit notes**, per head. GSTR-1 still lists the invoices gross and the notes in their own section. In a month where credit notes exceed sales, the net 3.1(a) figures (and Tax Payable) are **negative**: that is a credit to carry forward, not an error. |
+| **Which side a credit note belongs to** | The web and mobile apps create a credit note or sales return from a **purchase** invoice with the type of that invoice, but the books, GSTR-1 and GSTR-3B treated every credit note / sales return as a sale-side document: they were posted against a receivable and output GST, listed in GSTR-1 and netted from output tax. | One classifier everywhere, by the document's **type**: a credit note or sales return raised from a purchase invoice reverses the purchase (Dr Payable / Cr Purchase Returns / Cr Input GST), reduces input credit, is **not** in GSTR-1, and reduces what you owe the supplier; sale-side ones are unchanged. |
+| **CGST / SGST on an odd paisa** | GSTR-1 and GSTR-3B rounded the odd paisa up for both heads (an invoice with GST of 102.59 reported 51.30 + 51.30 = 102.60), while the books, the invoice's ITC entry and the PDF each split it differently again (the PDF printed tax / 2 for each head). | One rule everywhere, the **e-invoice (IRP) one**, because the IRP-signed e-invoice is what the government holds: each **line's** tax is halved with CGST rounded half-up and SGST the remainder (the odd paisa goes to CGST), and a document's CGST / SGST is the sum of its lines. The ledger, GSTR-1 (invoice rows, B2CS, HSN and totals now tie), GSTR-3B, GSTR-9, the PDF and the e-way bill all follow it. Limits to know: **PDFs you downloaded earlier** printed tax / 2 per head, so on an odd-paisa invoice an old PDF can differ by one paisa per head from the reports (a re-downloaded PDF uses the new split); **e-invoices already submitted are not touched**; and the IRP payload computed the half in floating point, which rounded a few odd paise (about 1 in 22) down, so for those lines the CGST / SGST in a payload sent earlier can differ by one paisa from the exact rule now used. |
+| **GSTR-1, debit notes** | Purchase-side debit notes and purchase returns, which you issue to a supplier, were listed as outward debit notes. | Only sale-side debit notes are listed. |
+| **Party balance (party page, party list, "Outstanding" filter)** | Quotations, proformas and delivery challans were counted, a purchase-side debit note was added to what you owe a supplier instead of reducing it, and a **supplier's balance was shown as a positive number** (the web and mobile apps then labelled it "Receivable" / "You will receive", although the API, CLI and MCP documentation say negative = you owe them). | The balance is **signed, debit minus credit, for customers and suppliers alike**: positive = they owe you, negative = you owe them. A supplier you owe 14,000 now shows **-14,000** (Payable). Only invoices, credit notes, sales returns, purchase returns and debit notes count, and credit notes, returns and purchase-side debit notes move the balance the right way. The "Outstanding" filter lists every party whose balance is not zero, in either direction. The dashboard "Payable" card, which stays a positive amount, now includes suppliers' opening balances and the same reversals. |
+| **Party ledger tab, statement and PDF** | On the party's **Ledger tab**, payments to a supplier were shown as credits, purchase-side debit notes were on the wrong side and deleted payments were listed. | Fixed; the tab, the party statement report, the CSV and the PDF all start from the opening balance exactly as stored and agree with the party's balance (they add payments as their own rows, so they match whenever every payment is allocated to an invoice). |
+| **ITC utilisation** | Recording a period's utilisation a second time posted the credit a second time, and Input GST went negative. | Recording a period again **replaces** its journal: the earlier one is reversed (marked void, with a mirror entry; nothing is deleted) and the new one posted. Recording zero amounts clears the period. |
+| **ITC ledger and the utilisation limit** | The ITC ledger was written only when a purchase invoice was created, so a purchase return reduced GSTR-3B but not the ITC dashboard, and a utilisation could exceed the credit GSTR-3B reports. | A purchase-side reversal created from now on writes a **negative** ITC entry (and cancelling or deleting it removes the entry), so the ITC dashboard, Table 4 and the utilisation limit are net and equal GSTR-3B. **Reversals created before this release have no entry**: for those months the ITC dashboard stays gross while GSTR-3B Table 4, which is computed from the documents, is net. |
+| **A document that does not add up** | A document whose stored total is not explained by its subtotal, tax, discount, charges and round-off (a legacy import, hand-edited data) had the whole difference posted as round-off, however large. | Up to ₹1.00 it is still a round-off. A larger difference is parked in a new **Suspense / Unreconciled** account (2900, a balance-sheet account, so it never looks like profit) and the API logs a warning with the document id: find it in the log, fix the document, and the account clears. |
+
+#### What the accounting migration does
+
+`0024_ledger_adjustment_accounts` (`0011_ledger_adjustment_accounts` for tenant databases) only adds four system accounts to every existing business: **4020 Other Charges**, **5020 Discount Allowed**, **5030 Round Off** and **2900 Suspense / Unreconciled**. It is idempotent and rewrites no document. If a business already has an account of its own coded 4020, 5020, 5030 or 2900 it is left untouched, and the adjustment then posts to Other Income (4100), Miscellaneous Expenses (5990) or Other Current Liabilities (2300) instead of failing.
+
+#### What to do after upgrading
+
+1. **Find the months that change.** Save the query below as `gstr3b-diff.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, see [Running it on every tenant](#running-the-queries-on-every-tenant) below). It lists, per business and month, the GSTR-3B output tax and input credit the old rules produced and the corrected ones, and only months where the net tax payable differs. Figures are totals over CGST + SGST + IGST (the head split follows the same rules); months are calendar months in UTC, which is what the reports use on the Docker image.
+
+   <!-- gstr3b-diff-query -->
+   ```sql
+   WITH docs AS (
+     SELECT i.business_id,
+            date_trunc('month', i.invoice_date AT TIME ZONE 'UTC')::date AS month,
+            i.type::text AS type,
+            i.document_type::text AS document_type,
+            i.tax_amount::numeric AS tax,
+            -- the side a document belongs to, by its type (the ledger's rule); a purchase
+            -- return is purchase-side whatever type it was stored with
+            CASE
+              WHEN i.document_type = 'purchase_return' THEN 'purchase'
+              WHEN i.document_type IN ('invoice', 'credit_note', 'sales_return', 'debit_note') THEN i.type::text
+            END AS side,
+            -- credit notes / returns, and a debit note raised against a supplier, take tax back
+            (i.document_type IN ('credit_note', 'sales_return', 'purchase_return')
+             OR (i.document_type = 'debit_note' AND i.type = 'purchase')) AS reverses
+     FROM invoices i
+     WHERE i.status <> 'cancelled' AND i.deleted_at IS NULL
+   ), m AS (
+     SELECT business_id, month,
+            -- before: only sale invoices; after: net of credit notes / returns, plus sale debit notes
+            COALESCE(SUM(tax) FILTER (WHERE type = 'sale' AND document_type = 'invoice'), 0) AS old_output,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND reverses), 0) AS new_output,
+            -- before: EVERY purchase-type document; after: invoices less reversals
+            COALESCE(SUM(tax) FILTER (WHERE type = 'purchase'), 0) AS old_itc,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND reverses), 0) AS new_itc
+     FROM docs
+     GROUP BY business_id, month
+   )
+   SELECT b.name AS business, m.business_id, to_char(m.month, 'YYYY-MM') AS month,
+          m.old_output, m.new_output, m.old_itc, m.new_itc,
+          m.old_output - m.old_itc AS old_net_tax, m.new_output - m.new_itc AS new_net_tax,
+          (m.new_output - m.new_itc) - (m.old_output - m.old_itc) AS change
+   FROM m JOIN businesses b ON b.id = m.business_id
+   WHERE (m.old_output - m.old_itc) <> (m.new_output - m.new_itc)
+   ORDER BY b.name, m.month
+   ```
+
+   A positive `change` means more tax payable than before, a negative one less. It does not show the odd-paisa CGST / SGST difference (a paisa per affected invoice).
+
+   <a id="running-the-queries-on-every-tenant"></a>
+   **Running it on every tenant (multi-tenant).** Connected with `psql` to the **control database** as the control role, in the directory that holds `gstr3b-diff.sql`, this generates one `\c` + `\i` pair per tenant database and runs them (a `psql` `\gexec` cannot be used here: it runs generated SQL in the *same* database and cannot switch databases):
+
+   ```
+   \t on
+   \a
+   \o each-tenant.psql
+   SELECT format(E'\\echo == %s\n\\c %I %I %s %s\n\\i gstr3b-diff.sql',
+                 slug, db_name, current_user, coalesce(db_host, 'localhost'), coalesce(db_port, '5432'))
+   FROM tenants WHERE db_name IS NOT NULL ORDER BY slug;
+   \o
+   \t off
+   \a
+   \i each-tenant.psql
+   ```
+
+   It reconnects as the same role to each tenant's host, port and database (set `PGPASSWORD` or use a `.pgpass` entry so it does not prompt per tenant) and prints one `== <slug>` heading per tenant followed by that tenant's rows. The same loop runs the opening-balance review query in step 5: replace `gstr3b-diff.sql` with its file name.
+2. **Re-open every GSTR-3B and GSTR-1 you have already filed** for the months it lists (GST, pick the month) and compare with what was filed. Differences come from credit notes, returns, debit notes, purchase-type documents that are not bills, and odd-paisa GST; if one is material, your CA decides whether to amend.
+3. Open the **trial balance** and **balance sheet**: they now balance for invoices with a round-off, discount or charges. New rows (Round Off, Discount Allowed, Other Charges) appear in the P&L when you used those fields. If **Suspense / Unreconciled** shows a balance, a document does not add up: the API log names it.
+4. **ITC utilisation recorded twice before this release** is not rewritten automatically. Open ITC, **Utilization**, pick the period, and save it again: the doubled journal is reversed and one correct journal is posted.
+5. **Review supplier and customer opening balances. Their meaning may have changed for you.** The documented convention (docs, API, CLI, MCP) is one signed number for everyone: **positive = they owe you, negative = you owe them**. Hisaabo 0.10.0 showed a bare "Opening Balance" box with no direction, and its party page added a supplier's purchases to whatever you typed, so a supplier's opening balance entered as a **positive** number (for example `14000`, meant as "we owe them 14,000") behaved as an amount you owe. Under the convention it now means **they owe you 14,000**: the supplier's balance and statement start from the other side. Customers are the mirror image (a negative opening balance means you owe the customer). Nothing is changed automatically, because only you know what each number meant. Run this read-only query (same way as step 1) to list the candidates, the rows whose sign differs from the usual direction:
+
+   <!-- opening-balance-review-query -->
+   ```sql
+   SELECT b.name AS business, p.id AS party_id, p.business_id, p.type, p.name AS party,
+          p.opening_balance,
+          CASE WHEN p.type = 'supplier' THEN 'positive: the supplier now OWES YOU this' ELSE 'negative: YOU now owe the customer this' END AS meaning_now
+   FROM parties p JOIN businesses b ON b.id = p.business_id
+   WHERE (p.type = 'supplier' AND p.opening_balance::numeric > 0)
+      OR (p.type = 'customer' AND p.opening_balance::numeric < 0)
+   ORDER BY b.name, p.type, p.name
+   ```
+
+   For each row, decide what the number was meant to be. If it is right as it stands (an advance you paid a supplier is a positive supplier balance; an advance a customer paid you is a negative customer balance), leave it. If it was typed as "the amount I owe the supplier" (or "the amount the customer owes me" typed negative), flip its sign **after confirming**, either by editing the party in the mobile app (its edit screen has **To receive** / **To pay**) or with this optional per-party statement, run in the right database:
+
+   <!-- opening-balance-flip -->
+   ```sql
+   UPDATE parties
+   SET opening_balance = -opening_balance, updated_at = now()
+   WHERE id = '<party_id from the query>' AND business_id = '<business_id from the query>';
+   ```
+
+   There is deliberately no bulk migration. The statement is safe to run once per party; running it twice flips it back.
+
+#### Points to confirm with your CA
+
+- A **purchase-side debit note** (a debit note you raise against a supplier) is treated like a purchase return: it reduces input credit in GSTR-3B Table 4, matching the books. Under the GST law a *debit note issued by the supplier* increases credit; Hisaabo's purchase-side debit note is the one you issue.
+- An **invoice-level discount** is booked after GST (as a Discount Allowed expense); it does not reduce the taxable value or the GST on the invoice.
+- **Round Off** is an expense account that can carry either sign; a net credit shows as a negative expense.
+
+### E-invoicing never signed in to the IRP
+
+**Action needed if you use e-invoicing:** configure the NIC public key. Through v0.10.0 the NIC public key bundled in the API image was not a valid key, so the sign-in request to the IRP failed before anything was sent, and **e-invoicing has never worked against the IRP** in any release (so no IRN was ever generated by a real IRP call). v0.10.1 no longer bundles a key: you supply it.
+
+1. Download the NIC e-invoice public key for each environment you use (the sandbox and production keys differ) from the NIC e-invoice portal, as described in [DEPLOYMENT.md](DEPLOYMENT.md#e-invoicing-irp).
+2. Set `IRP_SANDBOX_PUBLIC_KEY_PATH` / `IRP_SANDBOX_PUBLIC_KEY_PEM` (businesses with sandbox mode on) and/or `IRP_PUBLIC_KEY_PATH` / `IRP_PUBLIC_KEY_PEM` (sandbox mode off). A file mounted as a Compose secret is the easiest. Restart the API.
+3. In the app, **E-Invoicing, Settings, Test Connection**. It says whether the key (server setup), the network or the sign-in (credentials) failed.
+
+Until a key is configured, generating, retrying or cancelling an e-invoice is refused with "E-invoicing is not configured: the NIC public key is missing or invalid" and nothing is changed (invoices are not marked `failed`). Installs that do not use e-invoicing need to do nothing; the API logs a warning at startup only if a key variable is set but invalid.
+
+The same release corrects how the sign-in request is built and how the IRP's `Status` is read, to match NIC's published documentation. That was checked against the documentation only, not against NIC's live sandbox, so run Test Connection in sandbox mode first. The request and key handling are recorded in [compliance-audit.md](compliance-audit.md).
+
+### E-invoice cancellation now cancels the invoice
+
+Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.
+
+From v0.10.1, **Cancel** on the E-Invoicing page (also `hisaabo einvoice cancel`, the `einvoice_cancel` MCP tool and `eInvoice.cancel`) cancels the IRN and the invoice together, through the same path as a normal invoice cancel (stock and returns adjusted, out of GSTR-1/3B, the ledger and party balances). The 24-hour window is unchanged, and it is refused **before** anything is sent to the portal while payments are allocated to the invoice (remove or reallocate them first). No schema change and no migration.
+
+**Invoices already cancelled by v0.10.0 or earlier are not fixed automatically.** Nothing is migrated, because cancelling an invoice reverses stock and changes returns, and that is a decision for the business. List them with this read-only query, one database at a time (self-hosted: the one database; multi-tenant: every tenant database):
+
+```sql
+-- Invoices whose IRN was cancelled but which are still live.
+SELECT i.business_id,
+       i.invoice_number,
+       i.document_type,
+       p.name AS party,
+       i.invoice_date::date AS invoice_date,
+       i.total_amount,
+       i.status AS invoice_status,
+       i.e_invoice_status,
+       i.e_invoice_cancel_reason,
+       i.irn
+FROM invoices i
+JOIN parties p ON p.id = i.party_id
+WHERE i.e_invoice_status = 'cancelled'
+  AND i.status <> 'cancelled'
+  AND i.deleted_at IS NULL
+ORDER BY i.business_id, i.invoice_date, i.invoice_number;
+```
+
+Save it as `stuck-einvoices.sql` and run it against a self-hosted Docker Compose install:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < stuck-einvoices.sql
+```
+
+Multi-tenant (loops over every tenant database). Tenant databases are listed from the control database's `tenants` table, not found by name, because their names are not all alike. The control database is `$POSTGRES_DB` unless you set `CONTROL_DATABASE_URL` to another one (then use that name). It reads with the same `POSTGRES_USER` the admin dashboard uses, so that role must be able to connect to every tenant database:
+
+```bash
+COMPOSE="docker compose --env-file .env.prod -f docker-compose.prod.yml"
+for db in $(echo "SELECT db_name FROM tenants WHERE db_name IS NOT NULL ORDER BY db_name" \
+    | $COMPOSE exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'); do
+  echo "== $db"
+  $COMPOSE exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d $db" < stuck-einvoices.sql
+done
+```
+
+A tenant whose `db_host` is not this Postgres server has to be queried with `psql` on that host instead.
+
+On the ONCE image, connect as shown in [DEPLOYMENT.md](DEPLOYMENT.md#once-all-in-one-image) and run the same file.
+
+For each row returned, whoever owns the business decides whether the invoice should really be cancelled (it normally should: its IRN is gone). Cancel it with the **normal invoice cancel**, which never contacts the IRP again because the IRN is already cancelled:
+
+- **Web:** open E-Invoicing, **Cancelled** tab, press **Cancel invoice** on the row.
+- **CLI:** `hisaabo invoice status <invoice-id> cancelled`.
+- **MCP / API:** `invoice_update_status` / `invoice.updateStatus` with `status: "cancelled"`. (`eInvoice.cancel` on such an invoice also works and only finishes the local cancel.)
+
+The invoice status rules are unchanged in 0.10.1, so some rows cannot be cancelled directly:
+
+- **`paid`, or any invoice with payments allocated:** remove the payment allocations first (removing the payments moves the invoice back to `sent` or `partial`), then cancel it.
+- **`adjusted` (fully offset by credit notes or sales/purchase returns):** the status rules do not allow cancelling it, and cancelling or deleting those credit notes or returns does not move the invoice out of `adjusted`, so there is no in-app route yet. Leave these rows for a later release and decide with your accountant how the offsetting credit note or return is reported until then.
+
+If the customer still needs billing, issue a new invoice (new number, new IRN). An invoice that is still listed after you cancel it was in a different state than expected: check its `status`. The E-Invoicing page also shows a banner with the count of such invoices, and the invoice's own panel says it is still active.
+
+### Other changes in 0.10.1 that touch e-invoice cancellation
+
+- **A cancel whose answer was lost is now recoverable.** Requests to the IRP time out after 30 seconds. If the IRP cancelled the IRN but the answer never arrived (timeout, crash, double click), cancelling again asks the IRP for the IRN's status; when it reports the IRN as cancelled, Hisaabo completes the local cancel instead of showing the IRP's refusal. This also works after the 24-hour window. If the IRN is still active, the original error is shown and nothing changes.
+- **Known issue (not fixed in 0.10.1, planned for 0.11): cancelling an invoice that was converted from a delivery challan restores stock the invoice did not deduct.** The challan already deducted the stock, the invoice created from it deducts nothing, but cancelling or deleting that invoice (including by cancelling its e-invoice) adds its quantities back. Adjust stock manually after cancelling such an invoice. Listed in [compliance-audit.md](compliance-audit.md).
 
 
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)

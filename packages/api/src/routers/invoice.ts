@@ -1,50 +1,21 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { getTenantDb, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
+import { getTenantDb, type TenantDatabase, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
+import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
+import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
-
-// Reverse the stock (and purchase ITC) impact an invoice had at creation.
-// Shared by delete and cancel so both undo exactly the same effects.
-type InvoiceTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
-
-async function reverseInvoiceEffects(
-  tx: InvoiceTx,
-  businessId: string,
-  inv: { id: string; type: "sale" | "purchase"; documentType: string },
-) {
-  const lineItemRows = await tx.select()
-    .from(invoiceItems)
-    .where(eq(invoiceItems.invoiceId, inv.id));
-
-  // Reverse stock per line item (batched, NUMERIC arithmetic in SQL)
-  await applyStockDeltas(
-    tx,
-    lineItemRows.map((li) => ({ ...li, sign: inv.type === "sale" ? (1 as const) : (-1 as const) })),
-    { businessId },
-  );
-
-  // Auto-reverse ITC when a purchase invoice is deleted/cancelled
-  if (inv.type === "purchase" && inv.documentType === "invoice") {
-    await tx.update(itcLedgerEntries)
-      .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
-      .where(and(
-        eq(itcLedgerEntries.invoiceId, inv.id),
-        eq(itcLedgerEntries.businessId, businessId),
-        inArray(itcLedgerEntries.status, ["available", "blocked"]),
-      ));
-  }
-}
+import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
+import { isIntraStateSupply } from "../lib/gst-split.js";
 
 /** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
 type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
@@ -265,7 +236,7 @@ export const invoiceRouter = router({
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
-      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode })
+      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode, state: parties.state })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -461,27 +432,26 @@ export const invoiceRouter = router({
         const [bizForItc] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
           stateCode: businesses.stateCode,
+          state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
 
         if (bizForItc?.gstRegistrationType !== "composition") {
           const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
           const returnPeriod = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, "0")}`;
 
-          const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
+          // The same test GSTR-3B and a purchase return's ITC entry use (state codes, then names)
+          const sameState = isIntraStateSupply(bizForItc, partyCheck);
 
-          // Use integer paise arithmetic to avoid floating-point rounding errors
-          const taxPaise = Math.round(parseFloat(totals.taxTotal) * 100);
+          // The one CGST/SGST split (per line, odd paisa to CGST: the e-invoice rule), shared with
+          // the ledger and the GST returns
           let cgst = "0";
           let sgst = "0";
           let igst = "0";
 
           if (sameState) {
-            const halfPaise = Math.floor(taxPaise / 2);
-            const remainderPaise = taxPaise - halfPaise;
-            cgst = (halfPaise / 100).toFixed(2);
-            sgst = (remainderPaise / 100).toFixed(2);
+            [cgst, sgst] = splitDocumentGst(totals.taxTotal, processedItems.map((li) => li.taxAmount));
           } else {
-            igst = (taxPaise / 100).toFixed(2);
+            igst = money.add(totals.taxTotal, "0");
           }
 
           await tx.insert(itcLedgerEntries).values({
@@ -752,16 +722,12 @@ export const invoiceRouter = router({
 
         const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
         if (isCancelling) {
-          // Cancelling undoes stock like delete does, so it needs the same permission and rule.
-          requireCan(ctx.ability, "delete", "Invoice");
-          const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: before.status, createdAt: before.createdAt });
-          if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
-          await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
-          await reverseInvoiceEffects(tx, ctx.businessId, before);
+          // Same rules and effects as cancelling through eInvoice.cancel (lib/invoice-cancel.ts).
+          await applyInvoiceCancel(tx, ctx, before);
         }
 
         const [invoice] = await tx.update(invoices)
-          .set({ status: input.status, updatedAt: new Date() })
+          .set({ status: input.status, updatedAt: new Date(), ...(isCancelling ? staleEInvoiceErrorPatch(before) : {}) })
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
           .returning();
 
@@ -986,6 +952,26 @@ export const invoiceRouter = router({
           .set(updates)
           .where(eq(invoices.id, input.id))
           .returning();
+
+        // A purchase-side reversal's negative ITC entry carries its tax, party and date: record it
+        // again from the saved document so an edit never leaves it stale.
+        if (result && isPurchaseReversal(result.documentType, result.type)) {
+          await removePurchaseReversalItc(tx, ctx.businessId, result);
+          const savedLines = await tx.select({ taxAmount: invoiceItems.taxAmount })
+            .from(invoiceItems)
+            .where(eq(invoiceItems.invoiceId, result.id));
+          await recordPurchaseReversalItc(tx, {
+            businessId: ctx.businessId,
+            documentId: result.id,
+            documentType: result.documentType,
+            type: result.type,
+            partyId: result.partyId,
+            documentDate: result.invoiceDate,
+            taxTotal: result.taxAmount,
+            lineTaxes: savedLines.map((l) => l.taxAmount),
+            isReverseCharge: result.isReverseCharge,
+          });
+        }
 
         return result;
       });

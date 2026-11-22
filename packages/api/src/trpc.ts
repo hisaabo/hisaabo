@@ -168,17 +168,20 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
 });
 
 // Middleware: requires business selected and validates it exists in tenant DB
-// AND that the business belongs to the caller's tenant (critical in self-hosted
-// mode where all tenants share a single database).
+// AND, where one database holds several organisations (self-hosted with more
+// than one tenant, now or ever), that the business belongs to the caller's
+// tenant. On cloud (database per tenant) and single-organisation self-hosted
+// installs the database is the boundary and no creator check applies.
 const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
   if (!ctx.businessId) {
     if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: no businessId in ctx. Headers received x-business-id:", ctx.req.headers.get("x-business-id"));
     throw new TRPCError({ code: "BAD_REQUEST", message: "No business selected" });
   }
 
-  // Business exists in this tenant's database AND its creator is (still) a
-  // member of the caller's tenant (critical in self-hosted mode where all
-  // tenants share one DB). Cached positive-only (lib/authz.ts).
+  // Business exists in this tenant's database AND, only on a shared multi-org
+  // self-hosted database, its creator is (still) a member of the caller's tenant
+  // (lib/tenant-businesses.ts creatorRuleApplies). Cached positive-only
+  // (lib/authz.ts).
   const access = await getBusinessAccess((ctx as unknown as TenantCtx).db, ctx.tenantId as string, ctx.businessId);
   if (!access.ok) {
     if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL:", access.reason, "businessId:", ctx.businessId, "tenantId:", ctx.tenantId);
