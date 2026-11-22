@@ -18,8 +18,9 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
+  businesses,
   invoices,
   items as itemsTable,
   recurringInvoiceTemplates,
@@ -738,5 +739,181 @@ describe("Recurring template — itemName + description schema split (Bug B)", (
     // And the other fields must be preserved verbatim.
     expect(items[0]!.quantity).toBe("1");
     expect(items[1]!.quantity).toBe("2");
+  });
+});
+
+// =============================================================================
+// REC-LOCK: claim + generate under one row lock (concurrent runners)
+// =============================================================================
+//
+// The scheduler used to take FOR UPDATE SKIP LOCKED in a transaction that
+// returned right after the SELECT, so the lock was gone before generation and
+// two replicas (or overlapping ticks) could both bill the same occurrence.
+// These run several runners at once on one pool (they use separate connections,
+// exactly like two replicas would) and count what was actually written.
+
+describe("REC-LOCK: concurrent runners generate each occurrence once", () => {
+  let lockBusiness: import("../helpers/fixtures.js").TestBusiness;
+  let lockParty: import("../helpers/fixtures.js").TestParty;
+
+  beforeAll(async () => {
+    const db = getTenantTestDb();
+    const { createBusiness, createParty } = await import("../helpers/fixtures.js");
+    lockBusiness = await createBusiness(db, world.ramesh.id, {
+      name: "Lock Test Business",
+      gstin: "27LOCKTEST01R1ZM",
+      invoicePrefix: "LK",
+      nextInvoiceNumber: 1,
+    });
+    lockParty = await createParty(db, lockBusiness.id, { name: "Lock Party", type: "customer" });
+  });
+
+  /** A monthly template one hour overdue: exactly one occurrence is due. */
+  async function dueTemplate(name: string) {
+    const db = getTenantTestDb();
+    const due = new Date(Date.now() - 3_600_000);
+    const [tpl] = await db.insert(recurringInvoiceTemplates).values({
+      businessId: lockBusiness.id,
+      partyId: lockParty.id,
+      name,
+      type: "sale",
+      frequency: "monthly",
+      startDate: due,
+      nextRunDate: due,
+      lineItems: [{
+        itemName: "Retainer",
+        quantity: "1",
+        unitPrice: "1000.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+      additionalCharges: "0",
+    }).returning();
+    return tpl!;
+  }
+
+  async function outcome(templateId: string) {
+    const db = getTenantTestDb();
+    const runs = await db.select().from(recurringInvoiceRuns).where(eq(recurringInvoiceRuns.templateId, templateId));
+    const [tpl] = await db.select({ totalRuns: recurringInvoiceTemplates.totalRuns })
+      .from(recurringInvoiceTemplates).where(eq(recurringInvoiceTemplates.id, templateId));
+    const invoiceIds = runs.map((r) => r.invoiceId).filter((id): id is string => Boolean(id));
+    const generated = invoiceIds.length
+      ? await db.select({ id: invoices.id }).from(invoices).where(inArray(invoices.id, invoiceIds))
+      : [];
+    return { runs, totalRuns: tpl!.totalRuns, invoices: generated.length };
+  }
+
+  it("four concurrent processDueTemplates runs on one due template produce exactly one invoice", async () => {
+    const tpl = await dueTemplate("Concurrent runners");
+    const db = await getTenantDb("single");
+
+    await Promise.all([1, 2, 3, 4].map(() => processDueTemplates(db)));
+
+    const res = await outcome(tpl.id);
+    expect(res.invoices).toBe(1);
+    expect(res.runs.filter((r) => r.status === "success")).toHaveLength(1);
+    expect(res.totalRuns).toBe(1);
+    // The run records which occurrence it consumed.
+    expect(res.runs[0]!.scheduledFor?.getTime()).toBe(tpl.nextRunDate.getTime());
+  });
+
+  it("a second runner that arrives while the first is mid-generation does not generate the occurrence again", async () => {
+    const tpl = await dueTemplate("Mid-generation");
+    const db = await getTenantDb("single");
+
+    // Stall the first runner inside generation: it needs the business row for
+    // the invoice number, which this transaction holds. The old scheduler had
+    // already dropped the template lock by then, so a second runner claimed the
+    // same occurrence and both billed it once the stall ended.
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((r) => (locked = r));
+    const staller = db.transaction(async (tx) => {
+      await tx.select({ id: businesses.id }).from(businesses)
+        .where(eq(businesses.id, lockBusiness.id)).for("update");
+      locked();
+      await released;
+    });
+    await lockTaken;
+
+    const first = processDueTemplates(db);
+    await new Promise((r) => setTimeout(r, 300)); // first runner is now waiting on the business row
+    const second = processDueTemplates(db);
+    await new Promise((r) => setTimeout(r, 300));
+    release();
+    await Promise.all([staller, first, second]);
+
+    const res = await outcome(tpl.id);
+    expect(res.invoices).toBe(1);
+    expect(res.runs.filter((r) => r.status === "success")).toHaveLength(1);
+    expect(res.totalRuns).toBe(1);
+  });
+
+  it("a runner skips a template whose row another runner holds, and does not wait for it", async () => {
+    const tpl = await dueTemplate("Held by another runner");
+    const db = await getTenantDb("single");
+
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((r) => (locked = r));
+
+    const holder = db.transaction(async (tx) => {
+      await tx.select({ id: recurringInvoiceTemplates.id }).from(recurringInvoiceTemplates)
+        .where(eq(recurringInvoiceTemplates.id, tpl.id)).for("update");
+      locked();
+      await released;
+    });
+    await lockTaken;
+
+    const started = Date.now();
+    await processDueTemplates(db); // must return promptly, having claimed nothing
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect((await outcome(tpl.id)).invoices).toBe(0);
+
+    release();
+    await holder;
+
+    await processDueTemplates(db); // lock released: now it is generated, once
+    expect((await outcome(tpl.id)).invoices).toBe(1);
+  });
+
+  it("the unique backstop rejects a second success for the same occurrence but allows repeats of failed runs", async () => {
+    const tpl = await dueTemplate("Backstop");
+    const db = getTenantTestDb();
+    const scheduledFor = new Date(Date.now() - 7_200_000);
+    const base = { templateId: tpl.id, businessId: lockBusiness.id, scheduledFor } as const;
+
+    await db.insert(recurringInvoiceRuns).values({ ...base, status: "success" });
+    await expect(db.insert(recurringInvoiceRuns).values({ ...base, status: "success" })).rejects.toMatchObject({
+      cause: { code: "23505", constraint_name: "recurring_run_occurrence_uniq" },
+    });
+    // A failed attempt may repeat for the same occurrence (it is retried every tick)...
+    await db.insert(recurringInvoiceRuns).values({ ...base, status: "failed", errorMessage: "boom" });
+    await db.insert(recurringInvoiceRuns).values({ ...base, status: "failed", errorMessage: "boom again" });
+    // ...and rows without an occurrence (history written before the column existed) never conflict.
+    await db.insert(recurringInvoiceRuns).values({ templateId: tpl.id, businessId: lockBusiness.id, status: "success" });
+    await db.insert(recurringInvoiceRuns).values({ templateId: tpl.id, businessId: lockBusiness.id, status: "success" });
+  });
+
+  it("two simultaneous runNow clicks consume two successive occurrences, not the same one", async () => {
+    const caller = callerForRamesh();
+    const template = await caller.recurringInvoice.create({
+      ...baseTemplateInput(world.party1.id),
+      name: "Double click",
+    });
+
+    const results = await Promise.all([
+      caller.recurringInvoice.runNow({ id: template.id }),
+      caller.recurringInvoice.runNow({ id: template.id }),
+    ]);
+    expect(new Set(results.map((r) => r.invoiceId)).size).toBe(2);
+
+    const res = await outcome(template.id);
+    expect(res.invoices).toBe(2);
+    expect(res.totalRuns).toBe(2);
+    expect(new Set(res.runs.map((r) => r.scheduledFor?.getTime())).size).toBe(2);
   });
 });

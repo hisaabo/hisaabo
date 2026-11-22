@@ -1,0 +1,2 @@
+ALTER TABLE "recurring_invoice_runs" ADD COLUMN "scheduled_for" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "recurring_run_occurrence_uniq" ON "recurring_invoice_runs" USING btree ("template_id","scheduled_for") WHERE "recurring_invoice_runs"."scheduled_for" IS NOT NULL AND "recurring_invoice_runs"."status" IN ('success', 'skipped_limit');

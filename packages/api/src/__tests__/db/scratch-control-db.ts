@@ -26,7 +26,7 @@ export async function applyMigrationFile(sql: postgres.Sql, dir: string, file: s
 
 export interface Scratch { url: string; name: string; sql: postgres.Sql; drop(): Promise<void> }
 
-export async function createScratchControlDb(upTo: number): Promise<Scratch> {
+async function createEmptyScratch(): Promise<Scratch> {
   const name = `p1_${randomBytes(5).toString("hex")}`;
   const admin = postgres(baseUrl, { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${name}`);
@@ -35,8 +35,6 @@ export async function createScratchControlDb(upTo: number): Promise<Scratch> {
   u.pathname = `/${name}`;
   const url = u.toString();
   const sql = postgres(url, { max: 4, onnotice: () => {} });
-  const files = migrationFiles("drizzle-control").filter((f) => Number(f.slice(0, 4)) <= upTo);
-  for (const f of files) await applyMigrationFile(sql, "drizzle-control", f);
   return {
     url, name, sql,
     async drop() {
@@ -46,4 +44,28 @@ export async function createScratchControlDb(upTo: number): Promise<Scratch> {
       await a.end();
     },
   };
+}
+
+export async function createScratchControlDb(upTo: number): Promise<Scratch> {
+  const scratch = await createEmptyScratch();
+  const files = migrationFiles("drizzle-control").filter((f) => Number(f.slice(0, 4)) <= upTo);
+  for (const f of files) await applyMigrationFile(scratch.sql, "drizzle-control", f);
+  return scratch;
+}
+
+export type MigrationDir = "drizzle-control" | "drizzle-tenant" | "drizzle";
+
+/** Migration tags of a directory in the order drizzle applies them (its journal), not file-name order. */
+export function journalTags(dir: MigrationDir): string[] {
+  const journal = JSON.parse(readFileSync(resolve(DB_PKG, dir, "meta", "_journal.json"), "utf-8")) as {
+    entries: { idx: number; tag: string }[];
+  };
+  return [...journal.entries].sort((a, b) => a.idx - b.idx).map((e) => e.tag);
+}
+
+/** A scratch database with the first `count` migrations of `dir` applied, in journal order. */
+export async function createScratchDb(dir: MigrationDir, count: number): Promise<Scratch> {
+  const scratch = await createEmptyScratch();
+  for (const tag of journalTags(dir).slice(0, count)) await applyMigrationFile(scratch.sql, dir, `${tag}.sql`);
+  return scratch;
 }
