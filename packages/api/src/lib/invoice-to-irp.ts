@@ -21,7 +21,7 @@
 
 import type { IRPInvoiceJson } from "./irp-client.js";
 import { money } from "@hisaabo/shared";
-import { validateHsnForTurnover } from "./hsn-data.js";
+import { resolveLineHsns } from "./hsn-check.js";
 import { formatIstDate } from "./gst-period.js";
 
 // ── Types (subset of what we need from DB rows) ────────────────────────────────
@@ -161,30 +161,6 @@ function toUQC(unit: string | null | undefined): string {
 
 // ── Document type mapping ──────────────────────────────────────────────────────
 
-/**
- * HSN / SAC code of one line, or the reason it cannot be sent. The IRP needs a real code on
- * every line, so a missing one is refused (it used to go out as a made-up "9999").
- * HSN comes from the live item: invoice lines carry no HSN snapshot until 0.11.0.
- */
-function resolveHsn(
-  li: IRPLineItem,
-  idx: number,
-  annualTurnover: string | null | undefined,
-): { code: string } | { problem: string } {
-  const label = `line ${idx + 1} '${li.itemName}'`;
-  const code = (li.itemHsn ?? "").replace(/[\s.-]/g, "");
-  if (!code) return { problem: `${label} has no HSN code; add it on the item` };
-  if (!/^\d{4,8}$/.test(code)) {
-    return { problem: `${label} has HSN code '${code}', which is not 4 to 8 digits; correct it on the item` };
-  }
-  // TODO(0.11.0): `annualTurnover` has no input in the app yet, so it is unknown for almost every
-  // business and only the 4-digit minimum applies. When 0.11.0 captures turnover, an unknown
-  // turnover should prompt for it here instead of assuming the lower band.
-  const check = validateHsnForTurnover(code, annualTurnover?.trim() ? annualTurnover : "0");
-  if (!check.valid) return { problem: `${label} has HSN code '${code}': ${check.message}` };
-  return { code };
-}
-
 function toIRPDocType(documentType: string): string {
   switch (documentType) {
     case "credit_note":
@@ -266,8 +242,7 @@ export function mapInvoiceToIRP(
 
   // Map line items
   // Every line needs a valid HSN before anything is built or sent.
-  const hsnResults = lineItems.map((li, idx) => resolveHsn(li, idx, business.annualTurnover));
-  const hsnProblems = hsnResults.flatMap((r) => ("problem" in r ? [r.problem] : []));
+  const { codes: hsnCodes, problems: hsnProblems } = resolveLineHsns(lineItems, business.annualTurnover);
   if (hsnProblems.length > 0) {
     throw new EInvoiceNotEligibleError(`Cannot generate the e-invoice: ${hsnProblems.join("; ")}.`);
   }
@@ -310,7 +285,7 @@ export function mapInvoiceToIRP(
       // per-line comments.
       PrdDesc: li.itemName.slice(0, 300),
       IsServc: isService,
-      HsnCd: (hsnResults[idx] as { code: string }).code,
+      HsnCd: hsnCodes[idx]!,
       Qty: qty,
       Unit: toUQC(li.selectedUnit),
       UnitPrice: unitPrice,

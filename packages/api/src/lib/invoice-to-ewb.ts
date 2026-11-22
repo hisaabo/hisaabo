@@ -18,6 +18,7 @@ import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
 import { money, splitDocumentGst } from "@hisaabo/shared";
 import { formatIstDate } from "./gst-period.js";
+import { resolveLineHsns } from "./hsn-check.js";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -45,6 +46,19 @@ export interface InvoiceForEWB {
   businessCity: string | null;
   businessPincode: string | null;
   businessStateCode: string | null;
+  /** Annual turnover in rupees (`businesses.annual_turnover`): sets the HSN digit minimum. Unknown = 4 digits. */
+  businessAnnualTurnover?: string | null;
+}
+
+/**
+ * Raised when the e-way bill cannot be built as it stands (a line with no usable HSN). Nothing
+ * has been sent to the NIC: the caller turns it into a "cannot generate" message.
+ */
+export class EwayBillNotEligibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EwayBillNotEligibleError";
+  }
 }
 
 export interface LineItemForEWB {
@@ -200,6 +214,15 @@ export function mapInvoiceToEWB(
 ): GenerateEWBPayload {
   const isSale = invoice.type === "sale";
 
+  // Every line needs a real HSN (the same rule as the e-invoice): it used to go out as "".
+  const { codes: hsnCodes, problems: hsnProblems } = resolveLineHsns(
+    lineItems.map((li) => ({ itemName: li.itemName, itemHsn: li.hsn })),
+    invoice.businessAnnualTurnover,
+  );
+  if (hsnProblems.length > 0) {
+    throw new EwayBillNotEligibleError(`Cannot generate the e-way bill: ${hsnProblems.join("; ")}.`);
+  }
+
   // Determine from/to parties based on supply direction
   const fromGstin = isSale ? (invoice.businessGstin ?? "URP") : (invoice.partyGstin ?? "URP");
   const fromName  = isSale ? invoice.businessName           : invoice.partyName;
@@ -235,7 +258,7 @@ export function mapInvoiceToEWB(
 
   // Aggregate tax values
   let totalTax = 0;
-  const itemList: EWBItemPayload[] = lineItems.map((li) => {
+  const itemList: EWBItemPayload[] = lineItems.map((li, idx) => {
     const taxPct   = parseFloat(li.taxPercent) || 0;
     const qty      = parseFloat(li.quantity) || 0;
     const price    = parseFloat(li.unitPrice) || 0;
@@ -252,7 +275,7 @@ export function mapInvoiceToEWB(
       // payload; keep that behaviour.
       productName: li.itemName.slice(0, 100),
       productDesc: li.itemName.slice(0, 100),
-      hsnCode: li.hsn ?? "",
+      hsnCode: hsnCodes[idx]!,
       quantity: qty,
       qtyUnit: mapUnit(li.unit),
       cgstRate: rates.cgstRate,

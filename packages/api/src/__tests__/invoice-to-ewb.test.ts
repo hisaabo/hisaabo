@@ -6,7 +6,7 @@
  * zone gave 31/03/2026 on a UTC server (and a different day for every other zone).
  */
 import { describe, it, expect } from "vitest";
-import { mapInvoiceToEWB, type InvoiceForEWB, type LineItemForEWB, type TransportDetails } from "../lib/invoice-to-ewb.js";
+import { mapInvoiceToEWB, EwayBillNotEligibleError, type InvoiceForEWB, type LineItemForEWB, type TransportDetails } from "../lib/invoice-to-ewb.js";
 
 const invoice = (invoiceDate: string): InvoiceForEWB => ({
   id: "inv-1",
@@ -60,5 +60,64 @@ describe("e-way bill document date is the IST date", () => {
     ["2026-01-15T10:00:00.000Z", "15/01/2026"],
   ])("%s -> %s", (iso, docDate) => {
     expect(mapInvoiceToEWB(invoice(iso), [line], transport).docDate).toBe(docDate);
+  });
+});
+
+// ── HSN: a real code on every line ─────────────────────────────────────────────
+
+describe("e-way bill HSN: refused per line, same rule as the e-invoice", () => {
+  const map = (lines: LineItemForEWB[], annualTurnover?: string | null) =>
+    mapInvoiceToEWB({ ...invoice("2026-01-15T10:00:00.000Z"), businessAnnualTurnover: annualTurnover }, lines, transport);
+
+  it.each([null, "", "   "])("HSN %j: refused, naming the line and the item", (hsn) => {
+    expect(() => map([{ ...line, hsn }])).toThrow(EwayBillNotEligibleError);
+    expect(() => map([{ ...line, hsn }])).toThrow(
+      "Cannot generate the e-way bill: line 1 'Steel Rods' has no HSN code; add it on the item.",
+    );
+  });
+
+  it("names the right line, and lists every offending line", () => {
+    let message = "";
+    try {
+      map([{ ...line, itemName: "A", hsn: null }, { ...line, itemName: "B" }, { ...line, itemName: "C", hsn: "" }]);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("line 1 'A' has no HSN code; add it on the item");
+    expect(message).toContain("line 3 'C' has no HSN code; add it on the item");
+    expect(message).not.toContain("line 2");
+  });
+
+  it("the payload carries the real code (separators dropped), never an empty string", () => {
+    expect(map([{ ...line, hsn: "7306 90" }]).itemList[0]!.hsnCode).toBe("730690");
+    expect(map([line]).itemList[0]!.hsnCode).toBe("730890");
+  });
+
+  it.each([
+    ["730", "730"],
+    ["ABCD", "ABCD"],
+    ["123456789", "123456789"],
+  ])("a malformed HSN (%s) is refused", (hsn, shown) => {
+    expect(() => map([{ ...line, hsn }])).toThrow(`line 1 'Steel Rods' has HSN code '${shown}', which is not 4 to 8 digits`);
+  });
+
+  it.each([
+    // turnover, code, accepted
+    ["49999999.99", "7306", true], // just below ₹5 Cr
+    ["50000000.00", "7306", true], // exactly ₹5 Cr: still the 4-digit band
+    ["50000000.00", "73069000", true],
+    ["50000000.01", "7306", false], // one paisa above: 6 digits
+    ["50000000.01", "730690", true],
+    ["50000000.01", "73069000", true],
+    [null, "7306", true], // unknown turnover: the 4-digit minimum
+    [undefined, "7306", true],
+  ])("turnover %j, HSN %s -> accepted: %s", (turnover, code, accepted) => {
+    if (accepted) {
+      expect(map([{ ...line, hsn: code }], turnover).itemList[0]!.hsnCode).toBe(code);
+    } else {
+      expect(() => map([{ ...line, hsn: code }], turnover)).toThrow(
+        `line 1 'Steel Rods' has HSN code '${code}': Businesses with turnover above ₹5 Cr must use a minimum 6-digit HSN code. Provided code has 4 digits.`,
+      );
+    }
   });
 });

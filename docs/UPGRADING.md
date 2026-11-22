@@ -339,6 +339,8 @@ A line whose item had no HSN code was sent to the IRP as HSN `9999`, a code that
 
 The code must be 4 to 8 digits (spaces, dots and hyphens are ignored: `7306.90` is sent as `730690`), and the minimum follows the business's annual turnover: **4 digits up to and including ₹5,00,00,000, 6 digits above** (compared in exact paise: ₹50,000,000.00 is still the 4-digit band, ₹50,000,000.01 is not). The turnover is the business's `annual_turnover`, which the app has no field for yet (it is empty for almost every business), so until 0.11.0 captures it only the 4-digit minimum is enforced; a business above ₹5 Cr must keep 6-digit codes on its items itself. HSN is read from the live item, because invoice lines carry no HSN snapshot until 0.11.0: changing an item's HSN changes the code on every e-invoice generated afterwards, and a line without an item (typed in free) has no HSN and cannot be e-invoiced.
 
+**The same rule applies to e-way bills.** A line whose item has no HSN used to go to the NIC with an empty HSN code; generating the e-way bill is now refused before the NIC is called and before anything is saved, with the same per-line message (`Cannot generate the e-way bill: line 2 'Copper Wire' has no HSN code; add it on the item.`), the same 4 to 8 digit check and the same turnover minimum (4 digits up to and including ₹5,00,00,000, 6 above).
+
 No action is needed if every item you e-invoice already has an HSN. Nothing was ever sent to the IRP with a made-up code, since no e-invoice could be generated before 0.10.1 (see above).
 
 ### GSTR-1 Table 12 (HSN summary): one row per HSN, unit and GST rate
