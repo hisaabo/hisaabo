@@ -507,8 +507,8 @@ with open(data["filename"], "w") as f:
       id: "party-tally-export",
       method: "query",
       path: "party.tallyExport",
-      title: "Tally Export",
-      description: "Generates a Tally-compatible CSV of all vouchers (sales invoices, purchase invoices, payments, expenses) for the business within a date range. Each row maps to a Tally voucher with debit/credit ledger assignments.",
+      title: "Tally Export (deprecated CSV)",
+      description: "Deprecated since 0.10.1: use `reports.tallyExport`. Generates a CSV of all vouchers (sales invoices, purchase invoices, payments, expenses) for the business within a date range, one row per voucher with debit/credit ledger assignments. Tally does not import CSV (it imports XML), so this file is only useful as a spreadsheet. The procedure still works unchanged; the server logs a rate-limited warning (at most one per hour) while it is being called.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -545,10 +545,14 @@ resp = httpx.get(
 )`,
       },
       gotchas: [
+        "Deprecated: call `reports.tallyExport` instead. It returns Tally Prime XML (ledger masters plus every invoice, payment, expense and journal entry), which is what Tally imports. Nothing in the Hisaabo web app, CLI or MCP server calls this procedure any more.",
+        "No removal date has been set. Until it is removed the response is unchanged.",
         "Requires `Report:read` permission.",
-        "Dates in the CSV are formatted as DD-MM-YYYY for Tally compatibility.",
+        "Dates in the CSV are formatted as DD-MM-YYYY.",
         "Payment modes map to ledger names: `cash` \u2192 'Cash', others \u2192 'Bank'.",
+        "`limit` (default 1000, max 5000) applies to each of invoices, payments and expenses separately, so a busy period can be silently truncated.",
       ],
+      relatedEndpoints: ["reports-tally-export"],
     },
     {
       id: "party-ledger",

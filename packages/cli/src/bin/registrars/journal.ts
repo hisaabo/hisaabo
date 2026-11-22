@@ -29,7 +29,7 @@ export function registerJournalCommands(program: Command): void {
 
   journal
     .command("void <id>")
-    .description("Void a journal entry")
+    .description("Void a journal entry by posting a reversing entry (entries are never deleted; both stay on record)")
     .option("--yes", "Skip confirmation prompt")
     .option("--json", "JSON output")
     .action(async (id: string, opts) => {

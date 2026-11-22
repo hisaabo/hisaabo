@@ -94,7 +94,10 @@ export async function journalVoidCommand(id: string, opts: { json?: boolean; yes
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  await confirmOrExit(`Void journal entry ${id}?`, opts);
+  await confirmOrExit(
+    `Void journal entry ${id}? A reversing entry will be posted; the entry itself is kept (journal entries are never deleted).`,
+    opts,
+  );
 
   try {
     const result = await client.journal.void(id);
@@ -104,7 +107,10 @@ export async function journalVoidCommand(id: string, opts: { json?: boolean; yes
       return;
     }
 
-    console.log(`  Journal entry ${id} voided.\n`);
+    console.log(
+      `  Journal entry ${result.voidedEntry.entryNumber} voided. ` +
+      `Reversing entry ${result.reversingEntry.entryNumber} posted; both stay on record.\n`,
+    );
 
   } catch (e) {
     handleError(e);

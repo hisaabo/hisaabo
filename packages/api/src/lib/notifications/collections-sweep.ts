@@ -18,7 +18,7 @@
  */
 
 import { eq, sql } from "drizzle-orm";
-import { controlDb, getTenantDb, tenants, type TenantDatabase } from "@hisaabo/db";
+import { controlDb, getTenantDb, withDedicatedTenantDb, tenants, type TenantDatabase } from "@hisaabo/db";
 import { DEFAULT_TIME_ZONE, minutesInTimeZone } from "@hisaabo/shared";
 import { logger } from "../logger.js";
 import { emitNotificationEvent } from "./emit.js";
@@ -153,7 +153,9 @@ async function tick(): Promise<void> {
     const active = await controlDb.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
     for (const t of active) {
       try {
-        await sweepCollections(await getTenantDb(t.id), t.id);
+        // One-connection client per tenant, closed afterwards: the sweep visits
+        // every tenant and must not cycle them all through the shared pool cache.
+        await withDedicatedTenantDb(t.id, (db) => sweepCollections(db, t.id));
       } catch (err) {
         logger.error({ err, tenantId: t.id }, "[notifications] collections sweep failed for tenant");
       }

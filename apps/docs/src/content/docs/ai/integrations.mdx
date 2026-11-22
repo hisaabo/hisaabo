@@ -316,72 +316,42 @@ export async function onInvoiceConfirmed(invoiceId: string) {
 
 ## Tally
 
-**Use case:** Your accountant works in Tally for statutory filings. Instead of re-entering every transaction, export Hisaabo party and invoice data in Tally XML format and import it directly.
+**Use case:** Your accountant works in Tally for statutory filings. Instead of re-entering every transaction, hand over one Tally Prime XML file and import it.
 
-Hisaabo already includes Tally XML export for party data. Here is how to use it and extend it for invoices.
+Hisaabo exports **Tally Prime XML**, the format Tally imports. One file holds the ledger masters (your chart of accounts) and a voucher for every invoice, payment, expense and journal entry in the period.
 
-### Party export (built-in)
+### Export from the app
 
-```bash
-# Export all parties as Tally XML
-hisaabo party list --format tally-xml --output parties.xml
-```
+Open **Reports > Tally Export**, pick the period and click **Download Tally XML**.
 
-The output follows the Tally XML import schema and can be imported via **Tally > Import Data > Masters**.
+### Export from a script
 
-### Invoice export for Tally
+The same export is the `reports.tallyExport` API call. It takes a period (`fromDate` and `toDate`, both required ISO datetimes) and returns the XML and a suggested filename. Authenticate with an API key (see the [CLI guide](/ai/cli/) for creating one):
 
 ```bash
-# Export invoices as Tally-compatible XML
-hisaabo invoice list \
-  --from 2026-04-01 \
-  --to 2026-03-31 \
-  --format tally-xml \
-  --output invoices-FY2026.xml
+# tally-monthly-sync.sh: export last month's vouchers for the accountant
+FROM="2026-04-01T00:00:00.000Z"
+TO="2026-04-30T23:59:59.999Z"
+INPUT=$(printf '{"json":{"fromDate":"%s","toDate":"%s"}}' "$FROM" "$TO" | jq -sRr @uri)
+
+curl -s "https://YOUR_HISAABO_URL/api/trpc/reports.tallyExport?input=$INPUT" \
+  -H "Authorization: Bearer $HISAABO_TOKEN" \
+  -H "x-business-id: $HISAABO_BUSINESS_ID" \
+  | jq -r '.result.data.json.xml' > tally-2026-04.xml
 ```
 
-### Monthly sync workflow
+There is no `hisaabo` CLI command or MCP tool for the Tally export, and no `--format tally-xml` option on `party list` or `invoice list`; earlier versions of this page showed those, but they never existed.
 
-```bash
-#!/bin/bash
-# tally-monthly-sync.sh — run on the 1st of every month
-
-LAST_MONTH_START=$(date -d "last month" +%Y-%m-01)
-LAST_MONTH_END=$(date -d "last month" +%Y-%m-$(cal $(date -d "last month" +%m %Y) | awk 'NF{f=$NF}END{print f}'))
-OUTPUT_DIR="/var/tally-exports"
-mkdir -p "$OUTPUT_DIR"
-
-# Export parties (masters)
-hisaabo party list \
-  --format tally-xml \
-  --output "$OUTPUT_DIR/parties-$(date -d 'last month' +%Y-%m).xml"
-
-# Export sale invoices (vouchers)
-hisaabo invoice list \
-  --type sale \
-  --from "$LAST_MONTH_START" \
-  --to "$LAST_MONTH_END" \
-  --format tally-xml \
-  --output "$OUTPUT_DIR/sales-$(date -d 'last month' +%Y-%m).xml"
-
-# Export purchase invoices
-hisaabo invoice list \
-  --type purchase \
-  --from "$LAST_MONTH_START" \
-  --to "$LAST_MONTH_END" \
-  --format tally-xml \
-  --output "$OUTPUT_DIR/purchases-$(date -d 'last month' +%Y-%m).xml"
-
-echo "Tally export complete. Files saved to $OUTPUT_DIR"
-```
+:::caution[CSV is not importable]
+Before 0.10.1 the web app's Tally Export tab downloaded a CSV from `party.tallyExport`. Tally cannot import that file, so the tab now downloads XML. `party.tallyExport` still works but is deprecated and logs a warning on the server; move any script that calls it to `reports.tallyExport`.
+:::
 
 ### Import into Tally
 
-1. Open Tally Prime
-2. Go to **Gateway of Tally > Import Data**
-3. Select **Vouchers** for invoice files, **Masters** for party files
-4. Browse to the exported XML file
-5. Tally validates and imports the data
+1. Open Tally Prime and load the company
+2. Go to **Gateway of Tally > Import** and choose **Data**
+3. Browse to the downloaded XML file
+4. Tally creates any missing ledgers, then imports the vouchers
 
 ---
 

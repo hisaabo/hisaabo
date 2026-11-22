@@ -11,7 +11,7 @@
  * emitted synchronously by the write paths and by the DB NOTIFY listener.
  */
 import { and, eq } from "drizzle-orm";
-import { businesses, controlDb, getTenantDb, tenants } from "@hisaabo/db";
+import { businesses, controlDb, getTenantDb, withDedicatedTenantDb, tenants } from "@hisaabo/db";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
 import { isRegistryEnabled, isBackfillMarkerPresent, resolveSlug, SLUG_RE } from "./store-slug-registry.js";
@@ -101,14 +101,18 @@ async function legacyScanLookup(slug: string): Promise<Loaded> {
     .from(tenants)
     .where(eq(tenants.status, "active"));
 
+  // Visits every tenant, so each probe gets its own one-connection client
+  // (closed straight away) instead of cycling all tenants through the pool cache.
   let scanComplete = true;
   for (const tenant of activeTenants) {
     try {
-      const db = await getTenantDb(tenant.id);
-      const [biz] = await db.select({ id: businesses.id })
-        .from(businesses)
-        .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
-        .limit(1);
+      const biz = await withDedicatedTenantDb(tenant.id, async (db) => {
+        const [row] = await db.select({ id: businesses.id })
+          .from(businesses)
+          .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+          .limit(1);
+        return row;
+      });
       if (biz) return { value: { tenantId: tenant.id, businessId: biz.id }, cacheMiss: false };
     } catch {
       scanComplete = false;

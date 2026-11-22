@@ -1,6 +1,6 @@
 ---
 title: Import Data
-description: Import your existing parties, items, invoices, and payments into Hisaabo from MyBillBook or a CSV file. Covers the import process, field mapping, and what to expect.
+description: Import your existing parties, items, invoices, and payments into Hisaabo from a MyBillBook export or a Hisaabo-format CSV. Covers the supported sources, field mapping, and what to expect.
 sidebar:
   order: 3
 ---
@@ -10,6 +10,17 @@ If you are migrating from MyBillBook or another app, you can import your existin
 :::note
 Import requires the Superadmin or Admin role. Seller Manager, Seller, and Accountant roles cannot run imports.
 :::
+
+## Supported import sources
+
+The server converts incoming rows through an **import adapter**, and only two exist:
+
+| Source | Used by | What it takes |
+|---|---|---|
+| `mybillbook` | The **Import Data** wizard in Settings > Data, and `hisaabo import --source mybillbook` | The CSV/XLSX exports you download from myBillBook |
+| `hisaabo` | The CLI (default) and the MCP import tools | The CSV/JSON layouts documented below |
+
+The web wizard offers myBillBook only. There is no Tally or "generic CSV" importer; earlier builds listed both in the wizard, but every import from them failed with "Unknown import source", so they were removed in 0.10.1. To bring in data from Tally, Busy, Vyapar or a spreadsheet, convert it to the Hisaabo CSV layout below and run `hisaabo import` (or the MCP import tools). Any other `--source` value is rejected with a message listing the supported sources.
 
 ## What can be imported
 

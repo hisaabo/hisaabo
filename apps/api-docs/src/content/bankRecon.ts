@@ -121,14 +121,28 @@ print(f"Detected {result['totalRows']} rows, template: {result.get('detectedTemp
         { name: "columnMapping.skipRows", type: "number", required: false, description: "Number of data rows to skip after header (for bank-specific extra header rows)" },
         { name: "csvContent", type: "string", required: true, description: "Same CSV content from step 1 (max 10 MB)" },
         { name: "templateId", type: "string (UUID)", required: false, description: "Template to apply preprocessing rules from" },
+        { name: "skipDuplicates", type: "boolean", required: false, description: "Skip lines that already exist in another import of the same bank account (same day, debit, credit and reference; normalized narration when the reference is empty). Opt-in: when omitted or false every line is imported, which is what clients that predate the flag (0.10.0) rely on. The 0.10.1 web app always sends it (its checkbox is on by default).", default: "false" },
       ],
       output: {
-        description: "Matching summary: total, matched, and unmatched line counts.",
+        description: "Matching summary: imported, matched, unmatched and skipped-duplicate line counts. `totalLines` counts the lines actually imported; the file held `totalLines + duplicatesSkipped` parsed lines. `duplicates` lists the skipped lines (at most 500, in file order; `duplicatesSkipped` is always the full count) so they can be reviewed: position in the file, date, debit, credit, reference, narration, and the earlier import (`existingImportId`, `existingImportFileName`) that already holds the line. Both are empty/0 unless `skipDuplicates` is true, and the list is returned only by this call (not stored).",
         example: {
           importId: "imp-uuid",
           totalLines: 87,
           matchedLines: 62,
           unmatchedLines: 25,
+          duplicatesSkipped: 12,
+          duplicates: [
+            {
+              lineNumber: 3,
+              transactionDate: "2026-04-02T00:00:00.000Z",
+              debit: "0.00",
+              credit: "50000.00",
+              referenceNumber: "NEFT222",
+              narration: "NEFT/SALARY/ACME",
+              existingImportId: "imp-earlier-uuid",
+              existingImportFileName: "hdfc-jan-mar.csv",
+            },
+          ],
         },
       },
       codeExamples: {
@@ -160,7 +174,8 @@ print(f"Detected {result['totalRows']} rows, template: {result.get('detectedTemp
 });
 
 console.log(\`Matched: \${result.matchedLines}/\${result.totalLines}\`);
-console.log(\`Unmatched: \${result.unmatchedLines} lines need review\`);`,
+console.log(\`Unmatched: \${result.unmatchedLines} lines need review\`);
+console.log(\`Skipped as duplicates: \${result.duplicatesSkipped}\`);`,
         python: `resp = httpx.post(
     "https://api.hisaabo.in/api/trpc/bankRecon.confirmMapping",
     headers={
@@ -187,8 +202,10 @@ print(f"Matched: {result['matchedLines']}/{result['totalLines']}")`,
       },
       gotchas: [
         "You must send the same `csvContent` again. The server does not store raw CSV data between steps (only parsed lines).",
-        "Re-calling confirmMapping on the same import replaces all existing lines (delete + re-insert). Safe to retry if mapping was wrong.",
-        "Only imports in `pending` or `mapped` status can be confirmed. Once in `review` you can still re-confirm to re-run matching.",
+        "Confirming an import that is still `pending` or `mapped` replaces any lines already stored for it (delete + re-insert), so a retry never doubles lines.",
+        "Only imports in `pending` or `mapped` status can be confirmed; an import already in `review` is rejected with BAD_REQUEST.",
+        "Duplicate detection (since 0.10.1, only when you send `skipDuplicates: true`; the default is false so nothing is skipped silently) compares each parsed line with the lines of OTHER imports of the same bank account in the statement's date window (one query, business-scoped). A line is a duplicate when day, debit, credit and reference number match; when the line has no reference its normalized (lower-cased, whitespace-collapsed) narration is used instead. Matching is one-for-one, so a statement with one more identical line than before keeps the extra line. Lines inside the same file are never compared with each other, and the import's own old lines are never counted as duplicates.",
+        "Skipped duplicates are not inserted and not matched. `totalLines`, `matchedLines`, `unmatchedLines` and the stored import counts describe the inserted lines; `statementStartDate`, `statementEndDate` and `closingBalance` still describe the whole file. If every line is a duplicate the import goes to `review` with zero lines. `duplicatesSkipped` is returned only by this call; it is not stored.",
         "Auto-matching looks at payments, expenses, and bank transactions within +/- 7 days of the statement date range.",
         "Lines are inserted in batches of 500 to avoid PostgreSQL parameter limits on large statements.",
         "If a template is provided, its `preprocessRules` (extra header rows, subtotal skip, amount parsing mode) are applied before column mapping.",

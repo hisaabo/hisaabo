@@ -547,6 +547,8 @@ export const recurringInvoiceRunRowSchema = z.object({
   status: recurringRunStatus,
   errorMessage: z.string().nullable(),
   executedAt: isoDatetime,
+  // Absent in exports made before the column existed; imports as NULL.
+  scheduledFor: isoDatetimeNullable.optional(),
 });
 
 export const bankStatementImportRowSchema = z.object({

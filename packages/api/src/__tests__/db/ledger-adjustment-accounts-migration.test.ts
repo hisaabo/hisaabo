@@ -1,6 +1,6 @@
 /**
- * Migration 0023_ledger_adjustment_accounts (drizzle/) and its tenant twin
- * 0010_ledger_adjustment_accounts (drizzle-tenant/): adds the Round Off (5030),
+ * Migration 0024_ledger_adjustment_accounts (drizzle/) and its tenant twin
+ * 0011_ledger_adjustment_accounts (drizzle-tenant/): adds the Round Off (5030),
  * Discount Allowed (5020) and Other Charges (4020) system accounts to every
  * EXISTING business. Runs the committed SQL itself against the test database.
  */
@@ -21,8 +21,8 @@ const NEW_ACCOUNTS = [
 ] as const;
 
 const dbDir = new URL("../../../../db/", import.meta.url);
-const UNIFIED = fileURLToPath(new URL("drizzle/0023_ledger_adjustment_accounts.sql", dbDir));
-const TENANT = fileURLToPath(new URL("drizzle-tenant/0010_ledger_adjustment_accounts.sql", dbDir));
+const UNIFIED = fileURLToPath(new URL("drizzle/0024_ledger_adjustment_accounts.sql", dbDir));
+const TENANT = fileURLToPath(new URL("drizzle-tenant/0011_ledger_adjustment_accounts.sql", dbDir));
 
 const db = () => getTenantTestDb();
 

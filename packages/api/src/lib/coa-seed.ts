@@ -3,7 +3,7 @@ import { chartOfAccounts } from "@hisaabo/db";
 /**
  * System accounts the derived ledger posts invoice-level adjustments to
  * (see ledger-documents.ts). Existing businesses get them from migration
- * `0023_ledger_adjustment_accounts` (drizzle/) / `0010_...` (drizzle-tenant/).
+ * `0024_ledger_adjustment_accounts` (drizzle/) / `0011_...` (drizzle-tenant/).
  */
 export const OTHER_CHARGES_CODE = "4020";
 export const DISCOUNT_ALLOWED_CODE = "5020";

@@ -75,8 +75,15 @@
     {
       "idx": 10,
       "version": "7",
-      "when": 1795337190146,
-      "tag": "0010_ledger_adjustment_accounts",
+      "when": 1795337183729,
+      "tag": "0010_recurring_run_occurrence",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795339530590,
+      "tag": "0011_ledger_adjustment_accounts",
       "breakpoints": true
     }
   ]

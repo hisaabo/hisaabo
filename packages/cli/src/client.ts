@@ -1074,6 +1074,11 @@ export class HisaaboClient {
       void(id: string) {
         return c.mutate("journal.void", { id });
       },
+      /**
+       * @deprecated Since 0.10.1 `journal.delete` no longer erases the entry: the
+       * server voids it (posts a reversing entry), exactly like `void`. Call
+       * `void(id)`; the CLI exposes it as `hisaabo journal void`.
+       */
       delete(id: string) {
         return c.mutate("journal.delete", { id });
       },

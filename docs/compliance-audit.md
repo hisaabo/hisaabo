@@ -62,10 +62,11 @@ PASSING:
 GAPS:
 
 **Gap 1.1.1 (HIGH)**: The GSTR-1 CSV export format (`gstr1ToCSV`, lines 472-516) uses a generic multi-section flat CSV with section headers as text rows. The GST portal offline utility expects a specific column mapping per table. The current CSV will require manual reformatting before upload. The documentation (apps/docs/src/content/docs/gst/gstr1.mdx, line 126) correctly advises users to "import the CSV or manually enter the data," but this creates friction and error risk. A JSON export matching the GSTN JSON schema would be more useful.
-- Current state: Generic CSV, multi-section, not directly importable to GST Offline Utility.
+- Current state (at audit time): Generic CSV, multi-section, not directly importable to GST Offline Utility.
 - Target state: JSON export matching GSTN schema, or at minimum, per-section CSV files matching the offline utility's column order.
 - Remediation: Implement a `gstr1ToJson()` function outputting the GSTN API JSON schema format. Expose it as a separate export endpoint.
 - Effort: 3-5 days.
+- **Update (corrected in 0.10.1)**: the JSON export exists. `gst.gstr1Json` (`packages/api/src/routers/gst.ts`) returns the portal JSON built by `gstr1ToPortalJson` (`packages/api/src/lib/gst-reports.ts`), with the business GSTIN, financial year and filing period, in the schema the GST portal's offline tool accepts. The CSV (`gst.gstr1CSV`) is unchanged and is still a generic multi-section file. What remains open: the web GSTR-1 tab does not call `gst.gstr1Json` yet, so the JSON is reachable through the API only (the GSTR-9 tab does offer its JSON).
 
 **Gap 1.1.2 (MEDIUM)**: Zero-rated supplies (exports of goods/services, SEZ supplies) are not separately classified. They fall into B2B or B2CS based on the party GSTIN. The GSTR-1 requires zero-rated supplies in Table 6A (exports) and Table 6B (SEZ). The documentation acknowledges this limitation (`apps/docs/src/content/docs/gst/index.mdx`, line 65).
 - Current state: Zero-rated supplies not identified; no `exportType` field on invoices.
@@ -407,13 +408,14 @@ The `logAudit()` function wraps the insert in a try/catch (line 27-29) so audit 
 
 ### 6.2 Tally XML Export
 
-**Status**: NOT IMPLEMENTED
+**Status**: IMPLEMENTED (corrected in 0.10.1; this section originally read "NOT IMPLEMENTED")
 
-**Evidence**: No Tally XML generation found in the codebase. The import router accepts imports but there is no corresponding export.
+**Evidence**: `reports.tallyExport` (`packages/api/src/routers/reports.ts`) builds Tally Prime XML with `generateTallyXml` (`packages/api/src/lib/tally-xml-export.ts`): the chart of accounts as ledger masters plus a voucher for every invoice, payment, expense and manual journal entry in a period (voided entries together with their reversals; customer TDS as a Dr TDS Receivable line of the receipt). The web Reports > Tally Export tab downloads it. Covered by `tally-xml-export.test.ts` and `integration/tally-export.test.ts`.
 
-**Gap 6.2.1 (LOW)**: Many Indian SMBs file with a CA using Tally ERP. A Tally XML export would improve portability and reduce the cost of migrating to or syncing with Tally.
-- Recommendation: Implement a basic Tally XML export for invoices and payments. This is a "nice to have" for SMB adoption but not a regulatory requirement.
-- Effort: 5-7 days.
+The older `party.tallyExport` returns a CSV that Tally cannot import. It is deprecated as of 0.10.1 and no longer used by the web app.
+
+**Gap 6.2.1 (LOW, resolved)**: Many Indian SMBs file with a CA using Tally ERP, and a Tally XML export reduces the cost of syncing with Tally. This is now met by `reports.tallyExport`.
+- Remaining: there is no CLI command or MCP tool for it (the API and the web tab only), and no import of Tally data in the other direction (the import wizard offers myBillBook only).
 
 ### 6.3 Backup Mechanisms
 
@@ -466,7 +468,7 @@ The `logAudit()` function wraps the insert in a try/catch (line 27-29) so audit 
 
 12. **Reverse Charge Mechanism** (Gap 2.1.2): Required for businesses dealing in RCM-liable categories. Medium effort, affects a subset of users.
 
-13. **GSTR-1 JSON Export** (Gap 1.1.1): Current CSV requires reformatting. A JSON export matching GSTN schema would directly reduce filing errors.
+13. **GSTR-1 JSON Export** (Gap 1.1.1): The export now exists (`gst.gstr1Json`, see the update under Gap 1.1.1); what remains is surfacing it in the web GSTR-1 tab. The CSV still needs reformatting before upload.
 
 14. **Data Erasure Endpoint** (Gap 3.5.2): DPDPA right to be forgotten. Implement `DELETE /account` with audit record retention.
 

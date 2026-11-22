@@ -18,6 +18,14 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { Pagination } from "@/components/ui/Pagination";
+import { buildConfirmMappingInput } from "@/lib/bank-recon-confirm";
+import {
+  DuplicateLinesNotice,
+  SkipDuplicatesToggle,
+  importSummaryMessage,
+  type ImportOutcome,
+  type SkippedDuplicateLine,
+} from "@/components/bank-recon/DuplicateLines";
 
 export const Route = createFileRoute("/bank-reconciliation")({
   component: BankReconciliationPage,
@@ -105,6 +113,10 @@ function BankReconciliationPage() {
   const [activeTab, setActiveTab] = useState<Tab>("hub");
   const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  // Duplicate lines skipped by the import that was just confirmed. Only known
+  // right after confirmMapping (not stored), so it is cleared when a different
+  // import is opened.
+  const [lastImport, setLastImport] = useState<ImportOutcome | null>(null);
   const canImport = useCan("create", "BankReconciliation");
   const tabs = canImport ? TABS : TABS.filter((t) => t.value !== "upload");
 
@@ -142,14 +154,20 @@ function BankReconciliationPage() {
       )}
       {activeTab === "upload" && (
         <UploadTab
-          onSuccess={(importId) => {
-            setSelectedImportId(importId);
+          onSuccess={(result) => {
+            setLastImport(result);
+            setSelectedImportId(result.importId);
             setActiveTab("review");
           }}
         />
       )}
       {activeTab === "review" && (
-        <ReviewTab importId={selectedImportId} />
+        <ReviewTab
+          importId={selectedImportId}
+          duplicatesSkipped={lastImport?.importId === selectedImportId ? lastImport.duplicatesSkipped : 0}
+          importedLines={lastImport?.importId === selectedImportId ? lastImport.totalLines : 0}
+          duplicateLines={lastImport?.importId === selectedImportId ? lastImport.duplicates : []}
+        />
       )}
       {activeTab === "summary" && (
         <SummaryTab accountId={selectedAccountId} />
@@ -339,8 +357,13 @@ type DetectedTemplate = {
   reason: string;
 } | null;
 
-function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
+function UploadTab({
+  onSuccess,
+}: {
+  onSuccess: (result: ImportOutcome) => void;
+}) {
   const [step, setStep] = useState<"upload" | "mapping">("upload");
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [csvContent, setCsvContent] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>("");
@@ -399,8 +422,14 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
   const confirmMutation = trpc.bankRecon.confirmMapping.useMutation({
     onSuccess: (data) => {
       utils.bankRecon.importList.invalidate();
-      toast.success(`Parsed ${data.totalLines} lines. ${data.matchedLines} auto-matched, ${data.unmatchedLines} unmatched.`);
-      onSuccess(data.importId);
+      toast.success(importSummaryMessage(data));
+      onSuccess({
+        importId: data.importId,
+        // Both are absent when this client talks to a 0.10.0 server.
+        duplicatesSkipped: data.duplicatesSkipped ?? 0,
+        duplicates: data.duplicates ?? [],
+        totalLines: data.totalLines,
+      });
     },
     onError: (err) => toast.error(err.message),
   });
@@ -451,25 +480,11 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
   function handleConfirm(overrideTemplateId?: string) {
     if (!csvContent) return;
 
-    const mapInt = (v: string) => v !== "" ? parseInt(v, 10) : undefined;
     const tmplId = overrideTemplateId ?? selectedTemplateId ?? undefined;
-    confirmMutation.mutate({
-      importId,
-      csvContent,
-      templateId: tmplId || undefined,
-      columnMapping: {
-        date: parseInt(mapping.date, 10),
-        narration: parseInt(mapping.narration, 10),
-        debit: mapInt(mapping.debit),
-        credit: mapInt(mapping.credit),
-        amount: mapInt(mapping.amount),
-        type: mapInt(mapping.type),
-        reference: mapInt(mapping.reference),
-        balance: mapInt(mapping.balance),
-        dateFormat: mapping.dateFormat,
-        skipRows: parseInt(mapping.skipRows, 10),
-      },
-    });
+    // skipDuplicates is always sent: the server default is off.
+    confirmMutation.mutate(
+      buildConfirmMappingInput({ importId, csvContent, templateId: tmplId, skipDuplicates, mapping }),
+    );
   }
 
   function handleSaveTemplate() {
@@ -686,6 +701,8 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
           </div>
         )}
 
+        <SkipDuplicatesToggle checked={skipDuplicates} onChange={setSkipDuplicates} />
+
         <div className="flex gap-3">
           <button
             className="btn-secondary"
@@ -822,7 +839,17 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
 
 // ── Review Tab ─────────────────────────────────────────────────────────────────
 
-function ReviewTab({ importId }: { importId: string | null }) {
+function ReviewTab({
+  importId,
+  duplicatesSkipped = 0,
+  importedLines = 0,
+  duplicateLines = [],
+}: {
+  importId: string | null;
+  duplicatesSkipped?: number;
+  importedLines?: number;
+  duplicateLines?: SkippedDuplicateLine[];
+}) {
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [manualMatchLine, setManualMatchLine] = useState<any | null>(null);
@@ -886,6 +913,8 @@ function ReviewTab({ importId }: { importId: string | null }) {
 
   return (
     <div className="space-y-5">
+      <DuplicateLinesNotice count={duplicatesSkipped} importedLines={importedLines} lines={duplicateLines} />
+
       {/* Import stats bar */}
       {importDetail && (
         <div className="card p-4 flex flex-wrap gap-6 items-center">
