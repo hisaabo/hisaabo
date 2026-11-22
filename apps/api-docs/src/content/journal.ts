@@ -340,6 +340,7 @@ print("Created:", entry["entryNumber"])`,
       gotchas: [
         "Only entries with `source: \"manual\"` can be updated. System-generated entries (from payments, expenses, etc.) return BAD_REQUEST.",
         "Voided entries cannot be updated. The API returns BAD_REQUEST with a clear message.",
+        "Reversal entries (those with `reversesEntryId`, posted by a void) cannot be updated either: BAD_REQUEST, \"... it cannot be edited. To correct it, post a new journal entry.\" Editing a reversal would break the pair's netting to zero. Before 0.10.1 this was allowed.",
         "The checks (exists, manual, not voided) run inside the update's transaction with the entry row locked, the same lock `journal.void` takes, so an update and a void of one entry are serialized: the update either commits first (and the void then reverses the updated lines) or is refused as voided. Before 0.10.1 the voided check ran outside the transaction, so an update racing a void could rewrite the lines of an entry that had just been reversed.",
         "When `lines` is provided, ALL existing lines are deleted and replaced. This is a full replacement, not a patch. Omit `lines` to update only date/narration.",
         "If providing lines, they must still balance (total debits = total credits).",

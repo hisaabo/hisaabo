@@ -167,6 +167,50 @@ describe("Journal Entry Update", () => {
     ).rejects.toThrow(/voided/i);
   });
 
+  it("rejects update of a reversal entry (the one a void posted), leaving the pair intact", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    const created = await caller.journal.create({
+      entryDate: new Date("2030-07-01").toISOString(),
+      narration: "Has a reversal that someone tries to edit",
+      lines: [
+        { accountId: cashAccountId, debit: "4000.00", credit: "0" },
+        { accountId: capitalAccountId, debit: "0", credit: "4000.00" },
+      ],
+    });
+    const { reversingEntry } = await caller.journal.void({ id: created.id });
+
+    // Neither a narration edit nor a line edit may touch it.
+    await expect(
+      caller.journal.update({ id: reversingEntry.id, narration: "Rewritten" }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/reversal of another journal entry.*cannot be edited.*post a new journal entry/),
+    });
+    await expect(
+      caller.journal.update({
+        id: reversingEntry.id,
+        lines: [
+          { accountId: cashAccountId, debit: "1.00", credit: "0" },
+          { accountId: capitalAccountId, debit: "0", credit: "1.00" },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    // The reversal is exactly as posted: same narration, lines still mirror the original.
+    const [after] = await db.select().from(journalEntries).where(eq(journalEntries.id, reversingEntry.id));
+    expect(after!.narration).toBe(reversingEntry.narration);
+    const original = await caller.journal.getById({ id: created.id });
+    const reversal = await caller.journal.getById({ id: reversingEntry.id });
+    for (const accountId of [cashAccountId, capitalAccountId]) {
+      const o = original.lines.find((l) => l.accountId === accountId)!;
+      const r = reversal.lines.find((l) => l.accountId === accountId)!;
+      expect(money.compare(o.debit, r.credit)).toBe(0);
+      expect(money.compare(o.credit, r.debit)).toBe(0);
+    }
+  });
+
   it("rejects unbalanced line update", async () => {
     const caller = callerForRamesh();
 

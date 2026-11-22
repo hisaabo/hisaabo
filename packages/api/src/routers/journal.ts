@@ -354,6 +354,17 @@ export const journalRouter = router({
           });
         }
 
+        // A reversal (the entry a void posted) is the counterpart of the entry it
+        // reverses: editing its lines would break the pair's netting to zero.
+        if (existing.reversesEntryId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `${existing.entryNumber} is the reversal of another journal entry and is part of its audit trail; ` +
+              "it cannot be edited. To correct it, post a new journal entry.",
+          });
+        }
+
         if (existing.isVoided) {
           throw new TRPCError({
             code: "BAD_REQUEST",
