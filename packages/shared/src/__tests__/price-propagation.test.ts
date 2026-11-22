@@ -348,7 +348,7 @@ describe("proposePriceUpdates: items whose sale price includes GST", () => {
   });
 });
 
-describe("proposePriceUpdates: inclusive items and duplicate lines", () => {
+describe("proposePriceUpdates: inclusive items, duplicates and the lossy round trip", () => {
   it("two lines of one inclusive item at the SAME edited rate propose ONE price, not a conflict", () => {
     // rate 105.00 at 18% -> candidate 10500 x 118 / 100 = 12390 = 123.90 on both lines
     const { proposals, skipped } = proposePriceUpdates({
@@ -390,6 +390,69 @@ describe("proposePriceUpdates: inclusive items and duplicate lines", () => {
     const differ = proposePriceUpdates({ side: "sale", items, lines: [line, { ...line, unitPrice: "590" }] });
     expect(differ.proposals).toEqual([]);
     expect(differ.skipped).toHaveLength(1);
+  });
+
+  const lossy: PricingCatalogItem = {
+    id: "66666666-6666-4666-8666-666666666666",
+    name: "Pin",
+    unit: "pcs",
+    itemMode: "simple",
+    salePrice: "1.02",
+    purchasePrice: null,
+    taxPercent: "18.00",
+    taxInclusive: true,
+  };
+
+  it("a saved price that does not survive the round trip is not 'edited' by a line at its own derived rate", () => {
+    // 1.02 at 18%: 102 x 100 / 118 = 86.44 -> 86 paise (0.86); back: 86 x 118 / 100 = 101.48 -> 101 paise (1.01), not 1.02
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items: [lossy],
+      lines: [{ itemId: lossy.id, unitPrice: "0.86", taxPercent: "18" }], // CLI / MCP: no baseline
+    });
+    expect(proposals).toEqual([]); // before: proposed 1.01, a paisa rewrite of the catalog for nothing
+  });
+
+  it("but a genuinely different rate on that item is still proposed (0.90 -> 90 x 118 / 100 = 106.2 -> 1.06)", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items: [lossy],
+      lines: [{ itemId: lossy.id, unitPrice: "0.90", taxPercent: "18", originalUnitPrice: "0.86" }],
+    });
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({ oldPrice: "1.02", newPrice: "1.06" });
+  });
+
+  it("the line's own GST rate decides the derived rate: 1.02 at 12% derives 0.91 (102 x 100 / 112 = 91.07)", () => {
+    const { proposals } = proposePriceUpdates({
+      side: "sale", items: [lossy],
+      lines: [{ itemId: lossy.id, unitPrice: "0.91", taxPercent: "12" }],
+    });
+    expect(proposals).toEqual([]);
+  });
+
+  // Counts of lossy shelf prices (price -> rate -> price' != price) over every paisa price from 0.01 to 500.00,
+  // computed once with an independent tool (Python fractions, half-up). Each is a price the OLD code would have
+  // rewritten by a paisa; the new rule proposes nothing for any of them.
+  it.each([
+    { tax: "5", lossyCount: 2381 },
+    { tax: "12", lossyCount: 5357 },
+    { tax: "18", lossyCount: 7627 },
+    { tax: "28", lossyCount: 10938 },
+    { tax: "40", lossyCount: 14286 },
+  ])("every saved price 0.01..500.00 at $tax% GST: the line at its derived rate proposes nothing ($lossyCount of them do not round-trip)", ({ tax, lossyCount }) => {
+    let lossyFound = 0;
+    for (let paise = 1; paise <= 50000; paise++) {
+      const price = (paise / 100).toFixed(2); // exact: paise / 100 is formatted to 2 dp, no arithmetic on money
+      const item: PricingCatalogItem = { ...lossy, salePrice: price, taxPercent: tax };
+      const rate = convertPriceBasis(price, tax, true);
+      if (convertPriceBasis(rate, tax, false) !== price) lossyFound++;
+      const { proposals, skipped } = proposePriceUpdates({
+        side: "sale", items: [item],
+        lines: [{ itemId: item.id, unitPrice: rate, taxPercent: tax }],
+      });
+      expect(proposals, `${price} at ${tax}% derived rate ${rate}`).toEqual([]);
+      expect(skipped).toEqual([]);
+    }
+    expect(lossyFound).toBe(lossyCount);
   });
 });
 

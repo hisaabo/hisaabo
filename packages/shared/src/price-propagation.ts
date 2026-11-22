@@ -234,8 +234,13 @@ export function proposePriceUpdates(input: {
     const inclusive = priceIsTaxInclusive(item, side);
     let candidate = rate;
     if (inclusive) {
+      const taxPercent = line.taxPercent ?? item.taxPercent ?? "0";
       try {
-        candidate = inclusiveFromExclusive(rate, line.taxPercent ?? item.taxPercent ?? "0");
+        candidate = inclusiveFromExclusive(rate, taxPercent);
+        // 6b'. The conversion is lossy: the rate a saved inclusive price derives to (₹1.02 at 18% -> 0.86) converts
+        // BACK to a different price (0.86 -> ₹1.01). A line at exactly the rate the saved price derives to is the
+        // saved price, not an edit: compare in the rate's basis too, so a paisa is never rewritten for nothing.
+        if (stored !== null && sameNumber(exclusiveRateFromInclusive(stored, taxPercent), rate)) continue;
       } catch {
         continue; // a tax rate that is not a plain number: nothing safe to propose
       }

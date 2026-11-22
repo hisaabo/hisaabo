@@ -3,7 +3,7 @@ import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import {
   createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, unitVariantSchema,
-  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis, priceIsTaxInclusive,
+  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis, priceIsTaxInclusive, exclusiveRateFromInclusive,
   type ItemPriceUpdate,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
@@ -553,6 +553,18 @@ export const itemRouter = router({
             newPrice = convertPriceBasis(newPrice, item.taxPercent, u.priceIncludesTax);
           }
           newPrice = money.add(newPrice, "0");
+          // The conversion is lossy: the exclusive rate a saved inclusive price derives to (1.02 at 18% -> 0.86) converts
+          // back to a different price (0.86 -> 1.01). A caller (CLI, MCP) that states exactly that derived rate has not
+          // changed the price, so it must not rewrite the catalog by a paisa: such an update is "unchanged".
+          const statedExclusive = u.priceIncludesTax === false && priceIsTaxInclusive(item, u.side) ? money.add(u.newPrice, "0") : null;
+          const derivesTo = (old: string | null): boolean => {
+            if (old === null || statedExclusive === null) return false;
+            try {
+              return exclusiveRateFromInclusive(old, item.taxPercent) === statedExclusive;
+            } catch {
+              return false;
+            }
+          };
           if (!money.isPositive(newPrice)) {
             throw new TRPCError({ code: "BAD_REQUEST", message: `The new price for "${item.name}" must be greater than zero` });
           }
@@ -569,6 +581,7 @@ export const itemRouter = router({
             }
             variantId = variant.id;
             oldPrice = variant[field] ?? null;
+            if (derivesTo(oldPrice)) newPrice = money.add(oldPrice!, "0");
             const attrs = Object.values(variant.attributeValues as Record<string, string>).join(" / ");
             if (attrs) label = `${item.name} (${attrs})`;
           } else if (item.itemMode === "variants") {
@@ -582,6 +595,7 @@ export const itemRouter = router({
             unit = u.unit;
             label = `${item.name} (${u.unit})`;
             oldPrice = current[at]![field] ?? null;
+            if (derivesTo(oldPrice)) newPrice = money.add(oldPrice!, "0");
             if (oldPrice === null || money.compare(oldPrice, newPrice) !== 0) {
               const next = current.map((v, i) => (i === at ? { ...v, [field]: newPrice } : v));
               // the same validation item.create / item.update apply to alternate units
@@ -591,6 +605,7 @@ export const itemRouter = router({
             }
           } else {
             oldPrice = item[field] ?? null;
+            if (derivesTo(oldPrice)) newPrice = money.add(oldPrice!, "0");
             if (oldPrice === null || money.compare(oldPrice, newPrice) !== 0) {
               const patch = updateItemSchema.safeParse({ [field]: newPrice });
               if (!patch.success) throw new TRPCError({ code: "BAD_REQUEST", message: patch.error.issues[0]?.message ?? "Invalid price" });

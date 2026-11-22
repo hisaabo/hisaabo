@@ -442,3 +442,84 @@ describe("item.updatePricesFromDocument — the bill is unaffected", () => {
     expect(history.some((h) => h.invoiceId === sale.id && h.unitPrice === "650.00")).toBe(true);
   });
 });
+
+describe("item.updatePricesFromDocument: the tax-basis round trip is lossy, so an unchanged rate must not rewrite a price", () => {
+  // At 18%: a saved inclusive price P derives to the exclusive rate r = round(P x 100 / 118), and r converts BACK to
+  // round(r x 118 / 100), which is not always P. Examples (computed independently, half up, in paise):
+  //   10.00 -> 8.47 -> 9.99     10.06 -> 8.53 -> 10.07     10.13 -> 8.58 -> 10.12
+  // A client that states the derived rate (CLI / MCP: no baseline, a resent line) has not changed anything.
+  let tenner: TestItem; // base 10.00, box 10.06, both inclusive at 18%
+  let shirt: TestItem; // variants, variant M 10.13 inclusive at 18%
+  let shirtVariantId: string;
+
+  beforeAll(async () => {
+    const db = getTenantTestDb();
+    tenner = await createItem(db, business.id, {
+      name: "Tenner", unit: "pcs", itemMode: "alt_units", salePrice: "10.00", purchasePrice: "8.00", taxPercent: "18.00", taxInclusive: true,
+      unitVariants: [{ unit: "box", conversionFactor: 10, salePrice: "10.06" }],
+    });
+    shirt = await createItem(db, business.id, { name: "Shirt", unit: "pcs", itemMode: "variants", salePrice: null, purchasePrice: null, taxPercent: "18.00", taxInclusive: true });
+    const [v] = await db.insert(itemVariants).values({ itemId: shirt.id, attributeValues: { Size: "M" }, salePrice: "10.13", stockQuantity: "10.000" }).returning();
+    shirtVariantId = v!.id;
+  });
+
+  it("base price: the exclusive rate 8.47 that 10.00 derives to is unchanged (it used to become 9.99)", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, side: "sale", newPrice: "8.47", priceIncludesTax: false }] });
+    expect(res.updated).toEqual([]);
+    expect(res.unchanged).toHaveLength(1);
+    expect(res.unchanged[0]).toMatchObject({ oldPrice: "10.00", newPrice: "10.00" });
+    expect((await freshItem(tenner.id)).salePrice).toBe("10.00");
+    expect(await auditRowsFor(tenner.id)).toHaveLength(0);
+  });
+
+  it("alternate unit: 8.53 is the box's derived rate (10.06 -> 10.07 before): unchanged", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, unit: "box", side: "sale", newPrice: "8.53", priceIncludesTax: false }] });
+    expect(res.updated).toEqual([]);
+    expect(res.unchanged[0]).toMatchObject({ oldPrice: "10.06", newPrice: "10.06" });
+    expect((await freshItem(tenner.id)).unitVariants?.[0]?.salePrice).toBe("10.06");
+  });
+
+  it("variant: 8.58 is variant M's derived rate (10.13 -> 10.12 before): unchanged", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: shirt.id, variantId: shirtVariantId, side: "sale", newPrice: "8.58", priceIncludesTax: false }] });
+    expect(res.updated).toEqual([]);
+    expect(res.unchanged[0]).toMatchObject({ oldPrice: "10.13", newPrice: "10.13" });
+    const db = getTenantTestDb();
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.id, shirtVariantId));
+    expect(v!.salePrice).toBe("10.13");
+  });
+
+  it("a genuinely different rate still updates: 9.00 -> 900 x 118 / 100 = 1062 -> 10.62", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, side: "sale", newPrice: "9.00", priceIncludesTax: false }] });
+    expect(res.updated[0]).toMatchObject({ oldPrice: "10.00", newPrice: "10.62" });
+    expect((await freshItem(tenner.id)).salePrice).toBe("10.62");
+    // put it back for the tests below
+    await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, side: "sale", newPrice: "10.00", priceIncludesTax: true }] });
+    expect((await freshItem(tenner.id)).salePrice).toBe("10.00");
+  });
+
+  it("one request with an unchanged-by-round-trip slot and a real change applies only the real one, atomically", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({
+      updates: [
+        { itemId: tenner.id, side: "sale", newPrice: "8.47", priceIncludesTax: false }, // unchanged
+        { itemId: tenner.id, unit: "box", side: "sale", newPrice: "9.00", priceIncludesTax: false }, // 900 x 118 / 100 = 1062 -> 10.62
+      ],
+    });
+    expect(res.unchanged).toHaveLength(1);
+    expect(res.updated).toHaveLength(1);
+    const row = await freshItem(tenner.id);
+    expect(row.salePrice).toBe("10.00");
+    expect(row.unitVariants?.[0]?.salePrice).toBe("10.62");
+    await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, unit: "box", side: "sale", newPrice: "10.06", priceIncludesTax: true }] });
+  });
+
+  it("stated INCLUDING tax, the same price is unchanged too (always was)", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, side: "sale", newPrice: "10.00", priceIncludesTax: true }] });
+    expect(res.unchanged).toHaveLength(1);
+  });
+
+  it("the purchase side is untouched by the rule (purchase prices are never inclusive): 8.47 is stored as 8.47", async () => {
+    const res = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: tenner.id, side: "purchase", newPrice: "8.47", priceIncludesTax: false }] });
+    expect(res.updated[0]).toMatchObject({ oldPrice: "8.00", newPrice: "8.47" });
+    expect((await freshItem(tenner.id)).purchasePrice).toBe("8.47");
+  });
+});
