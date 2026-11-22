@@ -45,11 +45,13 @@ export function importSummaryMessage(result: {
   totalLines: number;
   matchedLines: number;
   unmatchedLines: number;
-  duplicatesSkipped: number;
+  /** Absent when the server predates duplicate skipping (0.10.0). */
+  duplicatesSkipped?: number | null;
 }): string {
   const base = `Parsed ${result.totalLines} lines. ${result.matchedLines} auto-matched, ${result.unmatchedLines} unmatched.`;
-  if (result.duplicatesSkipped <= 0) return base;
   const n = result.duplicatesSkipped;
+  // `!(n > 0)`, not `n <= 0`: undefined/null/NaN must read as "nothing skipped".
+  if (n == null || !(n > 0)) return base;
   return `${base} ${n} duplicate ${n === 1 ? "line" : "lines"} skipped.`;
 }
 
@@ -89,14 +91,15 @@ export function DuplicateLinesNotice({
   importedLines,
   lines,
 }: {
-  /** `duplicatesSkipped` from the confirmMapping result. */
-  count: number;
+  /** `duplicatesSkipped` from the confirmMapping result; absent when talking to a 0.10.0 server. */
+  count?: number | null;
   /** Lines that were imported (the result's `totalLines`). */
   importedLines: number;
   /** `duplicates` from the confirmMapping result (capped by the server; `count` is complete). */
-  lines?: readonly SkippedDuplicateLine[];
+  lines?: readonly SkippedDuplicateLine[] | null;
 }) {
-  if (count <= 0) return null;
+  // `!(count > 0)`, not `count <= 0`: undefined/null/NaN render nothing, never "undefined duplicate lines".
+  if (count == null || !(count > 0)) return null;
   return (
     <div
       role="status"

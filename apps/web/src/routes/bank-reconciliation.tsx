@@ -425,8 +425,9 @@ function UploadTab({
       toast.success(importSummaryMessage(data));
       onSuccess({
         importId: data.importId,
-        duplicatesSkipped: data.duplicatesSkipped,
-        duplicates: data.duplicates,
+        // Both are absent when this client talks to a 0.10.0 server.
+        duplicatesSkipped: data.duplicatesSkipped ?? 0,
+        duplicates: data.duplicates ?? [],
         totalLines: data.totalLines,
       });
     },

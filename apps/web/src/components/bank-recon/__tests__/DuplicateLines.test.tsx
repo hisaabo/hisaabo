@@ -24,6 +24,35 @@ describe("importSummaryMessage", () => {
   });
 });
 
+// A 0.10.1 client against a 0.10.0 API gets a confirmMapping result with no
+// duplicatesSkipped / duplicates at all; that must read as "nothing skipped".
+describe("against a server that predates duplicate skipping (fields absent)", () => {
+  const legacy = { totalLines: 5, matchedLines: 2, unmatchedLines: 3 };
+
+  it("importSummaryMessage never mentions duplicates for undefined, null or NaN", () => {
+    const plain = "Parsed 5 lines. 2 auto-matched, 3 unmatched.";
+    expect(importSummaryMessage(legacy)).toBe(plain);
+    expect(importSummaryMessage({ ...legacy, duplicatesSkipped: undefined })).toBe(plain);
+    expect(importSummaryMessage({ ...legacy, duplicatesSkipped: null })).toBe(plain);
+    expect(importSummaryMessage({ ...legacy, duplicatesSkipped: Number.NaN })).toBe(plain);
+    expect(importSummaryMessage(legacy)).not.toMatch(/undefined|NaN/);
+  });
+
+  it("DuplicateLinesNotice renders nothing for an undefined, null or NaN count", () => {
+    for (const count of [undefined, null, Number.NaN]) {
+      const { container, unmount } = render(<DuplicateLinesNotice count={count} importedLines={5} />);
+      expect(container.firstChild).toBeNull();
+      expect(container.textContent).not.toMatch(/undefined|NaN/);
+      unmount();
+    }
+  });
+
+  it("DuplicateLinesNotice tolerates a missing or null list", () => {
+    const { container } = render(<DuplicateLinesNotice count={undefined} importedLines={5} lines={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+});
+
 describe("DuplicateLinesNotice", () => {
   it("renders nothing when no duplicates were skipped", () => {
     const { container } = render(<DuplicateLinesNotice count={0} importedLines={12} />);
