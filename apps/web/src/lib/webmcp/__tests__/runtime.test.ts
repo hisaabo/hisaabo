@@ -9,10 +9,12 @@
  * Run with: pnpm --filter @hisaabo/web test -- --run src/lib/webmcp
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { TRPCClientError } from "@trpc/client";
+import { resetWriteBudget } from "../budget";
 import {
   buildBrowserTool,
+  resetWriteThrottle,
   getModelContext,
   isWebMcpAvailable,
   isWriteTool,
@@ -52,6 +54,8 @@ function fakeModelContext(impl?: (tool: WebMCP.ModelContextTool) => Promise<void
 function makeCtx(overrides: Partial<WebMcpToolContext> = {}): WebMcpToolContext {
   return {
     client: {} as unknown as WebMcpTrpcClient,
+    signal: new AbortController().signal,
+    activeBusinessId: () => "biz-1",
     role: "owner",
     businessId: "biz-1",
     businessName: "Acme Traders",
@@ -80,6 +84,11 @@ function trpcError(code: string, message: string, data: Record<string, unknown> 
   return TRPCClientError.from(response as unknown as Error);
 }
 
+beforeEach(() => {
+  resetWriteBudget();
+  resetWriteThrottle();
+});
+
 afterEach(() => {
   removeModelContext();
   vi.restoreAllMocks();
@@ -106,6 +115,17 @@ describe("getModelContext", () => {
   it("returns undefined when neither exists", () => {
     expect(getModelContext()).toBeUndefined();
     expect(isWebMcpAvailable()).toBe(false);
+  });
+
+  it("is never available inside the Tauri desktop shell, even if a polyfill installed a context", () => {
+    installModelContext(document, { registerTool: vi.fn() });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    try {
+      expect(getModelContext()).toBeUndefined();
+      expect(isWebMcpAvailable()).toBe(false);
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
   });
 });
 
@@ -427,5 +447,125 @@ describe("registerHisaaboTools", () => {
 
     controller.abort();
     expect(unregisterTool).toHaveBeenCalledWith("a");
+  });
+});
+
+// ── Business switch / registration reset ───────────────────────
+
+describe("a call that outlives its registration", () => {
+  const opts = () => ({ signal: new AbortController().signal });
+  const text = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+
+  it("does not run a write that was confirmed after the registration was aborted", async () => {
+    // The user left business A while the dialog was open, then clicked Allow.
+    const controller = new AbortController();
+    const execute = vi.fn(async () => ({ id: "inv-1" }));
+    const ctx = makeCtx({ signal: controller.signal });
+    vi.spyOn(window, "confirm").mockImplementation(() => {
+      controller.abort();
+      return true;
+    });
+
+    const tool = buildBrowserTool(makeDef({ annotations: { consequentialHint: true }, execute }), ctx);
+    const result = await tool.execute({}, opts());
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(ctx.invalidate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ isError: true });
+    expect(text(result)).toMatch(/session was reset/i);
+    expect(text(result)).toMatch(/Nothing was changed/);
+  });
+
+  it("does not run a write when the app now shows a different business", async () => {
+    // Registration abort is the first line of defence; this is the independent check.
+    let active = "biz-1";
+    const execute = vi.fn(async () => ({ id: "inv-1" }));
+    const ctx = makeCtx({ businessName: "Acme Traders", activeBusinessId: () => active });
+    vi.spyOn(window, "confirm").mockImplementation(() => {
+      active = "biz-2";
+      return true;
+    });
+
+    const tool = buildBrowserTool(makeDef({ annotations: { consequentialHint: true }, execute }), ctx);
+    const result = await tool.execute({}, opts());
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ isError: true });
+    expect(text(result)).toMatch(/switched business/i);
+    expect(text(result)).toContain("Acme Traders");
+  });
+
+  it("reports a reset, not a refusal, when the prompt was denied because of the reset", async () => {
+    const controller = new AbortController();
+    const ctx = makeCtx({ signal: controller.signal });
+    vi.spyOn(window, "confirm").mockImplementation(() => {
+      controller.abort();
+      return false;
+    });
+    const tool = buildBrowserTool(makeDef({ annotations: { consequentialHint: true } }), ctx);
+    const result = await tool.execute({}, opts());
+    expect(text(result)).toMatch(/session was reset/i);
+    expect(text(result)).not.toMatch(/user declined/i);
+  });
+
+  it("refuses a call that arrives after the registration ended, read or write, without prompting", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const confirm = vi.spyOn(window, "confirm");
+    const readExecute = vi.fn(async () => []);
+    const writeExecute = vi.fn(async () => ({}));
+    const ctx = makeCtx({ signal: controller.signal });
+
+    const read = await buildBrowserTool(makeDef({ execute: readExecute }), ctx).execute({}, opts());
+    const write = await buildBrowserTool(
+      makeDef({ annotations: { consequentialHint: true }, execute: writeExecute }),
+      ctx,
+    ).execute({}, opts());
+
+    expect(readExecute).not.toHaveBeenCalled();
+    expect(writeExecute).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(read).toMatchObject({ isError: true });
+    expect(write).toMatchObject({ isError: true });
+  });
+
+  it("does not run a write the agent itself cancelled while the dialog was open", async () => {
+    const agent = new AbortController();
+    const execute = vi.fn(async () => ({}));
+    vi.spyOn(window, "confirm").mockImplementation(() => {
+      agent.abort();
+      return true;
+    });
+    const tool = buildBrowserTool(makeDef({ annotations: { consequentialHint: true }, execute }), makeCtx());
+    const result = await tool.execute({}, { signal: agent.signal });
+    expect(execute).not.toHaveBeenCalled();
+    expect(text(result)).toMatch(/agent cancelled/i);
+  });
+
+  it("still runs normally when nothing changed", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const execute = vi.fn(async () => ({ id: "inv-1" }));
+    const tool = buildBrowserTool(makeDef({ annotations: { consequentialHint: true }, execute }), makeCtx());
+    const result = await tool.execute({}, opts());
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result).not.toMatchObject({ isError: true });
+  });
+
+  it("lets an in-flight write finish and report success: the pinned client keeps it in its own business", async () => {
+    // The reset arrives while the write is already on the wire. Reporting an
+    // error for a write that happened would invite a duplicate retry.
+    const controller = new AbortController();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const execute = vi.fn(async () => {
+      controller.abort();
+      return { id: "inv-1" };
+    });
+    const tool = buildBrowserTool(
+      makeDef({ annotations: { consequentialHint: true }, execute }),
+      makeCtx({ signal: controller.signal }),
+    );
+    const result = await tool.execute({}, opts());
+    expect(result).not.toMatchObject({ isError: true });
+    expect(text(result)).toContain("inv-1");
   });
 });

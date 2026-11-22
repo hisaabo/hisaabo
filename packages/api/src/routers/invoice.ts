@@ -1,11 +1,12 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { getTenantDb, type TenantDatabase, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
 import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
@@ -15,6 +16,9 @@ import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 import { isIntraStateSupply } from "../lib/gst-split.js";
+
+/** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
+type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -217,12 +221,18 @@ export const invoiceRouter = router({
       return { ...invoice, status: effectiveStatus, lineItems: lineItemsWithUnit, party: party ?? null, relatedDocuments: relatedDocs, totalAdjusted };
     }),
 
-  create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createInvoiceSchema.and(idempotencyInputSchema)).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
     if (!canCreateDocumentType(ctx.role, input.documentType, input.type)) {
       throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
     }
-    const invoice = await ctx.db.transaction(async (tx) => {
+    const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "invoice.create", key: input.idempotencyKey, input };
+    const created = await ctx.db.transaction(async (tx) => {
+      // An idempotency key that was already used with this exact input is a replay:
+      // recognised here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, resourceId: claim.resourceId };
+
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
@@ -458,8 +468,23 @@ export const invoiceRouter = router({
         }
       }
 
-      return invoice;
+      await completeIdempotencyKey(tx, claim, invoice.id);
+      return { replayed: false as const, invoice };
     });
+    if (created.replayed) {
+      // Answer with the LIVE invoice (its status may have moved on), flagged as a
+      // replay so the caller can tell nothing new was created. If it has since been
+      // deleted, say so rather than quietly creating another.
+      const [live] = await ctx.db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, created.resourceId), eq(invoices.businessId, ctx.businessId), isNull(invoices.deletedAt)))
+        .limit(1);
+      if (!live) throw replayedRecordGone("invoice");
+      const replay: WithReplayFlag<typeof live> = { ...live, idempotentReplay: true };
+      return replay;
+    }
+    const invoice = created.invoice;
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,
@@ -469,6 +494,7 @@ export const invoiceRouter = router({
       entityId: invoice.id,
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     // ── Async e-invoice submission (fire-and-forget) ───────────────────────
@@ -640,7 +666,9 @@ export const invoiceRouter = router({
       }, 0);
     }
 
-    return invoice;
+    // A caller that sent a key is told this call really created the record.
+    const response: WithReplayFlag<typeof invoice> = input.idempotencyKey ? { ...invoice, idempotentReplay: false } : invoice;
+    return response;
   }),
 
   // Get the delivery method used on the most recent sale invoice for a party
@@ -714,6 +742,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus, toStatus: input.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return invoice;
@@ -955,6 +984,7 @@ export const invoiceRouter = router({
         entityId: updated.id,
         metadata: { invoiceNumber: updated.invoiceNumber },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -1005,6 +1035,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: result.invoiceNumber, previousStatus: result.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

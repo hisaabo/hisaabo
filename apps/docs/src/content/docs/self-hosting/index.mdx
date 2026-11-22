@@ -40,6 +40,7 @@ The native mobile app (Android/iOS) and desktop app (macOS/Windows/Linux) are **
 | `APP_URL` | Yes | — | Public URL of the app (used in magic link emails) |
 | `API_PUBLIC_URL` | Recommended | — | Public URL of the API, used for absolute links (UPI pay links in PDFs, store share metadata). If unset the API starts with a warning and falls back to the request origin or `APP_URL`; in production a value that is not a valid `http(s)` URL stops the API from starting |
 | `ALLOW_OPEN_SIGNUP` | No | `false` | Self-hosted only. By default only the first user can sign up and everyone else needs an invitation; `true` allows open sign-up |
+| `WEBMCP_DISABLED` | No | unset | Kill switch for [browser AI agents (WebMCP)](/ai/webmcp/). `true` makes the web app register no tools with the browser's agent for anyone on this server, and the API refuses requests marked `X-Hisaabo-Agent: webmcp` with 403. Does not affect the MCP server or CLI. Restart the API after changing it |
 | `ENCRYPTION_KEY` | Yes | — | AES-256-GCM key (64-char hex) for field-level encryption. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ENCRYPTION_KEY_PREVIOUS` | No | — | Previous key for rotation — set temporarily, remove after all fields are re-encrypted |
 | `RESEND_API_KEY` | Yes (production) | — | Resend API key for transactional email (sign-in links, invitations). The API refuses to start in production without it; in development links are printed to the console |

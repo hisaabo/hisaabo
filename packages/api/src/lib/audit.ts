@@ -1,4 +1,5 @@
 import { auditLog } from "@hisaabo/db";
+import type { AuditSource } from "@hisaabo/shared";
 import type { TenantDatabase } from "../trpc.js";
 
 export interface AuditParams {
@@ -9,6 +10,8 @@ export interface AuditParams {
   entityId?: string | null;
   metadata?: Record<string, unknown>;
   ipAddress?: string | null;
+  /** Where the call came from — see lib/audit-source.ts. Pass `ctx.source`. */
+  source?: AuditSource | null;
 }
 
 /** A TenantDatabase or a transaction from `.transaction()`: all an audit insert needs. */
@@ -23,6 +26,7 @@ async function insertAudit(db: DbOrTx, params: AuditParams) {
     entityId: params.entityId || null,
     metadata: params.metadata ? JSON.stringify(params.metadata) : null,
     ipAddress: params.ipAddress || null,
+    source: params.source || null,
   });
 }
 

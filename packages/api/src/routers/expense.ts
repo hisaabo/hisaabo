@@ -144,6 +144,7 @@ export const expenseRouter = router({
       entityId: expense.id,
       metadata: { amount: expense.amount, category: expense.category },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return expense;
@@ -250,6 +251,7 @@ export const expenseRouter = router({
         entityId: updated.id,
         metadata: { expenseId: updated.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -326,6 +328,7 @@ export const expenseRouter = router({
         entityId: input.id,
         metadata: { expenseId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

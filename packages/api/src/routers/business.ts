@@ -148,6 +148,7 @@ export const businessRouter = router({
       entityId: biz.id,
       metadata: { name: biz.name },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return biz;
@@ -185,6 +186,7 @@ export const businessRouter = router({
         entityId: biz.id,
         metadata: { name: biz.name },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return biz;
@@ -230,6 +232,7 @@ export const businessRouter = router({
         entityId: biz.id,
         metadata: { bytes: bytes.length, mime: actualMime, width: input.data.width, height: input.data.height },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { logoUpdatedAt: biz.logoUpdatedAt };
@@ -263,6 +266,7 @@ export const businessRouter = router({
         entityType: "business",
         entityId: biz.id,
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { ok: true };
@@ -293,6 +297,7 @@ export const businessRouter = router({
         entityId: biz.id,
         metadata: { enabled: input.enabled },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return biz;
@@ -394,6 +399,7 @@ export const businessRouter = router({
         entityId: ctx.businessId,
         metadata: { field: input.documentType, value: input.newNumber },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true, previousNumber: currentNumber, newNumber: input.newNumber };

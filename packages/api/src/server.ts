@@ -43,7 +43,10 @@ import { registerVersionRoute } from "./http/version.js";
 import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
-import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, chargeRateLimits, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { isAgentRequest } from "./lib/audit-source.js";
+import { sweepIdempotencyKeysEverywhere } from "./lib/idempotency-sweep.js";
+import { agentKillSwitch } from "./lib/webmcp-policy.js";
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
@@ -201,6 +204,8 @@ function isSameOrigin(c: Context): boolean {
 // Same-origin unauthenticated: 60 (login attempts, public pages)
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
+// Browser AI agent (x-hisaabo-agent: webmcp, authenticated): also capped at 120 in
+//   a bucket of its own, on top of its ordinary tier (see AGENT_LIMIT_PER_MIN)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 
 // @trpc/server has no server-side batch cap, so enforce one here: a batch URL
@@ -252,6 +257,12 @@ const rateLimitDisabled =
   process.env.DISABLE_RATE_LIMIT === "1" &&
   process.env.NODE_ENV !== "production";
 
+// Operator kill switch (WEBMCP_DISABLED=true): calls that identify themselves as
+// browser-agent calls are refused (403) before anything runs. A second layer behind
+// the web app not registering tools at all; see lib/webmcp-policy.ts for why it is
+// not the permission boundary.
+app.use("/api/trpc/*", agentKillSwitch());
+
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   if (rateLimitDisabled) {
     await next();
@@ -281,18 +292,19 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
     authorization: c.req.header("authorization"),
     cookie: c.req.header("cookie"),
   });
-  const { tier, limit } = pickRateTier({ sameOrigin: isSameOrigin(c), hasCredential });
-
-  const key = `${tier}:${ip}`;
-  const entry = rateMap.get(key);
-  if (!entry || now > entry.reset) {
-    rateMap.set(key, { count: 1, reset: now + 60_000 });
-  } else if (entry.count >= limit) {
+  // Browser-agent calls (x-hisaabo-agent: webmcp) are charged against their own cap
+  // AND the ordinary tier: an agent loop is cut off at its cap, and the marker can
+  // never add throughput. See lib/rate-limit-tier.ts.
+  const charge = chargeRateLimits(
+    rateMap,
+    ip,
+    { sameOrigin: isSameOrigin(c), hasCredential, agent: isAgentRequest(c.req.raw.headers) },
+    now,
+  );
+  if (!charge.ok) {
     c.header("Retry-After", "60");
-    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: tier });
+    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: charge.tier });
     return c.json({ error: "Too many requests" }, 429);
-  } else {
-    entry.count++;
   }
   await next();
 });
@@ -2103,6 +2115,13 @@ const cleanupTimer = setInterval(async () => {
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
     logger.error({ err: e }, "[session-cleanup] Failed");
+  }
+  // Expired idempotency claims (tenant databases) are swept on the same hourly tick.
+  try {
+    const removed = await sweepIdempotencyKeysEverywhere();
+    if (removed > 0) logger.info({ removed }, "[idempotency-sweep] removed expired claims");
+  } catch (e) {
+    logger.error({ err: e }, "[idempotency-sweep] Failed");
   }
 }, 60 * 60 * 1000);
 cleanupTimer.unref();

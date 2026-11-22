@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD COLUMN "webmcp_disabled" boolean DEFAULT false NOT NULL;

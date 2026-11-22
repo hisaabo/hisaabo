@@ -182,6 +182,12 @@ exceptions:
       - tenant.acceptById
       - tenant.peekInvitation
 
+      # --- Browser AI agents (WebMCP) ---
+      # The owner's organization-wide switch for WebMCP, the browser's built-in AI
+      # agent API. It is a web-only feature (the desktop shell and the mobile app do
+      # not register WebMCP tools), so there is nothing for mobile to switch.
+      - tenant.setWebMcpDisabled
+
       # --- Chart of Accounts ---
       # Accounting management is a web-app/CA workflow.
       - account.list
@@ -351,6 +357,10 @@ exceptions:
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
+      # [security] The owner's organization-wide switch for browser AI agents
+      # (WebMCP, a web-only feature): an owner decision made in Settings, and a
+      # guardrail that automation holding a key should not be able to flip.
+      - tenant.setWebMcpDisabled
 
       # --- Business ---
       # Plan limit check — CLI doesn't create businesses.
@@ -460,6 +470,10 @@ exceptions:
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
+      # [security] The owner's organization-wide switch for browser AI agents
+      # (WebMCP, a web-only feature): an agent must not be able to switch agent
+      # access, its own guardrail, off or on.
+      - tenant.setWebMcpDisabled
 
       # --- Backup & Restore ---
       # [security] Whole-tenant export/import: an agent (or a prompt injected into

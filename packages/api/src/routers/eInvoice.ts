@@ -677,6 +677,7 @@ export const eInvoiceRouter = router({
           irpReconciled: reconciledWithIrp,
         },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
       if (result.changed) {
         // Same audit entry a normal cancel writes, so the trail reads the same.
@@ -693,6 +694,7 @@ export const eInvoiceRouter = router({
             via: "eInvoice.cancel",
           },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 

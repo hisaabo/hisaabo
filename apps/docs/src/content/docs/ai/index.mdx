@@ -46,7 +46,7 @@ You could build an invoicing API from scratch, wire up a GST calculation engine,
 | **Type safety** | Manual schema maintenance | End-to-end TypeScript types from `AppRouter` — no codegen |
 | **MCP integration** | Build your own MCP server | Zero-config MCP server with 194 tools (103 read-only by default), works with Claude Desktop today |
 | **Indian business context** | Learn the rules (April FY, UPI, HSN, GSTIN) | All of it works out of the box |
-| **Audit trail** | Design and implement | Every API call logged, every MCP tool call recorded |
+| **Audit trail** | Design and implement | Every mutation logged, with MCP and browser-agent changes labelled by origin |
 | **Time to first AI agent** | 3–6 months | 5 minutes |
 
 The answer is obvious. Use Hisaabo as the backend, build the AI on top.
@@ -172,6 +172,22 @@ The MCP server exposes tools across all Hisaabo business domains. Which tools ar
 | **Import** | `import_parties`, `import_items`, `import_invoices`, `import_payments` |
 
 Full schema documentation is in the [MCP Server reference](/ai/mcp-server/).
+
+---
+
+## Browser AI Agents (WebMCP)
+
+[WebMCP](/ai/webmcp/) is the in-browser counterpart of the MCP server, and it is **experimental** (a W3C draft; a Chrome and Edge origin trial). Instead of an external client with an API key, the AI agent built into your browser (Gemini in Chrome, Copilot in Edge) discovers Hisaabo's tools in the tab you have open and uses your own session. It is off by default, per person and organization, web only (the desktop and mobile apps never offer it), and can be switched off for a whole organization by its owner or for a whole server with `WEBMCP_DISABLED=true`.
+
+It is a curated subset, not a mirror of the MCP server: 20 tools at most, depending on your role.
+
+| Kind | Tools | Annotations |
+|---|---|---|
+| **Orientation** (browser only) | `hisaabo_context`, `app_navigate` | `readOnlyHint` |
+| **Read** (12) | `dashboard_summary`, `invoice_list`, `invoice_get`, `party_list`, `party_get`, `item_list`, `item_get`, `payment_list`, `payment_unpaid_invoices`, `tds_section_list`, `expense_list`, `expense_categories` | `readOnlyHint`, `untrustedContentHint` |
+| **Write** (6) | `invoice_create`, `invoice_update_status` (cannot cancel or void), `party_create`, `item_create`, `payment_create`, `expense_create` | `consequentialHint`, `untrustedContentHint`: each one asks you to confirm in Hisaabo first |
+
+There are no delete, merge, void, import, bank-transfer, filing, credential or team tools in the browser. Every change shows you the business, the people and amounts involved and what will change, can be denied in one click (**Deny all** when several queue up), counts against a 20-write session budget and a 10-writes-a-minute limit, and is recorded in the audit log as *via browser AI agent*. Full details, including how the `X-Hisaabo-Agent` header is used for attribution only, are in [Browser AI Agents (WebMCP)](/ai/webmcp/).
 
 ---
 

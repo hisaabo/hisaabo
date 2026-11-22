@@ -426,6 +426,29 @@ export const paymentAllocationSchema = z.object({
   }
 });
 
+/**
+ * What the API answers (FORBIDDEN) to a browser-agent call (x-hisaabo-agent: webmcp)
+ * once the organization's owner has turned agents off. The web app recognises it to
+ * withdraw its tools at once instead of waiting for its next session refresh.
+ */
+export const WEBMCP_ORG_DISABLED_MESSAGE = "Browser AI agents are turned off for this organization";
+
+/**
+ * Optional client-supplied idempotency key for create mutations (invoice.create,
+ * payment.create). Strictly opt-in: without a key every call creates a record.
+ * Reusing a key with the SAME input is a replay: nothing new is created and the
+ * live record comes back flagged `idempotentReplay: true`; reusing it with
+ * DIFFERENT input is a CONFLICT. Keys are remembered for a short window (see
+ * IDEMPOTENCY_WINDOW_MINUTES), per business and user, as a record id only. The
+ * browser-agent (WebMCP) tools send one only when the agent passes it.
+ */
+export const IDEMPOTENCY_WINDOW_MINUTES = 15;
+export const idempotencyKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.:-]{8,100}$/, "idempotencyKey must be 8-100 characters: letters, digits and _ . : -");
+/** Fields added to a create input to make it idempotent. Intersect, do not extend: the base schemas carry refinements. */
+export const idempotencyInputSchema = z.object({ idempotencyKey: idempotencyKeySchema.optional() });
+
 export const createPaymentSchema = z.object({
   invoiceId: z.string().uuid().optional(),
   partyId: z.string().uuid(),

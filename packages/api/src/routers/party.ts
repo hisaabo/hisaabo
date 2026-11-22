@@ -198,6 +198,7 @@ export const partyRouter = router({
       entityId: party.id,
       metadata: { name: party.name },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return party;
@@ -232,6 +233,7 @@ export const partyRouter = router({
         entityId: party.id,
         metadata: { name: party.name },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return party;
@@ -257,6 +259,7 @@ export const partyRouter = router({
         entityId: input.id,
         metadata: { partyId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };
@@ -379,6 +382,7 @@ export const partyRouter = router({
         entityId: input.targetId,
         metadata: { sourceId: input.sourceId, sourceName: result.sourceName, targetName: result.targetName },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: result.success, mergedInto: result.mergedInto };

@@ -33,6 +33,12 @@
  *   --report
  *     Print a markdown summary of platform coverage.
  *
+ *   --webmcp
+ *     Check the WebMCP catalog (packages/mcp/src/lib/webmcpCatalog.ts) against
+ *     the browser tools in apps/web/src/lib/webmcp/tools. Exits 1 on a WebMCP
+ *     tool missing from the catalog, a catalog entry without a valid status, or
+ *     the catalog and TOOL_META disagreeing. Also runs as part of --validate.
+ *
  * What is scanned (test files, __tests__, test-utils and *.d.ts are skipped):
  *   web/mobile  trpc.<router>.<proc>.   ctx.client.<router>.<proc>.query|mutate
  *               utils.<router>.<proc>.fetch|prefetch|ensureData|...   (WebMCP, hooks)
@@ -53,11 +59,13 @@
  *   node --experimental-strip-types scripts/check-parity.ts --validate
  *   node --experimental-strip-types scripts/check-parity.ts --changed apps/web/src/foo.tsx packages/api/src/routers/foo.ts
  *   node --experimental-strip-types scripts/check-parity.ts --report
+ *   node --experimental-strip-types scripts/check-parity.ts --webmcp
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkWebMcpCatalog } from "./check-webmcp-catalog.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -584,7 +592,7 @@ function cmdScan() {
   }
 }
 
-function cmdValidate() {
+async function cmdValidate() {
   console.log("=== Exceptions File Validation ===\n");
 
   const exceptionsPath = path.join(ROOT, "parity-exceptions.yaml");
@@ -657,6 +665,10 @@ function cmdValidate() {
   reportNoSuchProcedures(offenders);
   errors += offenders.length;
 
+  // 6. WebMCP catalog vs the browser tools (not tRPC, but the same drift problem).
+  console.log("\nChecking the WebMCP catalog...");
+  errors += await reportWebMcpCatalog();
+
   // 3. Check for procedures in API not used anywhere (informational).
   console.log("\nChecking for API procedures not used on any platform...");
   const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
@@ -680,6 +692,24 @@ function cmdValidate() {
   console.log(`\n--- Summary: ${totalExceptions} total exceptions (mobile: ${exceptions.mobile.size}, cli: ${exceptions.cli.size}, mcp: ${exceptions.mcp.size}; ${securityCount} tagged [security]), ${warnings} warnings, ${errors} errors ---`);
 
   if (errors > 0) process.exitCode = 1;
+}
+
+/**
+ * Print the WebMCP catalog findings; returns the error count. A WebMCP tool
+ * missing from packages/mcp/src/lib/webmcpCatalog.ts, or a catalog entry with
+ * no status, fails CI (see scripts/check-webmcp-catalog.ts for the rules).
+ */
+async function reportWebMcpCatalog(): Promise<number> {
+  const { errors, warnings } = await checkWebMcpCatalog(ROOT);
+  for (const w of warnings) console.log(`  WARNING: ${w}`);
+  for (const e of errors) console.log(`  ERROR: ${e}`);
+  if (errors.length === 0) console.log("  Every WebMCP tool is in the catalog as exposed, and every catalog entry has a status.");
+  return errors.length;
+}
+
+async function cmdWebMcp() {
+  console.log("=== WebMCP Catalog Check ===\n");
+  if ((await reportWebMcpCatalog()) > 0) process.exitCode = 1;
 }
 
 function cmdChanged(changedFiles: string[]) {
@@ -838,7 +868,10 @@ switch (command) {
     cmdScan();
     break;
   case "--validate":
-    cmdValidate();
+    await cmdValidate();
+    break;
+  case "--webmcp":
+    await cmdWebMcp();
     break;
   case "--changed":
     cmdChanged(args.slice(1));
@@ -852,6 +885,7 @@ switch (command) {
   node --experimental-strip-types scripts/check-parity.ts --validate                   Validate parity-exceptions.yaml against API and platform usage
   node --experimental-strip-types scripts/check-parity.ts --changed <files...>         Check changed files for new parity gaps (exits 1 if gaps found)
   node --experimental-strip-types scripts/check-parity.ts --report                     Generate markdown parity report
+  node --experimental-strip-types scripts/check-parity.ts --webmcp                     Check the WebMCP catalog against the browser tools (exits 1 on drift)
 `);
     break;
 }

@@ -46,7 +46,11 @@ export interface WebMcpAnnotations {
   readOnlyHint?: boolean;
   /** Tool performs a consequential, real-world or hard-to-reverse action (creating an invoice, recording money). */
   consequentialHint?: boolean;
-  /** Tool returns content that originated from third parties (party names, invoice notes) and may contain prompt injection. */
+  /**
+   * Tool returns content that originated from third parties (party names, invoice notes) and may contain prompt injection.
+   * Set on every read that returns records AND on every write that echoes the saved record back: the text of the record
+   * (a party's name, a payment's note) comes straight back in the result.
+   */
   untrustedContentHint?: boolean;
 }
 
@@ -56,11 +60,24 @@ export interface WebMcpPermission {
   action: Action;
 }
 
-/** Everything a tool's execute() may touch. Built once per registration by the hook. */
+/**
+ * Everything a tool's execute() may touch. Built once per registration by the hook.
+ *
+ * A registration belongs to one signed-in user, one role and ONE business.
+ * `client` is pinned to that business (see client.ts), and `signal` aborts the
+ * moment the registration is torn down, so the runtime can refuse to run a call
+ * that outlived the business, session or preference it was offered under.
+ */
 export interface WebMcpToolContext {
+  /** Pinned to `businessId`: every request it makes carries that business, whatever the app shows now. */
   client: WebMcpTrpcClient;
+  /** Aborts when this registration is torn down: business switch, sign-out, preference off, role change. */
+  signal: AbortSignal;
+  /** The business the app is showing right now; compared with `businessId` after a confirmation. */
+  activeBusinessId: () => string | null;
   /** Tenant role of the signed-in user (owner, admin, seller_manager, seller, accountant). */
   role: string | null;
+  /** The business this registration is bound to. */
   businessId: string | null;
   businessName: string | null;
   userName: string | null;
@@ -70,6 +87,33 @@ export interface WebMcpToolContext {
   navigate: (to: string, search?: Record<string, string>) => void;
   /** Invalidate every react-query cache entry so the UI reflects agent writes. */
   invalidate: () => Promise<void> | void;
+  /**
+   * The API said this organization's owner turned browser agents off (FORBIDDEN with
+   * WEBMCP_ORG_DISABLED_MESSAGE). The hook withdraws this registration's tools at once
+   * and refreshes the session so the app learns the new policy.
+   */
+  onAgentsDisabled?: () => void;
+}
+
+/** One field of an update, as the person reads it: "Status: draft → sent". */
+export interface WebMcpConfirmChange {
+  field: string;
+  before: string;
+  after: string;
+}
+
+/**
+ * What the confirmation dialog says about a write, in the person's terms: the
+ * party's name instead of its UUID, the invoice total, the fields an update
+ * changes. Built by a tool's optional `summarize`.
+ */
+export interface WebMcpConfirmSummary {
+  /** One sentence: "Create a sale invoice for Acme Traders". */
+  headline: string;
+  /** Supporting facts, one per line: "Total: ₹17,700.00 (2 lines)". */
+  details?: string[];
+  /** Field-level before → after, for updates. */
+  changes?: WebMcpConfirmChange[];
 }
 
 /**
@@ -88,6 +132,20 @@ export interface WebMcpToolDefinition {
   annotations: WebMcpAnnotations;
   /** Omit to allow every signed-in member. */
   requires?: WebMcpPermission;
+  /**
+   * Write tools only. Reject input the tool can already tell is unusable (a missing id,
+   * an enum value it refuses) by throwing an agent-readable Error. It runs BEFORE the
+   * user is asked: a prompt for something certain to fail teaches people to click
+   * Allow without reading. `execute` runs the same checks, so calling it directly is
+   * still safe.
+   */
+  validate?: (input: Record<string, unknown>, ctx: WebMcpToolContext) => void;
+  /**
+   * Write tools only. Resolve the input into what a person needs to approve it
+   * (names, totals, before → after). Return null to fall back to the plain input
+   * summary. It may read (that is how names are resolved) but must never write.
+   */
+  summarize?: (input: Record<string, unknown>, ctx: WebMcpToolContext) => Promise<WebMcpConfirmSummary | null>;
   execute: (input: Record<string, unknown>, ctx: WebMcpToolContext) => Promise<unknown>;
 }
 

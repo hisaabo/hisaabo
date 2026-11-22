@@ -176,6 +176,34 @@
       "when": 1795339529895,
       "tag": "0024_ledger_adjustment_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795350854874,
+      "tag": "0025_webmcp_audit_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795350856796,
+      "tag": "0026_idempotency_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795350857873,
+      "tag": "0027_tenant_webmcp_disabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1795350863213,
+      "tag": "0028_webmcp_cache_invalidation_triggers",
+      "breakpoints": true
     }
   ]
 }

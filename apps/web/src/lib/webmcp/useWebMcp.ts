@@ -6,23 +6,49 @@
  * into the wrong books. Role and the user's agent-access preference gate it
  * for the same reason.
  *
+ * Each registration gets its OWN tRPC client with the business id baked into its
+ * headers (client.ts), and its abort signal travels in the context. Together
+ * with the runtime's re-check after a confirmation, a call that was prepared for
+ * business A can never be sent to business B, even if the user switched while a
+ * dialog was open.
+ *
+ * The tool catalog (about 20 tools with long, hand-written descriptions and schemas)
+ * is loaded with a dynamic import() only once the browser really exposes a model
+ * context AND this person has switched agent access on. Everyone else (most
+ * people, today: WebMCP is an origin trial) never downloads it, and it is not part
+ * of the app's main bundle.
+ *
  * Route changes deliberately do NOT re-register. Tearing down and rebuilding
  * a dozen tools on every navigation would make the agent's tool list flicker
- * mid-conversation, so `pathname`, `navigate`, `invalidate` and the tRPC
- * client are read through a ref: the context object exposes getters that
- * always see the latest render's values.
+ * mid-conversation, so `pathname`, `navigate`, `invalidate` and the user's
+ * name are read through a ref: the context object exposes getters that always
+ * see the latest render's values. The tRPC client is NOT one of them — it is
+ * fixed per registration, on purpose.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { isAgentAccessEnabled, subscribeAgentAccess } from "./preferences";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createWebMcpClient } from "./client";
+import { isAgentAccessEnabled, subscribeAgentAccess, type AgentPreferenceScope } from "./preferences";
 import { isWebMcpAvailable, registerHisaaboTools } from "./runtime";
-import { webMcpTools } from "./tools";
 import type { WebMcpToolContext, WebMcpTrpcClient } from "./types";
 
 export interface UseWebMcpInput {
-  /** Caller-side gate: signed in, tenant selected, past onboarding. */
+  /**
+   * Caller-side gate: signed in, tenant selected, past onboarding, and neither the
+   * operator (WEBMCP_DISABLED) nor the organization owner has turned agents off.
+   */
   enabled: boolean;
-  client: WebMcpTrpcClient;
+  /** Who is signed in and which organization is selected: the user's preference is stored per person per organization. */
+  userId: string | null;
+  tenantId: string | null;
+  /** Builds the client one registration uses, pinned to a business. Defaults to the real HTTP client; tests inject a fake. */
+  createClient?: (businessId: string) => WebMcpTrpcClient;
+  /**
+   * The business the app is showing right now, read at call time. Defaults to
+   * the latest `businessId` prop; the root passes the same module-level value
+   * the UI's own requests use.
+   */
+  getActiveBusinessId?: () => string | null;
   role: string | null;
   businessId: string | null;
   businessName: string | null;
@@ -30,6 +56,8 @@ export interface UseWebMcpInput {
   pathname: string;
   navigate: (to: string, search?: Record<string, string>) => void;
   invalidate: () => Promise<void> | void;
+  /** The API reported the organization's agent switch is off: refresh the session policy (auth.me). */
+  onAgentsDisabled?: () => void;
 }
 
 export interface UseWebMcpResult {
@@ -41,7 +69,7 @@ export interface UseWebMcpResult {
 }
 
 export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
-  const { enabled, role, businessId } = input;
+  const { enabled, role, businessId, userId, tenantId } = input;
 
   // Latest-render values for everything the context reads lazily. Updated in
   // an effect (never during render) so concurrent re-renders cannot tear it.
@@ -50,21 +78,32 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
     latest.current = input;
   });
 
-  const [agentAccess, setAgentAccess] = useState(() => isAgentAccessEnabled());
-  useEffect(() => subscribeAgentAccess(setAgentAccess), []);
+  // The preference is read for THIS user and organization on every render
+  // (useSyncExternalStore), never cached in state: when another person signs in
+  // on the same browser there is no render in which they inherit the previous
+  // person's "on".
+  const scope = useMemo<AgentPreferenceScope | null>(() => (userId ? { userId, tenantId } : null), [userId, tenantId]);
+  const subscribe = useCallback((onChange: () => void) => subscribeAgentAccess(scope, onChange), [scope]);
+  const agentAccess = useSyncExternalStore(
+    subscribe,
+    () => isAgentAccessEnabled(scope),
+    () => false,
+  );
 
   const [registeredCount, setRegisteredCount] = useState(0);
   const available = isWebMcpAvailable();
 
   useEffect(() => {
     if (!enabled || !businessId) return;
-    if (!isWebMcpAvailable() || !isAgentAccessEnabled()) return;
+    if (!isWebMcpAvailable() || !isAgentAccessEnabled(scope)) return;
 
     const controller = new AbortController();
+    const client = (latest.current.createClient ?? createWebMcpClient)(businessId);
     const ctx: WebMcpToolContext = {
-      get client() {
-        return latest.current.client;
-      },
+      client,
+      signal: controller.signal,
+      activeBusinessId: () =>
+        latest.current.getActiveBusinessId ? latest.current.getActiveBusinessId() : latest.current.businessId,
       role,
       businessId,
       get businessName() {
@@ -78,12 +117,23 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
       },
       navigate: (to, search) => latest.current.navigate(to, search),
       invalidate: () => latest.current.invalidate(),
+      onAgentsDisabled: () => {
+        // Withdraw this registration's tools immediately (fail closed), then let the
+        // app refetch the policy; if it turns out the switch is on again, a reload re-offers them.
+        controller.abort();
+        latest.current.onAgentsDisabled?.();
+      },
     };
 
     let live = true;
-    void registerHisaaboTools(webMcpTools, ctx, { signal: controller.signal })
+    void import("./tools")
+      .then(({ webMcpTools }) => {
+        // The registration may have been torn down while the chunk was loading.
+        if (controller.signal.aborted) return undefined;
+        return registerHisaaboTools(webMcpTools, ctx, { signal: controller.signal });
+      })
       .then((result) => {
-        if (live) setRegisteredCount(result.registered.length);
+        if (live && result) setRegisteredCount(result.registered.length);
       })
       .catch(() => {
         if (live) setRegisteredCount(0);
@@ -94,7 +144,7 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
       controller.abort();
       setRegisteredCount(0);
     };
-  }, [enabled, businessId, role, agentAccess]);
+  }, [enabled, businessId, role, agentAccess, scope]);
 
   return { available, enabled: enabled && agentAccess, registeredCount };
 }

@@ -1,6 +1,6 @@
 import { createRootRoute, Link, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
-import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
+import { trpc, setBusinessId, getBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
 import { appVersionLabel } from "@/lib/app-version";
@@ -516,12 +516,26 @@ function RootLayout() {
   // several early returns, and hooks must run before those.
   const webMcpBusinessId = resolveWebMcpBusinessId(currentBusinessId, businesses);
   const webMcpBusiness = businesses?.find((b) => b.id === webMcpBusinessId) ?? null;
+  // Agent access is governed from three places: the operator (WEBMCP_DISABLED, via
+  // system.config), the organization owner (auth.me) and the person (their own
+  // switch, per person per organization). Fail closed: nothing registers until the
+  // operator's answer has arrived.
+  const { data: systemConfig } = trpc.system.config.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const webMcpAllowedByPolicy = systemConfig !== undefined && !systemConfig.webmcpDisabled && !session?.webmcpDisabled;
+  const webMcpScopeKey = session?.user?.id
+    ? `${session.user.id}:${session.tenantId ?? ""}:${currentBusinessId ?? ""}`
+    : null;
   useWebMcp({
     enabled:
+      webMcpAllowedByPolicy &&
       !!session?.user &&
       !!session?.tenantId &&
       !(Array.isArray(businesses) && businesses.length === 0), // still onboarding
-    client: utils.client,
+    userId: session?.user?.id ?? null,
+    tenantId: session?.tenantId ?? null,
+    // The module-level business the UI's own requests use; the runtime compares
+    // it with the registration's business after every confirmation.
+    getActiveBusinessId: getBusinessId,
     role: session?.role ?? null,
     businessId: webMcpBusinessId,
     businessName: webMcpBusiness?.name ?? null,
@@ -529,6 +543,10 @@ function RootLayout() {
     pathname,
     navigate: (to, search) => navigate({ to, search } as any), // eslint-disable-line @typescript-eslint/no-explicit-any
     invalidate: () => queryClient.invalidateQueries(),
+    // The API says the owner switched agents off: refetch auth.me so the app (and Settings) show it.
+    onAgentsDisabled: () => {
+      void utils.auth.me.invalidate();
+    },
   });
 
   // ── Render logic (NO early returns before here — all hooks are above) ──
@@ -854,7 +872,8 @@ function RootLayout() {
       />
       <ShortcutsDialog open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ShortcutIndicator />
-      <WebMcpConfirmHost />
+      {/* Pending agent confirmations are denied when the user, tenant or business changes. */}
+      <WebMcpConfirmHost scopeKey={webMcpScopeKey} />
 
       {/* Tenant picker overlay — shown when user clicks the tenant name */}
       {showTenantPicker && (

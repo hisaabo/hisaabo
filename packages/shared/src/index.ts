@@ -1,4 +1,6 @@
 export * from "./validators.js";
+export { auditSources } from "./audit-source.js";
+export type { AuditSource } from "./audit-source.js";
 export * from "./money.js";
 export { composeOpeningBalance, splitOpeningBalance } from "./party-opening.js";
 export type { OpeningBalanceDirection } from "./party-opening.js";

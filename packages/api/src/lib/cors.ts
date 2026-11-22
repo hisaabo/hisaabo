@@ -75,7 +75,10 @@ export function createApiCors(allowedOrigins: string[]): MiddlewareHandler {
   const credentialedCors = cors({
     origin: allowedOrigins,
     credentials: true,
-    allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client"],
+    // X-Hisaabo-Agent is the WebMCP attribution marker (lib/audit-source.ts). It is
+    // listed here so a cross-origin web build (VITE_API_URL) can send it on a
+    // preflighted request; it is NOT X-Hisaabo-Client, which carries auth meaning.
+    allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client", "X-Hisaabo-Agent"],
     allowMethods: ["GET", "POST", "OPTIONS"],
     maxAge: 86400,
   });
