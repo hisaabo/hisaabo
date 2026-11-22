@@ -14,7 +14,7 @@
  * requests are using.
  */
 
-import { eq, and, sql, gte, lte, asc } from "drizzle-orm";
+import { eq, and, sql, gte, lte, asc, desc } from "drizzle-orm";
 import {
   getTenantDb,
   withDedicatedTenantDb,
@@ -147,21 +147,60 @@ async function processOccurrence(db: SchedulerDb, templateId: string): Promise<b
       return updated.nextRunDate <= now;
     });
   } catch (err) {
-    if (isOccurrenceConflict(err)) return false;
+    if (isOccurrenceConflict(err)) {
+      // The transaction rolled back, so nothing was generated twice; the other
+      // runner's run record stands. Say so, because with the row lock in place
+      // this should not happen.
+      console.warn(
+        `[recurring-scheduler] template ${templateId}: occurrence ${claimed.tpl?.nextRunDate.toISOString() ?? "?"} ` +
+          `was already consumed by another run (${OCCURRENCE_INDEX}); skipped`,
+      );
+      return false;
+    }
+
+    const message = err instanceof Error ? err.message : String(err);
+    const { tpl } = claimed;
+    if (tpl && (await alreadyRecordedFailure(db, tpl.id, tpl.nextRunDate, message))) {
+      // A template that cannot generate stays due and is retried every tick;
+      // record the failure once, not once a minute for ever.
+      console.warn(`[recurring-scheduler] template ${templateId} is still failing with the recorded error: ${message}`);
+      return false;
+    }
 
     console.error(`[recurring-scheduler] Failed to generate invoice for template ${templateId}:`, err);
-    const { tpl } = claimed;
     if (tpl) {
       // The failed transaction is rolled back, so record the failure on its own.
       await db.insert(recurringInvoiceRuns).values({
         templateId: tpl.id,
         businessId: tpl.businessId,
         status: "failed",
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: message,
         scheduledFor: tpl.nextRunDate,
       }).catch(() => {}); // Don't let logging failure crash the loop
     }
     return false; // Stop catch-up on error to avoid cascading failures
+  }
+}
+
+/** True when the latest run for this occurrence is already a `failed` run with this very message. */
+async function alreadyRecordedFailure(
+  db: SchedulerDb,
+  templateId: string,
+  occurrence: Date,
+  message: string,
+): Promise<boolean> {
+  try {
+    const [last] = await db.select({ status: recurringInvoiceRuns.status, errorMessage: recurringInvoiceRuns.errorMessage })
+      .from(recurringInvoiceRuns)
+      .where(and(
+        eq(recurringInvoiceRuns.templateId, templateId),
+        eq(recurringInvoiceRuns.scheduledFor, occurrence),
+      ))
+      .orderBy(desc(recurringInvoiceRuns.executedAt), desc(recurringInvoiceRuns.id))
+      .limit(1);
+    return last?.status === "failed" && last.errorMessage === message;
+  } catch {
+    return false; // can't tell: record it
   }
 }
 
