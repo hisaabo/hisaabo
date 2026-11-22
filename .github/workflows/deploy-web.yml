@@ -41,8 +41,11 @@ jobs:
     if: inputs.ref || vars.PREVIEW_API_URL
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Add required reviewers to the `production` environment in the repo
-    # settings to hold the deploy until the API image of the same tag is live.
+    # A release (release.yml) reaches this job only after its wait-for-api job
+    # saw the production API report the same version. Required reviewers on the
+    # `production` environment (repo settings) are the second gate: they approve
+    # the deploy here. A manual run (rollback / redeploy) skips the API wait and
+    # relies on that approval alone.
     environment: ${{ inputs.ref && 'production' || 'preview' }}
     permissions:
       contents: read
