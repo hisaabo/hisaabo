@@ -18,6 +18,8 @@ export interface ConfirmRequest {
   lines?: string[];
   /** Field-level before → after for an update. */
   changes?: WebMcpConfirmChange[];
+  /** Writes the agent may still make this session (see budget.ts), shown so the user can see it running down. */
+  writesLeft?: number;
   /**
    * Aborts when the registration that asked is torn down (business switch,
    * sign-out). The host then denies this request and closes its dialog, so a

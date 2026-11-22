@@ -9,6 +9,8 @@
  * can be unavailable (private mode, blocked site data).
  */
 
+import { resetWriteBudget } from "./budget";
+
 export const WEBMCP_PREF_KEY = "hisaabo-webmcp";
 export const WEBMCP_PREF_EVENT = "hisaabo:webmcp-preference";
 
@@ -22,6 +24,8 @@ export function isAgentAccessEnabled(): boolean {
 }
 
 export function setAgentAccessEnabled(enabled: boolean): void {
+  // Turning it on is the deliberate act that starts a fresh write budget.
+  if (enabled) resetWriteBudget();
   try {
     if (enabled) localStorage.setItem(WEBMCP_PREF_KEY, "on");
     else localStorage.removeItem(WEBMCP_PREF_KEY);

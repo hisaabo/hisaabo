@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
+import { WRITE_BUDGET } from "@/lib/webmcp/budget";
 import { registerConfirmHost, type ConfirmRequest } from "@/lib/webmcp/confirm";
 
 interface Pending {
@@ -22,14 +23,22 @@ interface WebMcpConfirmHostProps {
 /** Hosts the confirmation dialog for browser-agent writes. Mount once, near the app root. */
 export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
   const [current, setCurrent] = useState<Pending | null>(null);
+  // How many prompts are open or waiting. A rising number is the sign of an
+  // agent flooding the user, and the cue to use "Deny all" instead of clicking through.
+  const [pendingCount, setPendingCount] = useState(0);
   const queue = useRef<Pending[]>([]);
   const currentRef = useRef<Pending | null>(null);
+
+  const syncCount = useCallback(() => {
+    setPendingCount((currentRef.current ? 1 : 0) + queue.current.length);
+  }, []);
 
   const showNext = useCallback(() => {
     const item = queue.current.shift() ?? null;
     currentRef.current = item;
     setCurrent(item);
-  }, []);
+    syncCount();
+  }, [syncCount]);
 
   /** Settle one pending request wherever it is (open dialog or queue). */
   const settle = useCallback(
@@ -40,9 +49,10 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
         showNext();
       } else {
         queue.current = queue.current.filter((q) => q !== item);
+        syncCount();
       }
     },
-    [showNext],
+    [showNext, syncCount],
   );
 
   /** Deny everything that is open or queued. */
@@ -51,6 +61,7 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
     currentRef.current = null;
     queue.current = [];
     setCurrent(null);
+    setPendingCount(0);
     for (const item of all) {
       item.dispose();
       item.resolve(false);
@@ -76,13 +87,14 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
             currentRef.current = item;
             setCurrent(item);
           }
+          syncCount();
         }),
     );
     return () => {
       unregister();
       denyAll();
     };
-  }, [settle, denyAll]);
+  }, [settle, denyAll, syncCount]);
 
   // A change of user, tenant or business denies every prompt raised before it.
   useEffect(() => denyAll, [scopeKey, denyAll]);
@@ -92,6 +104,14 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
   return (
     <Modal open={current !== null} onClose={() => current && settle(current, false)} className="max-w-md">
       <div className="pb-2" data-testid="webmcp-confirm">
+        {pendingCount > 1 && (
+          <p
+            className="mb-2 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+            role="status"
+          >
+            {pendingCount} pending
+          </p>
+        )}
         <p className="text-sm font-semibold text-text-primary">{request?.title}</p>
         <p className="text-sm mt-2 text-text-secondary">{request?.description}</p>
         {request?.lines && request.lines.length > 0 && (
@@ -116,8 +136,18 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
             ))}
           </dl>
         )}
+        {request?.writesLeft !== undefined && (
+          <p className="mt-3 text-xs text-text-tertiary">
+            {request.writesLeft} of {WRITE_BUDGET} agent writes left this session.
+          </p>
+        )}
       </div>
       <div className="flex items-center justify-end gap-2 pt-4 border-t border-border-light">
+        {pendingCount > 1 && (
+          <button type="button" className="btn-ghost mr-auto" onClick={denyAll}>
+            Deny all
+          </button>
+        )}
         <button type="button" className="btn-ghost" onClick={() => current && settle(current, false)}>
           Cancel
         </button>

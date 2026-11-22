@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { buildBrowserTool } from "../runtime";
 import { requestConfirmation, summarizeInput, isConfirmHostMounted } from "../confirm";
 import { resolveWebMcpBusinessId } from "../business-gate";
+import { resetWriteBudget } from "../budget";
 import { WebMcpConfirmHost } from "@/components/webmcp/WebMcpConfirmHost";
 import type { WebMcpToolContext, WebMcpToolDefinition } from "../types";
 
@@ -20,6 +21,7 @@ function writeDef(execute = vi.fn(async () => "created")): WebMcpToolDefinition 
   } as unknown as WebMcpToolDefinition;
 }
 
+beforeEach(() => resetWriteBudget());
 afterEach(() => vi.restoreAllMocks());
 
 describe("summarizeInput", () => {
@@ -153,6 +155,92 @@ describe("confirmation host — informed summary", () => {
     const dialog = await screen.findByTestId("webmcp-confirm");
     expect(dialog).toHaveTextContent("Allow AI agent: Create party in Sharma Traders?");
     expect(dialog).toHaveTextContent("name: Acme");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+});
+
+describe("confirmation host — fatigue controls", () => {
+  it("shows no counter and no Deny all for a single prompt", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    let p!: Promise<boolean>;
+    act(() => {
+      p = requestConfirmation({ title: "Only one", description: "d" });
+    });
+    await screen.findByText("Only one");
+    expect(screen.queryByText(/pending/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny all" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await expect(p).resolves.toBe(false);
+  });
+
+  it("shows an N pending count that follows the queue", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const results: Promise<boolean>[] = [];
+    act(() => {
+      for (let i = 1; i <= 3; i++) results.push(requestConfirmation({ title: `Prompt ${i}`, description: "d" }));
+    });
+    expect(await screen.findByText("3 pending")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(await screen.findByText("2 pending")).toBeInTheDocument();
+    expect(screen.getByText("Prompt 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // One left: the counter goes away.
+    await waitFor(() => expect(screen.queryByText(/pending/)).not.toBeInTheDocument());
+    expect(screen.getByText("Prompt 3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await expect(Promise.all(results)).resolves.toEqual([true, false, false]);
+  });
+
+  it("Deny all denies the open prompt and every queued one at once", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const results: Promise<boolean>[] = [];
+    act(() => {
+      for (let i = 1; i <= 4; i++) results.push(requestConfirmation({ title: `Prompt ${i}`, description: "d" }));
+    });
+    expect(await screen.findByText("4 pending")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Deny all" }));
+
+    await expect(Promise.all(results)).resolves.toEqual([false, false, false, false]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument());
+    expect(screen.queryByText(/pending/)).not.toBeInTheDocument();
+  });
+
+  it("an agent that was denied all can still prompt again afterwards", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    act(() => {
+      void requestConfirmation({ title: "A", description: "d" });
+      void requestConfirmation({ title: "B", description: "d" });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Deny all" }));
+    let again!: Promise<boolean>;
+    act(() => {
+      again = requestConfirmation({ title: "Later", description: "d" });
+    });
+    expect(await screen.findByText("Later")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await expect(again).resolves.toBe(true);
+  });
+
+  it("shows how many agent writes are left this session", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    act(() => {
+      void requestConfirmation({ title: "T", description: "d", writesLeft: 17 });
+    });
+    expect(await screen.findByText("17 of 20 agent writes left this session.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+
+  it("offers no 'always allow' control", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    act(() => {
+      void requestConfirmation({ title: "T", description: "d" });
+    });
+    await screen.findByRole("button", { name: "Allow" });
+    expect(screen.queryByText(/always/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Allow"]);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   });
 });

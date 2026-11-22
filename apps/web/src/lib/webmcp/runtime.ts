@@ -23,6 +23,7 @@ import {
   summarizeInput,
   type ConfirmRequest,
 } from "./confirm";
+import { consumeWrite, isWriteBudgetExhausted, writeBudgetExhaustedMessage, writesRemaining } from "./budget";
 import { fenceValue } from "./fence";
 import type {
   WebMcpConfirmSummary,
@@ -237,13 +238,15 @@ async function buildConfirmRequest(
     }
   }
 
+  const writesLeft = writesRemaining();
   const described = summary ? describeSummary(summary) : null;
   if (described && described.description) {
-    return { title, ...described, signal: ctx?.signal };
+    return { title, ...described, writesLeft, signal: ctx?.signal };
   }
   return {
     title,
     description: `A browser AI agent wants to change your Hisaabo data. ${summarizeInput(input)}`,
+    writesLeft,
     signal: ctx?.signal,
   };
 }
@@ -310,6 +313,10 @@ export function buildBrowserTool(
         if (staleBefore) return staleResult(staleBefore);
 
         const isWrite = isWriteTool(def);
+        // Do not even ask the user for something the session has no budget left to do.
+        if (isWrite && isWriteBudgetExhausted()) {
+          return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true };
+        }
         if (isWrite) {
           const allowed = await confirmWrite(def, input ?? {}, options, ctx);
           // Re-check after the (possibly long) wait: the user may have switched
@@ -322,6 +329,10 @@ export function buildBrowserTool(
               content: [{ type: "text", text: "The user declined this action. Nothing was changed. Do not retry unless the user asks." }],
               isError: true,
             };
+          }
+          // Spent on approval, not on success: a loop of writes the API keeps rejecting must not be free.
+          if (!consumeWrite()) {
+            return { content: [{ type: "text", text: writeBudgetExhaustedMessage() }], isError: true };
           }
         }
         const value = await def.execute(input ?? {}, ctx);

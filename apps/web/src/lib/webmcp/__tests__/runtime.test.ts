@@ -9,8 +9,9 @@
  * Run with: pnpm --filter @hisaabo/web test -- --run src/lib/webmcp
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { TRPCClientError } from "@trpc/client";
+import { resetWriteBudget } from "../budget";
 import {
   buildBrowserTool,
   getModelContext,
@@ -81,6 +82,8 @@ function trpcError(code: string, message: string, data: Record<string, unknown> 
   const response = { error: { code: -32600, message, data: { code, httpStatus: 400, ...data } } };
   return TRPCClientError.from(response as unknown as Error);
 }
+
+beforeEach(() => resetWriteBudget());
 
 afterEach(() => {
   removeModelContext();
