@@ -230,6 +230,16 @@ function errorText(err: unknown): string {
   return "unexpected error, see the server log";
 }
 
+/** The error a caller sees when the IRN is cancelled at the IRP but the invoice could not be cancelled here. */
+function localCancelFailed(cause: unknown): TRPCError {
+  return new TRPCError({
+    code: cause instanceof TRPCError ? cause.code : "INTERNAL_SERVER_ERROR",
+    message: `The IRN was cancelled at the IRP, but the invoice could not be cancelled here (${errorText(cause)}). `
+      + "The invoice is still active. Cancel the invoice from its page, or cancel the e-invoice again to finish.",
+    cause,
+  });
+}
+
 /**
  * The IRP has cancelled the IRN but the local cancel failed. Leave a state the
  * operator can see and finish: eInvoiceStatus "cancelled" (the IRN really is
@@ -439,6 +449,14 @@ export const eInvoiceRouter = router({
    * invoice is live, so the failure is recorded as a retryable state (see
    * `recordLocalCancelFailure`) and calling this again finishes the job without
    * touching the IRP.
+   *
+   * The reverse can also happen: the IRP cancels but the answer never arrives
+   * (timeout, crash), so the record still says "generated". Whenever the IRP
+   * refuses or cannot be reached, or the 24h window has passed, the IRP is asked
+   * whether the IRN is in fact cancelled (read-only `isIRNCancelled`). If it is,
+   * that counts as the IRP step having succeeded and the local cancel proceeds,
+   * which also lets the loser of a double click succeed. If it is not, the
+   * original error stands.
    */
   cancel: adminProcedure
     .input(cancelEInvoiceSchema)
@@ -481,35 +499,10 @@ export const eInvoiceRouter = router({
         });
       }
 
-      // Enforce 24-hour cancellation window
-      if (!resumeLocalCancel && invoice.irnAckDate) {
-        const ackAge = Date.now() - new Date(invoice.irnAckDate).getTime();
-        const twentyFourHoursMs = 24 * 60 * 60 * 1000;
-        if (ackAge > twentyFourHoursMs) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "IRN can only be cancelled within 24 hours of generation. Please contact GST authorities for late cancellation.",
-          });
-        }
-      }
-
-      // The invoice is cancelled together with its IRN: refuse now, before the
-      // IRP is touched, whatever would make that local cancel fail (payments
-      // allocated, wrong status, role rule).
-      if (invoice.status !== "cancelled") {
-        try {
-          await assertCancellable(ctx.db, actor, invoice, { irnCancelled: true });
-        } catch (err) {
-          if (!(err instanceof TRPCError)) throw err;
-          throw new TRPCError({
-            code: err.code,
-            message: `${resumeLocalCancel ? "The invoice was not cancelled" : "The IRN was not cancelled"}. Cancelling an e-invoice also cancels the invoice, which is not possible right now: ${err.message}`,
-            cause: err,
-          });
-        }
-      }
-
-      if (!resumeLocalCancel) {
+      // The IRP client is only built when the IRP has to be asked something.
+      let irp: IRPClient | null = null;
+      const irpClient = async (): Promise<IRPClient> => {
+        if (irp) return irp;
         const [rawConfig] = await ctx.db
           .select()
           .from(eInvoiceConfigs)
@@ -522,14 +515,77 @@ export const eInvoiceRouter = router({
             message: "E-invoice configuration not found",
           });
         }
+        irp = new IRPClient(decryptEInvoiceConfig(rawConfig), ctx.db);
+        return irp;
+      };
 
-        // Submit cancellation to IRP. If this throws, nothing has changed locally.
-        const client = new IRPClient(decryptEInvoiceConfig(rawConfig), ctx.db);
-        await client.cancelIRN(
-          invoice.irn,
-          input.cancelReason,
-          input.cancelRemarks,
-        );
+      // The IRP is the authority on whether the IRN is cancelled. A cancel it
+      // accepted may never have been recorded here (the answer was lost to a
+      // timeout, the process died, a second click raced the first), and then our
+      // record says "generated" for an IRN that is gone. Asking is read-only, and
+      // any failure to find out counts as "not cancelled".
+      const irpSaysCancelled = async (): Promise<boolean> => {
+        try {
+          return await (await irpClient()).isIRNCancelled(invoice.irn!);
+        } catch {
+          return false;
+        }
+      };
+      // True once the IRP has confirmed a cancel that our record did not have.
+      let reconciledWithIrp = false;
+      let irpCancelCalled = false;
+
+      // Enforce 24-hour cancellation window. After it the IRP refuses a new cancel,
+      // but one sent inside the window may have gone through unseen: ask before refusing.
+      if (!resumeLocalCancel && invoice.irnAckDate) {
+        const ackAge = Date.now() - new Date(invoice.irnAckDate).getTime();
+        const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+        if (ackAge > twentyFourHoursMs) {
+          if (!(await irpSaysCancelled())) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "IRN can only be cancelled within 24 hours of generation. Please contact GST authorities for late cancellation.",
+            });
+          }
+          reconciledWithIrp = true;
+        }
+      }
+
+      // The invoice is cancelled together with its IRN: refuse now, before the
+      // IRP is asked to cancel, whatever would make that local cancel fail
+      // (payments allocated, wrong status, role rule).
+      if (invoice.status !== "cancelled") {
+        try {
+          await assertCancellable(ctx.db, actor, invoice, { irnCancelled: true });
+        } catch (err) {
+          if (!(err instanceof TRPCError)) throw err;
+          if (reconciledWithIrp) {
+            // The IRN is cancelled at the IRP after all: make the record say so.
+            await recordLocalCancelFailure(ctx.db, ctx, invoice, input.cancelReason, err);
+            throw localCancelFailed(err);
+          }
+          throw new TRPCError({
+            code: err.code,
+            message: `${resumeLocalCancel ? "The invoice was not cancelled" : "The IRN was not cancelled"}. Cancelling an e-invoice also cancels the invoice, which is not possible right now: ${err.message}`,
+            cause: err,
+          });
+        }
+      }
+
+      if (!resumeLocalCancel && !reconciledWithIrp) {
+        // Submit cancellation to IRP. If it fails and the IRP does not say the IRN
+        // is cancelled, nothing has changed anywhere and the original error stands.
+        try {
+          irpCancelCalled = true;
+          await (await irpClient()).cancelIRN(
+            invoice.irn,
+            input.cancelReason,
+            input.cancelRemarks,
+          );
+        } catch (err) {
+          if (!(await irpSaysCancelled())) throw err;
+          reconciledWithIrp = true;
+        }
       }
 
       // The IRN is cancelled at the IRP from here on. Set the IRN state and
@@ -545,12 +601,7 @@ export const eInvoiceRouter = router({
         );
       } catch (err) {
         await recordLocalCancelFailure(ctx.db, ctx, invoice, cancelReason, err);
-        throw new TRPCError({
-          code: err instanceof TRPCError ? err.code : "INTERNAL_SERVER_ERROR",
-          message: `The IRN was cancelled at the IRP, but the invoice could not be cancelled here (${errorText(err)}). `
-            + "The invoice is still active. Cancel the invoice from its page, or cancel the e-invoice again to finish.",
-          cause: err,
-        });
+        throw localCancelFailed(err);
       }
 
       await logAudit(ctx.db, {
@@ -564,7 +615,8 @@ export const eInvoiceRouter = router({
           irn: invoice.irn,
           cancelReason,
           invoiceCancelled: result.changed,
-          irpCalled: !resumeLocalCancel,
+          irpCalled: irpCancelCalled,
+          irpReconciled: reconciledWithIrp,
         },
         ipAddress: ctx.ipAddress,
       });

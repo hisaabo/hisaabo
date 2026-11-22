@@ -65,10 +65,14 @@ vi.mock("../../lib/irp-client.js", () => {
 
   const mockAuthenticate = vi.fn().mockResolvedValue(undefined);
 
+  // Does the IRP itself say the IRN is cancelled? Default: no (the IRN is active).
+  const mockIsIRNCancelled = vi.fn().mockResolvedValue(false);
+
   class MockIRPClient {
     authenticate = mockAuthenticate;
     generateIRN = mockGenerateIRN;
     cancelIRN = mockCancelIRN;
+    isIRNCancelled = mockIsIRNCancelled;
   }
 
   class IRPError extends Error {
@@ -90,6 +94,7 @@ vi.mock("../../lib/irp-client.js", () => {
     IRPError,
     __mockGenerateIRN: mockGenerateIRN,
     __mockCancelIRN: mockCancelIRN,
+    __mockIsIRNCancelled: mockIsIRNCancelled,
     __mockAuthenticate: mockAuthenticate,
   };
 });
@@ -659,6 +664,7 @@ describe("eInvoice.cancel", () => {
 
 type IrpMock = {
   __mockCancelIRN: ReturnType<typeof vi.fn>;
+  __mockIsIRNCancelled: ReturnType<typeof vi.fn>;
   IRPError: new (msg: string, code: string, httpStatus?: number) => Error;
 };
 
@@ -736,6 +742,7 @@ describe("eInvoice.cancel also cancels the invoice", () => {
 
   beforeEach(() => {
     irp.__mockCancelIRN.mockClear();
+    irp.__mockIsIRNCancelled.mockReset().mockResolvedValue(false);
   });
 
   it("IRP success cancels the invoice: out of GSTR-1/3B, the ledger and the party balance, stock restored", async () => {
@@ -931,6 +938,112 @@ describe("eInvoice.cancel also cancels the invoice", () => {
     expect(finished.status).toBe("cancelled");
     expect(finished.eInvoiceCancelReason).toBe("2"); // the reason sent to the IRP is kept
     expect(await stock(item.id)).toBeCloseTo(100, 3);
+  });
+
+  describe("when the IRP's answer is unknown", () => {
+    const timeout = () => new irp.IRPError("IRP did not answer within 30 seconds", "RETRYABLE");
+
+    it("lost response, then retry: the IRP's own record (cancelled) is accepted and the local cancel completes", async () => {
+      const { caller, item, invoice } = await generatedSale();
+
+      // The IRP cancelled the IRN but the answer never reached us, and it cannot be asked either.
+      irp.__mockCancelIRN.mockRejectedValueOnce(timeout());
+      await expect(
+        caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "2" }),
+      ).rejects.toThrow("did not answer");
+      expect((await row(invoice.id)).eInvoiceStatus).toBe("generated"); // nothing was recorded
+      expect(await stock(item.id)).toBeCloseTo(90, 3);
+
+      // Retry: the IRP now refuses ("already cancelled"), but says the IRN is cancelled.
+      irp.__mockCancelIRN.mockRejectedValueOnce(new irp.IRPError("IRN is already cancelled", "UNKNOWN"));
+      irp.__mockIsIRNCancelled.mockResolvedValueOnce(true);
+      const result = await caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "2" });
+
+      expect(irp.__mockCancelIRN).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe("cancelled");
+      expect(result.eInvoiceStatus).toBe("cancelled");
+      expect(result.eInvoiceCancelReason).toBe("2");
+      expect(await stock(item.id)).toBeCloseTo(100, 3);
+      expect(await gstr1Has(invoice.invoiceNumber)).toBe(false);
+      const actions = await auditActions(invoice.id);
+      expect(actions.find((a) => a.action === "eInvoice.cancel" && a.metadata.invoiceCancelled === true)?.metadata)
+        .toMatchObject({ irpCalled: true, irpReconciled: true });
+    });
+
+    it("a timeout on the very call that the IRP acted on succeeds at once when the IRP confirms the cancel", async () => {
+      const { caller, item, invoice } = await generatedSale();
+      irp.__mockCancelIRN.mockRejectedValueOnce(timeout());
+      irp.__mockIsIRNCancelled.mockResolvedValueOnce(true);
+
+      const result = await caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "1" });
+      expect(result.status).toBe("cancelled");
+      expect(irp.__mockCancelIRN).toHaveBeenCalledTimes(1);
+      expect(await stock(item.id)).toBeCloseTo(100, 3);
+    });
+
+    it("the loser of a double click (IRP already cancelled it) succeeds instead of surfacing the IRP error", async () => {
+      const { caller, item, invoice } = await generatedSale();
+      irp.__mockCancelIRN.mockRejectedValueOnce(new irp.IRPError("IRN is already cancelled", "UNKNOWN"));
+      irp.__mockIsIRNCancelled.mockResolvedValueOnce(true);
+
+      const result = await caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "1" });
+      expect(result.status).toBe("cancelled");
+      expect(await stock(item.id)).toBeCloseTo(100, 3);
+    });
+
+    it("an IRN that is still active keeps the IRP's original error, and nothing changes", async () => {
+      const { caller, item, invoice } = await generatedSale();
+      irp.__mockCancelIRN.mockRejectedValueOnce(new irp.IRPError("Cancellation not allowed for this IRN", "2270"));
+      // isIRNCancelled stays at its default: the IRP says the IRN is active.
+
+      await expect(
+        caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "1" }),
+      ).rejects.toThrow("Cancellation not allowed for this IRN");
+
+      expect(irp.__mockIsIRNCancelled).toHaveBeenCalledTimes(1);
+      const unchanged = await row(invoice.id);
+      expect(unchanged.eInvoiceStatus).toBe("generated");
+      expect(unchanged.status).not.toBe("cancelled");
+      expect(await stock(item.id)).toBeCloseTo(90, 3);
+    });
+
+    it("past the 24-hour window, an IRN the IRP reports as cancelled is reconciled without a new IRP cancel", async () => {
+      const { caller, item, invoice } = await generatedSale();
+      await getTenantTestDb()
+        .update(invoices)
+        .set({ irnAckDate: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+        .where(eq(invoices.id, invoice.id));
+      irp.__mockIsIRNCancelled.mockResolvedValueOnce(true);
+
+      const result = await caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "3" });
+      expect(irp.__mockCancelIRN).not.toHaveBeenCalled();
+      expect(result.status).toBe("cancelled");
+      expect(result.eInvoiceStatus).toBe("cancelled");
+      expect(await stock(item.id)).toBeCloseTo(100, 3);
+    });
+
+    it("past the window with the IRN cancelled at the IRP but payments allocated: the record is corrected and the failure is retryable", async () => {
+      const { caller, invoice } = await generatedSale();
+      await caller.payment.create({
+        partyId: b2bParty.id, amount: "1000.00", mode: "cash", paymentDate: SALE_DATE,
+        allocations: [{ invoiceId: invoice.id, amount: "1000.00" }],
+      });
+      await getTenantTestDb()
+        .update(invoices)
+        .set({ irnAckDate: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+        .where(eq(invoices.id, invoice.id));
+      irp.__mockIsIRNCancelled.mockResolvedValueOnce(true);
+
+      await expect(
+        caller.eInvoice.cancel({ invoiceId: invoice.id, cancelReason: "3" }),
+      ).rejects.toThrow(/IRN was cancelled at the IRP, but the invoice could not be cancelled here/);
+
+      expect(irp.__mockCancelIRN).not.toHaveBeenCalled();
+      const stuck = await row(invoice.id);
+      expect(stuck.eInvoiceStatus).toBe("cancelled");
+      expect(stuck.status).not.toBe("cancelled");
+      expect(stuck.eInvoiceError).toMatch(/still active/);
+    });
   });
 
   it("keeps the 24-hour window: an old IRN is refused before the IRP and the invoice is untouched", async () => {

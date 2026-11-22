@@ -22,6 +22,11 @@ import type { TenantDatabase } from "../trpc.js";
 const SANDBOX_BASE = "https://einv-apisandbox.nic.in";
 const PRODUCTION_BASE = "https://einvoice1.gst.gov.in";
 
+// How long one IRP request may take before we give up on the answer. The IRP can
+// still have acted on it (a lost response), so callers that must not lose track of
+// the outcome (cancelling an IRN) confirm it with isIRNCancelled afterwards.
+export const IRP_REQUEST_TIMEOUT_MS = 30_000;
+
 // NIC IRP sandbox RSA public key (PEM format) for encrypting AppKey
 // Source: https://einvoice1.gst.gov.in/Others/APIDOC
 const NIC_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
@@ -54,6 +59,8 @@ export interface IRPGenerateIRNResponse {
     AckDt: string; // "2026-04-02 12:00:00"
     SignedQRCode: string;
     SignedInvoice: string;
+    /** Only on the "get IRN details" response: "ACT" (active) or "CNL" (cancelled). */
+    Status?: string;
   };
   ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }>;
 }
@@ -235,6 +242,21 @@ function aesDecrypt(encryptedBase64: string, keyBytes: Buffer): string {
   return decrypted.toString("utf8");
 }
 
+/** fetch with a hard timeout; timeouts and network failures surface as retryable IRPErrors. */
+async function irpFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(IRP_REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw new IRPError(
+      timedOut
+        ? `IRP did not answer within ${IRP_REQUEST_TIMEOUT_MS / 1000} seconds`
+        : `IRP network error: ${err instanceof Error ? err.message : String(err)}`,
+      "RETRYABLE",
+    );
+  }
+}
+
 // ── IRPClient ─────────────────────────────────────────────────────────────────
 
 export class IRPClient {
@@ -296,7 +318,7 @@ export class IRPClient {
 
     await globalRateLimiter.throttle();
 
-    const response = await fetch(`${this.baseUrl}/eivital/v1.04/auth`, {
+    const response = await irpFetch(`${this.baseUrl}/eivital/v1.04/auth`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -367,7 +389,7 @@ export class IRPClient {
       body = JSON.stringify({ Data: encrypted });
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await irpFetch(`${this.baseUrl}${path}`, {
       method,
       headers,
       ...(method !== "GET" && { body }),
@@ -452,6 +474,21 @@ export class IRPClient {
       "GET",
       `/eicore/v1.03/Invoice/irn/${irn}`,
     );
+  }
+
+  /**
+   * Does the IRP itself say this IRN is cancelled? Used to recover when a cancel
+   * request may have succeeded without us seeing the answer (timeout, crash,
+   * double click). Any failure to find out counts as "not cancelled", so the
+   * caller's original error stands.
+   */
+  async isIRNCancelled(irn: string): Promise<boolean> {
+    try {
+      const details = await this.getIRNDetails(irn);
+      return details?.Status === "CNL";
+    } catch {
+      return false;
+    }
   }
 }
 
