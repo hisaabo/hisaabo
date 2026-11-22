@@ -36,21 +36,28 @@ export interface StockState {
   onDemand: boolean;
   /** Tracked stock that is genuinely running low. Drives the "Low stock" badge. */
   runningLow: boolean;
+  /**
+   * Stock is known to be on hand. True for an item judged as a whole; not for a
+   * chosen variant, because a variant's `inStock` is also true when the store
+   * takes orders without stock, and the API does not say which.
+   */
+  onHand: boolean;
 }
 
 export function stockState(item: StoreItem, selection: Selection = { kind: "item" }): StockState {
   if (selection.kind === "no-match") {
-    return { soldOut: true, onDemand: false, runningLow: false };
+    return { soldOut: true, onDemand: false, runningLow: false, onHand: false };
   }
   if (selection.kind === "variant") {
     // Variants carry no low-stock signal: only sold out or not.
-    return { soldOut: !selection.variant.inStock, onDemand: false, runningLow: false };
+    return { soldOut: !selection.variant.inStock, onDemand: false, runningLow: false, onHand: false };
   }
   const onDemand = item.lowStock === true;
   return {
     soldOut: !item.inStock && !onDemand,
     onDemand,
     runningLow: item.inStock === true && !onDemand && item.runningLow === true,
+    onHand: item.inStock === true && !onDemand && item.itemMode !== "variants",
   };
 }
 
@@ -64,5 +71,5 @@ export function availabilityText(state: StockState): string {
   if (state.soldOut) return "Sold out";
   if (state.runningLow) return "Only a few left";
   if (state.onDemand) return "Available to order";
-  return "In stock";
+  return state.onHand ? "In stock" : "Available";
 }

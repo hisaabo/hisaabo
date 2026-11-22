@@ -13,9 +13,7 @@ import { CloseIcon } from "./Icons";
  *    back to whatever opened it on close;
  *  - everything outside it is `inert` (hidden from assistive technology and
  *    unreachable by keyboard) while it is open;
- *  - page scrolling is locked without moving the page: `html` reserves its
- *    scrollbar gutter (styles.css), so hiding overflow changes nothing, and a
- *    browser without `scrollbar-gutter` gets the scrollbar's width as padding.
+ *  - page scrolling is locked without moving the page (see `lockScroll`).
  *
  * Dialogs can stack (the phone step opens above the cart drawer): only the top
  * one reacts to keys, and closing it hands focus back to its opener.
@@ -44,7 +42,7 @@ interface Entry {
 
 // Open dialogs, bottom to top. Module state: there is one document.
 const stack: Entry[] = [];
-let savedBody: { overflow: string; paddingRight: string } | null = null;
+let savedRoot: { overflow: string; paddingRight: string } | null = null;
 
 function isVisible(el: HTMLElement): boolean {
   // checkVisibility is absent from older browsers and from jsdom: assume visible.
@@ -57,23 +55,32 @@ export function focusableIn(root: HTMLElement): HTMLElement[] {
   );
 }
 
+/**
+ * Hide the page's scrollbar without moving the page. Hiding overflow on the root
+ * can widen the layout by the scrollbar's width, and everything re-centres: the
+ * page jumps. Chromium avoids that when `html` has `scrollbar-gutter: stable`
+ * (styles.css), but browsers differ, and `clientWidth` is no guide (Chromium
+ * reports the wider viewport while the layout stays put). So measure the
+ * layout itself, the root's box, before and after, and pad the root by exactly
+ * what it gained. Overlay scrollbars gain nothing, so they get no padding.
+ */
 function lockScroll(): void {
-  const body = document.body;
-  savedBody = { overflow: body.style.overflow, paddingRight: body.style.paddingRight };
-  const gutterReserved = typeof CSS !== "undefined" && CSS.supports?.("scrollbar-gutter: stable");
-  const scrollbar = window.innerWidth - document.documentElement.clientWidth;
-  body.style.overflow = "hidden";
-  if (!gutterReserved && scrollbar > 0) {
-    const current = parseFloat(getComputedStyle(body).paddingRight) || 0;
-    body.style.paddingRight = `${current + scrollbar}px`;
+  const html = document.documentElement;
+  const widthBefore = html.getBoundingClientRect().width;
+  savedRoot = { overflow: html.style.overflow, paddingRight: html.style.paddingRight };
+  html.style.overflow = "hidden";
+  const gained = html.getBoundingClientRect().width - widthBefore;
+  if (gained > 0.5) {
+    html.style.paddingRight = `${(parseFloat(getComputedStyle(html).paddingRight) || 0) + gained}px`;
   }
 }
 
 function unlockScroll(): void {
-  if (!savedBody) return;
-  document.body.style.overflow = savedBody.overflow;
-  document.body.style.paddingRight = savedBody.paddingRight;
-  savedBody = null;
+  if (!savedRoot) return;
+  const html = document.documentElement;
+  html.style.overflow = savedRoot.overflow;
+  html.style.paddingRight = savedRoot.paddingRight;
+  savedRoot = null;
 }
 
 /** Make everything outside the top dialog inert; undo whatever the previous top set. */
@@ -116,6 +123,8 @@ export interface DialogProps {
   initialFocus?: RefObject<HTMLElement | null>;
   /** Make the body a keyboard-focusable scroll region (for long text with no controls). */
   bodyFocusable?: boolean;
+  /** No padding around the body, for content that runs edge to edge (photos). */
+  flush?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -131,6 +140,7 @@ export function Dialog({
   footer,
   initialFocus,
   bodyFocusable = false,
+  flush = false,
   className = "",
   children,
 }: DialogProps) {
@@ -138,6 +148,14 @@ export function Dialog({
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // What had focus when this dialog was asked for. Read while rendering, before
+  // the children mount: a child with `autoFocus` takes focus during the commit,
+  // ahead of any effect here, and would otherwise be mistaken for the opener.
+  const openerRef = useRef<HTMLElement | null | undefined>(undefined);
+  if (openerRef.current === undefined) {
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
 
   // The latest props, read by the long-lived listeners below.
   const onCloseRef = useRef(onClose);
@@ -152,7 +170,7 @@ export function Dialog({
     const panel = panelRef.current;
     if (!root || !panel) return;
 
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const opener = openerRef.current;
     const entry: Entry = { root, panel };
     stack.push(entry);
     if (stack.length === 1) lockScroll();
@@ -206,6 +224,9 @@ export function Dialog({
       if (!isTop()) return;
       const target = event.target;
       if (!(target instanceof Element) || panel!.contains(target) || target.closest(EXEMPT)) return;
+      // A dialog opening above this one takes focus (autoFocus) before it has
+      // registered itself as the top: that is not a stray focus to pull back.
+      if (target.closest("[role='dialog'][aria-modal='true']")) return;
       (focusableIn(panel!)[0] ?? panel!).focus({ preventScroll: true });
     }
 
@@ -262,7 +283,7 @@ export function Dialog({
         )}
         <div
           ref={bodyRef}
-          className="dlg-body"
+          className={flush ? "dlg-body dlg-body-flush" : "dlg-body"}
           tabIndex={bodyFocusable ? 0 : undefined}
           role={bodyFocusable ? "region" : undefined}
           aria-labelledby={bodyFocusable ? accessibleName : undefined}

@@ -7,7 +7,7 @@ import { Dialog } from "./Dialog";
 
 afterEach(() => {
   cleanup();
-  document.body.removeAttribute("style");
+  document.documentElement.removeAttribute("style");
 });
 
 function Page({ onClose }: { onClose?: () => void }) {
@@ -191,6 +191,29 @@ describe("Dialog: focus", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("returns focus to the opener even when a child autofocuses itself on mount", async () => {
+    function Phone() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Proceed to checkout</button>
+          {open && (
+            <Dialog title="Phone" onClose={() => setOpen(false)}>
+              <input aria-label="Mobile number" autoFocus />
+            </Dialog>
+          )}
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    render(<Phone />);
+    const trigger = screen.getByRole("button", { name: "Proceed to checkout" });
+    await user.click(trigger);
+    expect(document.activeElement).toBe(screen.getByLabelText("Mobile number"));
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("hands focus back to the dialog below when the top one closes", async () => {
     function Stack() {
       const [phone, setPhone] = useState(false);
@@ -239,27 +262,57 @@ describe("Dialog: the page behind", () => {
         </Dialog>
       </>,
     );
-    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.documentElement.style.overflow).toBe("hidden");
     rerender(
       <Dialog title="A" onClose={() => {}}>
         <p>a</p>
       </Dialog>,
     );
     // B is gone but A is still open: still locked.
-    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.documentElement.style.overflow).toBe("hidden");
     rerender(<></>);
-    expect(document.body.style.overflow).toBe("");
+    expect(document.documentElement.style.overflow).toBe("");
   });
 
-  it("restores a body style it did not set", () => {
-    document.body.style.overflow = "scroll";
+  it("pads the root by the scrollbar's width, so hiding the scrollbar moves nothing", () => {
+    const html = document.documentElement;
+    // A browser that gives the scrollbar's 8px to the layout once overflow is hidden.
+    const rect = vi.spyOn(html, "getBoundingClientRect").mockImplementation(
+      () => ({ width: html.style.overflow === "hidden" ? 1440 : 1432 }) as DOMRect,
+    );
     const { unmount } = render(
       <Dialog title="A" onClose={() => {}}>
         <p>a</p>
       </Dialog>,
     );
-    expect(document.body.style.overflow).toBe("hidden");
+    expect(html.style.paddingRight).toBe("8px");
     unmount();
-    expect(document.body.style.overflow).toBe("scroll");
+    expect(html.style.paddingRight).toBe("");
+    rect.mockRestore();
+  });
+
+  it("adds no padding when the layout keeps its width (scrollbar-gutter honoured, or overlay scrollbars)", () => {
+    const html = document.documentElement;
+    const rect = vi.spyOn(html, "getBoundingClientRect").mockImplementation(() => ({ width: 1432 }) as DOMRect);
+    const { unmount } = render(
+      <Dialog title="A" onClose={() => {}}>
+        <p>a</p>
+      </Dialog>,
+    );
+    expect(html.style.paddingRight).toBe("");
+    unmount();
+    rect.mockRestore();
+  });
+
+  it("restores a root style it did not set", () => {
+    document.documentElement.style.overflow = "scroll";
+    const { unmount } = render(
+      <Dialog title="A" onClose={() => {}}>
+        <p>a</p>
+      </Dialog>,
+    );
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    unmount();
+    expect(document.documentElement.style.overflow).toBe("scroll");
   });
 });

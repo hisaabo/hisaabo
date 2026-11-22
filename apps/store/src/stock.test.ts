@@ -77,4 +77,11 @@ describe("availabilityText", () => {
     expect(availabilityText(stockState(item({ runningLow: true })))).toBe("Only a few left");
     expect(availabilityText(stockState(item({ inStock: false })))).toBe("Sold out");
   });
+
+  it("does not claim stock for a variant: its inStock is also true when orders are taken without stock", () => {
+    const variant = { id: "v1", attributes: { Size: "S" }, price: "10.00", inStock: true };
+    const variants = item({ itemMode: "variants" });
+    expect(availabilityText(stockState(variants, { kind: "variant", variant }))).toBe("Available");
+    expect(availabilityText(stockState(variants))).toBe("Available");
+  });
 });
