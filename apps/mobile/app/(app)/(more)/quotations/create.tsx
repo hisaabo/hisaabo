@@ -17,7 +17,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
-import { calcInvoiceTotals } from "@hisaabo/shared";
+import { calcInvoiceTotals, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown } from "@hisaabo/shared";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
@@ -34,6 +34,13 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax") the Rate was derived from. The Rate is
+   * always tax-exclusive (the document adds the GST on top). See shared/inclusive-price.ts.
+   */
+  inclusivePrice?: string;
+  originalUnitPrice?: string;
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -135,7 +142,7 @@ function PartyPickerModal({ visible, onSelect, onClose }: PartyPickerProps) {
 
 interface ItemPickerProps {
   visible: boolean;
-  onSelect: (item: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => void;
+  onSelect: (item: { id: string; name: string; salePrice?: string | null; taxPercent: string; taxInclusive?: boolean | null }) => void;
   onClose: () => void;
 }
 
@@ -256,6 +263,14 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
         ))}
       </View>
 
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={styles.lineTotalLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}`}
+          </Text>
+        ) : null;
+      })()}
       <View style={styles.lineTotalRow}>
         <Text style={styles.lineTotalLabel}>Amount</Text>
         <Text style={styles.lineTotalValue}>{formatCurrency(lineTotal)}</Text>
@@ -320,7 +335,7 @@ function QuotationCreateScreenContent() {
   const handleLineChange = useCallback((index: number, field: keyof LineItem, value: string) => {
     setLineItems((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
+      next[index] = applyLineEdit(next[index]!, field, value);
       return next;
     });
   }, []);
@@ -335,14 +350,14 @@ function QuotationCreateScreenContent() {
   }, []);
 
   const handleItemSelected = useCallback(
-    (item: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => {
+    (item: { id: string; name: string; salePrice?: string | null; taxPercent: string; taxInclusive?: boolean | null }) => {
       setLineItems((prev) => {
         const next = [...prev];
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
           itemName: item.name,
-          unitPrice: item.salePrice ?? "0",
+          ...lineFieldsFromItemPrice({ price: item.salePrice ?? "0", inclusive: priceIsTaxInclusive(item, "sale"), taxPercent: item.taxPercent }),
           taxPercent: item.taxPercent,
         };
         return next;

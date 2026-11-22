@@ -1,3 +1,4 @@
+import { defaultSaleRate } from "../../default-rate.js";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError, type InvoiceLineItemInput } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -97,7 +98,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
           // Try to find the item and use its sale price
           const items = await client.item.list({ search: itemName, limit: 3 });
           if (items.data.length > 0 && items.data[0]?.salePrice) {
-            unitPrice = items.data[0].salePrice;
+            unitPrice = defaultSaleRate(items.data[0]);
             lineItems.push({
               itemId: items.data[0].id,
               itemName: items.data[0].name,
@@ -120,7 +121,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
               unitPrice,
               taxPercent: matched.taxPercent,
             });
-            typedRateLines.push({ itemId: matched.id, unitPrice });
+            typedRateLines.push({ itemId: matched.id, unitPrice, taxPercent: matched.taxPercent });
           } else {
             lineItems.push({ itemName, quantity: qty, unitPrice });
           }
@@ -157,7 +158,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
             if (selected) {
               itemId = selected.id;
               description = selected.name;
-              defaultPrice = selected.salePrice ?? "";
+              defaultPrice = defaultSaleRate(selected);
               defaultTax = selected.taxPercent;
             }
           }
@@ -180,7 +181,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         console.log(`    > ${description}  x${qty}  @${formatAmount(unitPrice)}  ${taxPercent}% tax  = ${formatAmount(String(amount))}\n`);
 
         lineItems.push({ itemId, itemName: description, quantity: qty, unitPrice, taxPercent, discountPercent });
-        if (typedRate && itemId) typedRateLines.push({ itemId, unitPrice });
+        if (typedRate && itemId) typedRateLines.push({ itemId, unitPrice, taxPercent });
         itemNum++;
       }
       rl.close();

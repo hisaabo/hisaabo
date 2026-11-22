@@ -29,17 +29,21 @@
  *     If the line's unit or conversion factor no longer matches the item (a unit
  *     renamed, a base unit switched, a variant removed or never chosen) the line
  *     is ambiguous and is SKIPPED with a note instead of guessing.
- *  5. TAX BASIS. The rate field is filled straight from the stored price, so the
- *     two are compared like for like and the proposal carries the item's own
- *     `taxInclusive` flag as `priceIncludesTax`; the dialog labels it. A caller
- *     that knows its rate is in the other basis states it, and the server
- *     converts with the item's tax rate.
+ *  5. TAX BASIS. A bill rate is always TAX-EXCLUSIVE. A sale price saved
+ *     "including tax" (items.tax_inclusive; purchase prices are never inclusive,
+ *     see inclusive-price.ts) was converted down to its exclusive rate when it
+ *     was put on the bill, so the rate is converted back UP at the line's GST
+ *     rate before it is compared with the saved price, and the proposal is in the
+ *     saved price's own basis (`priceIncludesTax`); the dialog labels it. A
+ *     caller that states a different basis is converted by the server at the
+ *     item's tax rate.
  *  6. A zero rate (a free sample) never proposes a price, and a rate equal to
  *     the stored price proposes nothing.
  *  7. One slot priced differently on several lines is ambiguous: skipped.
  */
 
 import { money } from "./money.js";
+import { exclusiveRateFromInclusive, inclusiveFromExclusive, priceIsTaxInclusive } from "./inclusive-price.js";
 
 /** Document types whose line rates may propose a catalog price update. */
 export const PRICE_PROPAGATION_DOCUMENT_TYPES = ["invoice"] as const;
@@ -67,6 +71,8 @@ export interface PricingCatalogItem {
   itemMode?: string | null;
   salePrice?: string | null;
   purchasePrice?: string | null;
+  /** GST rate of the item: the fallback when a line carries no tax rate of its own. */
+  taxPercent?: string | null;
   taxInclusive?: boolean | null;
   unitVariants?: ReadonlyArray<{
     unit: string;
@@ -88,8 +94,10 @@ export interface PriceLineInput {
   variantId?: string | null;
   selectedUnit?: string | null;
   conversionFactor?: string | null;
-  /** The rate field. */
+  /** The rate field (tax-exclusive). */
   unitPrice: string;
+  /** The line's GST %: what an inclusive price is converted back at. Falls back to the item's. */
+  taxPercent?: string | null;
   /** What the rate field held when the line was added or loaded; omit when unknown. */
   originalUnitPrice?: string | null;
 }
@@ -108,7 +116,7 @@ export interface PriceUpdateProposal {
   /** Stored price now (null when the slot has no price yet). */
   oldPrice: string | null;
   newPrice: string;
-  /** Basis of both prices: the item's own `taxInclusive` flag. */
+  /** Basis of both prices: true when the saved price (and so the proposal) includes GST. */
   priceIncludesTax: boolean;
 }
 
@@ -222,8 +230,19 @@ export function proposePriceUpdates(input: {
       stored = item[priceKey] ?? null;
     }
 
+    // The saved price may include GST while the rate cannot: compare in the saved price's basis.
+    const inclusive = priceIsTaxInclusive(item, side);
+    let candidate = rate;
+    if (inclusive) {
+      try {
+        candidate = inclusiveFromExclusive(rate, line.taxPercent ?? item.taxPercent ?? "0");
+      } catch {
+        continue; // a tax rate that is not a plain number: nothing safe to propose
+      }
+    }
+
     // 6b. same as the stored price: nothing to propose
-    if (stored !== null && sameNumber(stored, rate)) continue;
+    if (stored !== null && sameNumber(stored, candidate)) continue;
 
     const proposal: PriceUpdateProposal = {
       key: "",
@@ -234,8 +253,8 @@ export function proposePriceUpdates(input: {
       itemName: item.name,
       label,
       oldPrice: stored === null ? null : money.add(stored, "0"),
-      newPrice: rate,
-      priceIncludesTax: item.taxInclusive === true,
+      newPrice: candidate,
+      priceIncludesTax: inclusive,
     };
     proposal.key = priceUpdateKey(proposal);
 
@@ -254,16 +273,11 @@ export function proposePriceUpdates(input: {
 
 /**
  * Item price after a basis conversion: `price` is stated including (`fromIncludesTax`
- * true) or excluding tax, the item stores prices in the other basis.
- * Used by the server when a caller declares a basis different from the item's.
+ * true) or excluding tax, the item stores prices in the other basis. Exact integer-paise
+ * arithmetic. Used by the server when a caller declares a basis different from the item's.
  */
 export function convertPriceBasis(price: string, taxPercent: string | number, fromIncludesTax: boolean): string {
-  const rate = Number(taxPercent) || 0;
-  const paise = Math.round(Number(price) * 100);
-  const converted = fromIncludesTax
-    ? Math.round(paise / (1 + rate / 100))
-    : Math.round(paise * (1 + rate / 100));
-  return money.add(converted / 100, "0");
+  return fromIncludesTax ? exclusiveRateFromInclusive(price, taxPercent) : inclusiveFromExclusive(price, taxPercent);
 }
 
 // ── Orchestration for clients without a dialog (CLI, MCP) ─────────────────────

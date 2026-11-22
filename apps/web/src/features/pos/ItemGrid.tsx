@@ -10,7 +10,10 @@ export interface POSTile {
   variantId: string | null;
   displayName: string;
   unit: string;
+  /** Tax-exclusive rate the sale is billed at (GST is added on top). */
   unitPrice: string;
+  /** The saved price WITH GST, when `unitPrice` was derived from it ("Price includes tax"); else null. */
+  inclusivePrice: string | null;
   stockQuantity: string;
   taxPercent: string;
   conversionFactor: string;
@@ -69,7 +72,7 @@ export function ItemGrid({ search, onPick }: Props) {
             {tile.displayName}
           </div>
           <div className="text-xs text-text-tertiary mt-1 tabular-nums">
-            ₹{tile.unitPrice} / {tile.unit}
+            {tile.inclusivePrice ? `₹${tile.inclusivePrice} incl. GST` : `₹${tile.unitPrice}`} / {tile.unit}
           </div>
           <div
             className={`text-[11px] mt-1 tabular-nums ${

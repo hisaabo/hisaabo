@@ -4,6 +4,7 @@ import { items, itemVariants } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { billRateFromItemPrice, priceIsTaxInclusive } from "@hisaabo/shared";
 
 /**
  * Point-of-Sale tRPC router.
@@ -36,8 +37,14 @@ export interface POSCatalogTile {
   displayName: string;
   /** Unit the cashier will bill in (e.g. "kg", "g", "pcs"). */
   unit: string;
-  /** Unit price in this unit. String so TS doesn't introduce float drift. */
+  /**
+   * Unit price in this unit, TAX-EXCLUSIVE: this is the rate the sale is billed at (the invoice
+   * adds the GST on top). An item whose saved price includes tax is converted down here, so
+   * ₹118 incl. 18% is a ₹100.00 tile and bills as 100 + 18 = ₹118. String: no float drift.
+   */
   unitPrice: string;
+  /** The saved price WITH tax, when `unitPrice` was derived from it (the shelf price to show); else null. */
+  inclusivePrice: string | null;
   /** Stock shown to the cashier, expressed in `unit`. */
   stockQuantity: string;
   /** Tax rate — pulled from items.taxPercent (all units of one item share it). */
@@ -73,8 +80,20 @@ export interface POSItemRow {
   salePrice: string | null;
   stockQuantity: string | null;
   taxPercent: string | null;
+  /** "Price includes tax": the sale price (also of its units and variants) contains the GST. */
+  taxInclusive?: boolean | null;
   sku: string | null;
   unitVariants: unknown;
+}
+
+/** The tile's tax-exclusive `unitPrice` (and the inclusive shelf price it came from) for one saved sale price. */
+function tilePrice(item: POSItemRow, savedPrice: string) {
+  const r = billRateFromItemPrice({
+    price: savedPrice,
+    inclusive: priceIsTaxInclusive(item, "sale"),
+    taxPercent: item.taxPercent ?? "0",
+  });
+  return { unitPrice: r.rate, inclusivePrice: r.inclusivePrice };
 }
 
 /**
@@ -117,7 +136,7 @@ export function expandItemsToTiles(
           variantId: v.id,
           displayName: attrs ? `${item.name} — ${attrs}` : item.name,
           unit: item.unit,
-          unitPrice: v.salePrice ?? item.salePrice ?? "0",
+          ...tilePrice(item, v.salePrice ?? item.salePrice ?? "0"),
           stockQuantity: v.stockQuantity ?? "0",
           taxPercent: item.taxPercent ?? "0",
           conversionFactor: "1",
@@ -144,7 +163,7 @@ export function expandItemsToTiles(
             variantId: null,
             displayName: `${item.name} (${alt.unit})`,
             unit: alt.unit,
-            unitPrice: alt.salePrice ?? item.salePrice ?? "0",
+            ...tilePrice(item, alt.salePrice ?? item.salePrice ?? "0"),
             stockQuantity: stockInUnit,
             taxPercent: item.taxPercent ?? "0",
             // Stringify explicitly — the DB column is numeric(10,4); the
@@ -169,7 +188,7 @@ function buildSimpleTile(item: POSItemRow): POSCatalogTile {
     variantId: null,
     displayName: item.name,
     unit: item.unit,
-    unitPrice: item.salePrice ?? "0",
+    ...tilePrice(item, item.salePrice ?? "0"),
     stockQuantity: item.stockQuantity ?? "0",
     taxPercent: item.taxPercent ?? "0",
     conversionFactor: "1",

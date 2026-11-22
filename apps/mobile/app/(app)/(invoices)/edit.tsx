@@ -17,7 +17,10 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
-import { calcInvoiceTotals, type PriceUpdateProposal } from "@hisaabo/shared";
+import {
+  calcInvoiceTotals, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -44,6 +47,9 @@ interface LineItem {
    * still equals it was not edited, so it never proposes a catalog price update.
    */
   originalUnitPrice?: string;
+  /** The saved price WITH tax the Rate was derived from (a newly picked "Price includes tax" item); see shared/inclusive-price.ts. */
+  inclusivePrice?: string;
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -155,6 +161,7 @@ interface ItemPickerProps {
     salePrice?: string | null;
     purchasePrice?: string | null;
     taxPercent: string;
+    taxInclusive?: boolean | null;
   }) => void;
   onClose: () => void;
 }
@@ -331,6 +338,15 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
         </View>
       </View>
 
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={styles.fieldLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}`}
+          </Text>
+        ) : null;
+      })()}
+
       <View style={styles.lineTotalRow}>
         <Text style={styles.lineTotalLabel}>Amount</Text>
         <Text style={styles.lineTotalValue}>{formatCurrency(lineTotal)}</Text>
@@ -455,7 +471,7 @@ function InvoiceEditScreenContent() {
     (index: number, field: keyof LineItem, value: string) => {
       setLineItems((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        next[index] = applyLineEdit(next[index]!, field, value);
         return next;
       });
     },
@@ -481,20 +497,26 @@ function InvoiceEditScreenContent() {
       salePrice?: string | null;
       purchasePrice?: string | null;
       taxPercent: string;
+      taxInclusive?: boolean | null;
     }) => {
       const invoiceType = invoice?.type ?? "sale";
       const price =
         invoiceType === "purchase"
           ? item.purchasePrice ?? item.salePrice ?? "0"
           : item.salePrice ?? "0";
+      // A saved price that includes GST becomes the tax-exclusive Rate the bill needs (else it is taxed twice).
+      const priceFields = lineFieldsFromItemPrice({
+        price,
+        inclusive: priceIsTaxInclusive(item, invoiceType as "sale" | "purchase"),
+        taxPercent: item.taxPercent,
+      });
       setLineItems((prev) => {
         const next = [...prev];
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
           itemName: item.name,
-          unitPrice: price,
-          originalUnitPrice: price,
+          ...priceFields,
           taxPercent: item.taxPercent,
           // a newly picked item starts in its base unit
           selectedUnit: undefined,
@@ -536,6 +558,7 @@ function InvoiceEditScreenContent() {
         selectedUnit: li.selectedUnit,
         conversionFactor: li.conversionFactor,
         unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
         originalUnitPrice: li.originalUnitPrice,
       })),
     );

@@ -19,7 +19,10 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
-import { calcInvoiceTotals, type PriceUpdateProposal } from "@hisaabo/shared";
+import {
+  calcInvoiceTotals, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -61,6 +64,15 @@ interface LineItem {
    * still equals it was not edited, so it never proposes a catalog price update.
    */
   originalUnitPrice?: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax", sale side) when the Rate was
+   * derived from it. The Rate is always the tax-exclusive rate (the bill adds the GST on top), so
+   * a saved ₹118 incl. 18% starts the line at ₹100.00. Editing the GST % re-derives the Rate from
+   * it; typing a Rate yourself clears it. See shared/inclusive-price.ts.
+   */
+  inclusivePrice?: string;
+  /** The picked item's sale price includes tax: units / variants picked later are converted the same way. */
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -754,6 +766,7 @@ interface ItemPickerProps {
     taxPercent: string;
     itemMode?: string | null;
     unitVariants?: UnitVariant[] | null;
+    taxInclusive?: boolean | null;
   }) => void;
   onClose: () => void;
 }
@@ -1056,6 +1069,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
                         taxPercent: item.taxPercent,
                         itemMode: item.itemMode,
                         unitVariants: (item.unitVariants as UnitVariant[] | null) ?? null,
+                        taxInclusive: item.taxInclusive,
                       });
                       onClose();
                     }}
@@ -1413,6 +1427,16 @@ function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem,
         </View>
       </View>
 
+      {/* The saved price included GST: show how the Rate was derived. */}
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={styles.fieldLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}`}
+          </Text>
+        ) : null;
+      })()}
+
       {/* Row 2b: GST % + Disc % */}
       <View style={[styles.lineItemFieldsRow, { marginBottom: 10 }]}>
         <View style={styles.lineFieldHalf}>
@@ -1721,7 +1745,7 @@ function InvoiceCreateForm() {
     (index: number, field: keyof LineItem, value: string) => {
       setLineItems((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        next[index] = applyLineEdit(next[index]!, field, value);
         return next;
       });
     },
@@ -1749,25 +1773,31 @@ function InvoiceCreateForm() {
       taxPercent: string;
       itemMode?: string | null;
       unitVariants?: UnitVariant[] | null;
+      taxInclusive?: boolean | null;
     }) => {
       const price =
         invoiceType === "purchase"
           ? item.purchasePrice ?? item.salePrice ?? "0"
           : item.salePrice ?? "0";
+      // A saved price that includes GST becomes the tax-exclusive Rate the bill needs (else it is taxed twice).
+      const priceFields = lineFieldsFromItemPrice({
+        price,
+        inclusive: priceIsTaxInclusive(item, invoiceType),
+        taxPercent: item.taxPercent,
+      });
       setLineItems((prev) => {
         const next = [...prev];
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
           itemName: item.name,
-          unitPrice: price,
+          ...priceFields,
           taxPercent: item.taxPercent,
           // G-08: store item mode so sub-selectors can render; clear prior selections
           itemMode: (item.itemMode as LineItem["itemMode"]) ?? "simple",
           variantId: undefined,
           selectedUnit: undefined,
           conversionFactor: undefined,
-          originalUnitPrice: price,
         };
         return next;
       });
@@ -1794,8 +1824,11 @@ function InvoiceCreateForm() {
           ...li,
           variantId: variant.id,
           itemName: parentItem ? `${parentItem.name} - ${label}` : label,
-          unitPrice: variantPrice ?? "0",
-          originalUnitPrice: variantPrice ?? "0",
+          ...lineFieldsFromItemPrice({
+            price: variantPrice ?? "0",
+            inclusive: li.itemPriceIncludesTax === true,
+            taxPercent: li.taxPercent,
+          }),
         };
         return next;
       });
@@ -1820,8 +1853,7 @@ function InvoiceCreateForm() {
             ...li,
             selectedUnit: undefined,
             conversionFactor: undefined,
-            unitPrice: basePrice,
-            originalUnitPrice: basePrice,
+            ...lineFieldsFromItemPrice({ price: basePrice, inclusive: li.itemPriceIncludesTax === true, taxPercent: li.taxPercent }),
             itemName: parentItem.name,
           };
           return next;
@@ -1837,8 +1869,7 @@ function InvoiceCreateForm() {
           ...li,
           selectedUnit: uv.unit,
           conversionFactor: String(uv.conversionFactor),
-          unitPrice: unitPrice ?? "0",
-          originalUnitPrice: unitPrice ?? "0",
+          ...lineFieldsFromItemPrice({ price: unitPrice ?? "0", inclusive: li.itemPriceIncludesTax === true, taxPercent: li.taxPercent }),
           itemName: `${parentItem.name} (${uv.unit})`,
         };
         return next;
@@ -1893,6 +1924,7 @@ function InvoiceCreateForm() {
         selectedUnit: li.selectedUnit,
         conversionFactor: li.conversionFactor,
         unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
         originalUnitPrice: li.originalUnitPrice,
       })),
     );

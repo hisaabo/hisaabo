@@ -16,6 +16,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { calcLineItem, money } from "@hisaabo/shared";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -307,20 +308,24 @@ export interface CartTotals {
 }
 
 export function computeCartTotals(lineItems: POSLineItem[]): CartTotals {
-  let subtotal = 0;
-  let discount = 0;
-  let tax = 0;
-  for (const li of lineItems) {
-    const qty = parseFloat(li.quantity) || 0;
-    const price = parseFloat(li.unitPrice) || 0;
-    const gross = qty * price;
-    const disc = gross * ((parseFloat(li.discountPercent) || 0) / 100);
-    const net = gross - disc;
-    const lineTax = net * ((parseFloat(li.taxPercent) || 0) / 100);
-    subtotal += gross;
-    discount += disc;
-    tax += lineTax;
-  }
-  const total = subtotal - discount + tax;
-  return { subtotal, discount, tax, total };
+  // The same exact (integer-paise) line maths the server uses, so the cart never shows a total
+  // the invoice will not carry. `subtotal` is the pre-discount taxable value, as before.
+  const lines = lineItems.map((li) =>
+    calcLineItem({
+      quantity: li.quantity || "0",
+      unitPrice: li.unitPrice || "0",
+      taxPercent: li.taxPercent || "0",
+      discountPercent: li.discountPercent || "0",
+    }),
+  );
+  const subtotal = money.sum(lines.map((l) => l.subtotal));
+  const discount = money.sum(lines.map((l) => l.discountAmount));
+  const tax = money.sum(lines.map((l) => l.taxAmount));
+  const total = money.sum(lines.map((l) => l.total));
+  return {
+    subtotal: money.toNumber(subtotal),
+    discount: money.toNumber(discount),
+    tax: money.toNumber(tax),
+    total: money.toNumber(total),
+  };
 }

@@ -1,3 +1,4 @@
+import { defaultSaleRate } from "../../default-rate.js";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -336,7 +337,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
         if (!unitPrice) {
           const items = await client.item.list({ search: itemName, limit: 3 });
           if (items.data.length > 0 && items.data[0]?.salePrice) {
-            unitPrice = items.data[0].salePrice;
+            unitPrice = defaultSaleRate(items.data[0]);
             lineItems.push({
               itemId: items.data[0].id,
               itemName: items.data[0].name,
@@ -394,7 +395,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
             if (selected) {
               itemId = selected.id;
               description = selected.name;
-              defaultPrice = selected.salePrice ?? "";
+              defaultPrice = defaultSaleRate(selected);
               defaultTax = selected.taxPercent;
             }
           }

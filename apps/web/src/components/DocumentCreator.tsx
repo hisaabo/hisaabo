@@ -9,7 +9,10 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useCan } from "@/hooks/useCan";
 import { usePricePropagation } from "@/hooks/usePricePropagation";
-import { calcLineItem, calcInvoiceTotals, money, type PriceUpdateProposal } from "@hisaabo/shared";
+import {
+  calcLineItem, calcInvoiceTotals, money, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { QuickPartyCreate } from "@/components/QuickPartyCreate";
 import { QuickItemCreate, type QuickItemCreateResult } from "@/components/QuickItemCreate";
 
@@ -76,6 +79,16 @@ interface LineItem {
    * still equals it was not edited, so it never proposes a catalog price update.
    */
   originalUnitPrice?: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax", sale side), when the Price
+   * field was derived from it. The Price field is always the tax-exclusive rate: the bill adds
+   * the GST on top, so the saved ₹118 incl. 18% starts the line at ₹100.00. Editing the GST %
+   * re-derives the rate from this price (the shelf price stays ₹118); typing a rate yourself
+   * clears it (you are now stating the exclusive rate).
+   */
+  inclusivePrice?: string;
+  /** The picked item's sale price includes tax: units picked later are converted the same way. */
+  itemPriceIncludesTax?: boolean;
 }
 
 interface Charge {
@@ -468,9 +481,8 @@ export function DocumentCreator({
   }, [bizDefaultRoundOff, isEditing, roundOffOverridden, totals.total, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {
-    setItems((prev) =>
-      prev.map((li) => (li.id === id ? { ...li, [field]: value } : li))
-    );
+    // applyLineEdit keeps an inclusive-derived rate honest (see shared/inclusive-price.ts)
+    setItems((prev) => prev.map((li) => (li.id === id ? applyLineEdit(li, field, value) : li)));
   }
 
   function selectProduct(lineId: string, productId: string) {
@@ -481,7 +493,7 @@ export function DocumentCreator({
       setItems((prev) =>
         prev.map((li) =>
           li.id === lineId
-            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined, variantId: undefined, originalUnitPrice: undefined }
+            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined, variantId: undefined, originalUnitPrice: undefined, inclusivePrice: undefined, itemPriceIncludesTax: undefined }
             : li
         )
       );
@@ -490,6 +502,9 @@ export function DocumentCreator({
     if (!product) return;
 
     const basePrice = (invoiceType === "sale" ? product.salePrice : product.purchasePrice) || "";
+    // A saved price that includes GST becomes the tax-exclusive rate the bill needs (else it is taxed twice).
+    const includesTax = priceIsTaxInclusive(product, invoiceType);
+    const priceFields = lineFieldsFromItemPrice({ price: basePrice, inclusive: includesTax, taxPercent: product.taxPercent });
     const baseUnit: UnitOption = { unit: product.unit, salePrice: basePrice, conversionFactor: 1 };
     const variants: UnitOption[] = ((product.unitVariants as any[]) || []).map((v: any) => ({
       unit: v.unit,
@@ -511,8 +526,7 @@ export function DocumentCreator({
               // they want one.
               itemName: product.name,
               notes: "",
-              unitPrice: basePrice,
-              originalUnitPrice: basePrice,
+              ...priceFields,
               taxPercent: product.taxPercent,
               selectedUnit: undefined,
               conversionFactor: undefined,
@@ -541,11 +555,15 @@ export function DocumentCreator({
           unitKey === "__base__" ? u.conversionFactor === 1 : u.unit === unitKey
         );
         if (!unit) return li;
+        const priceFields = lineFieldsFromItemPrice({
+          price: unit.salePrice,
+          inclusive: li.itemPriceIncludesTax === true,
+          taxPercent: li.taxPercent,
+        });
         return {
           ...li,
           selectedUnit: unitKey === "__base__" ? undefined : unit.unit,
-          unitPrice: unit.salePrice,
-          originalUnitPrice: unit.salePrice,
+          ...priceFields,
           conversionFactor: unitKey === "__base__" ? undefined : String(unit.conversionFactor),
         };
       })
@@ -569,6 +587,8 @@ export function DocumentCreator({
               notes: "",
               unitPrice: price || "",
               originalUnitPrice: price || "",
+              inclusivePrice: undefined,
+              itemPriceIncludesTax: undefined,
               taxPercent: item.taxPercent || "0",
               selectedUnit: undefined,
               conversionFactor: undefined,
@@ -625,6 +645,7 @@ export function DocumentCreator({
         selectedUnit: li.selectedUnit,
         conversionFactor: li.conversionFactor,
         unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
         originalUnitPrice: li.originalUnitPrice,
       })),
     );
@@ -946,6 +967,16 @@ export function DocumentCreator({
                     </p>
                   </div>
                 </div>
+
+                {/* The saved price included GST: show how the rate was derived. */}
+                {(() => {
+                  const hint = inclusiveBreakdown(li);
+                  return hint ? (
+                    <p className="text-[11px] text-text-tertiary tabular-nums" data-testid="inclusive-hint">
+                      {formatCurrency(hint.inclusive)} incl. GST → {formatCurrency(hint.base)} + {formatCurrency(hint.tax)}
+                    </p>
+                  ) : null;
+                })()}
 
                 {/* Row 4: Free-text notes for this line (optional). Stored
                     on the backend as `invoice_items.description` and

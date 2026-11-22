@@ -10,6 +10,7 @@ A bug-fix release. Take the usual backup, then **upgrade the API first**: set `H
 2. **Review the GST returns you have already filed.** Past periods are recomputed with corrected rules; run the per-month query to find the months that change. See [What to do after upgrading](#what-to-do-after-upgrading), step 1.
 3. **Review supplier and customer opening balances** with the review query: the meaning of a positive supplier balance changed. Run it again after your users' mobile and desktop apps update. See step 5 of the same list.
 4. **Multi-tenant: size the tenant connection pools** (`TENANT_POOL_MAX`, `TENANT_POOL_PER_DB_MAX`, `TENANT_POOL_DRAINING_MAX`) for your `max_connections`. See [Multi-tenant: size the tenant connection pools](#multi-tenant-size-the-tenant-connection-pools).
+5. **If you have items marked "Price includes tax": review the bills made from them before this release.** Those bills added the GST on top of a price that already contained it. See [Bills made from items priced including tax](#bills-made-from-items-priced-including-tax).
 
 ### For operators
 
@@ -155,6 +156,11 @@ Verify:
 
 Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
 
+### New
+
+- **Update an item's saved price from the bill you are making.** When you change the **rate** of a catalog item on an **invoice** (sale or purchase), web and mobile now ask once, on save: "Update saved prices?", listing each changed item as old price to new price, with a checkbox per item (all checked). **Update item prices** saves the bill and then the checked prices; **Just this bill** saves the bill and leaves the catalog alone. The bill is saved either way, and a failed price update never undoes or blocks it (you get a message). Only people who can edit items are asked (owner, admin, seller manager; not sellers or accountants). It compares the rate you typed, never a discounted net; an alternate unit updates that unit's own price and a variant its own price; a line it cannot match to the item (a unit renamed since) is listed as "not offered". Sale invoices update the selling price, purchase invoices the purchase price. Quotations, proformas, challans, credit and debit notes and returns never ask. No migration: a new procedure `item.updatePricesFromDocument` writes the new price in one transaction and records old price, new price and the source bill in the audit log. The CLI has `hisaabo invoice create --update-item-prices` and MCP `invoice_create` / `invoice_update` take `update_item_prices`; both update only the rates you stated. See [Items](https://docs.hisaabo.in/items/#update-prices-from-a-bill).
+- **The online store's "Manage Items" lists the items already on your store first.** Selected items come together at the top, each group in its usual order. The order follows what is saved: it is decided when you open the picker or search, so ticking an item does not move it while you work. The mobile picker no longer re-sorts on every tap. `store.listStoreItems` takes an optional `selectedFirst`.
+
 ### What is fixed (reliability)
 
 - **Multi-tenant: intermittent `CONNECTION_ENDED` errors.** The API keeps a cache of tenant database pools (`TENANT_POOL_MAX`, default 50). When the cache was full, serving another tenant evicted the least recently used pool and **closed** it, even while a request that had already taken that pool was still working. That request's next query, or its next transaction, failed with `write CONNECTION_ENDED`. With more tenants than pool slots (for example 229 tenants), and the recurring-invoice scheduler walking every tenant each minute, this was easy to hit. An evicted pool is now just dropped from the cache: requests holding it finish normally, and its connections close by themselves after 20 idle seconds.
@@ -165,6 +171,7 @@ Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant
 
 ### What changes for users
 
+- **Items priced including tax were taxed again on bills; fixed.** An item with "Price includes tax" (say ₹118 including 18% GST) was put on a bill at ₹118 and the 18% was added on top: ₹139.24. Now the bill starts the line at the tax-exclusive rate (₹100.00 + ₹18.00 = ₹118.00) on web, mobile, the POS and the CLI's default rate, with a small hint on the line ("₹118.00 incl. GST → ₹100.00 + ₹18.00"); change the GST % and the rate follows, type a rate and it is yours. Only **sale** prices can include tax; purchase prices are always tax-exclusive. The server still computes every line tax-exclusive, so nothing about a saved bill changes. **Bills created before 0.10.1 from such items are not changed. Review them:** [Bills made from items priced including tax](#bills-made-from-items-priced-including-tax). Also exact now: `calcLineItem` for a tax-inclusive line (the online store uses it) works in integer paise, so the total is exactly quantity x price (it was off by a paisa for quantities above 1), and `money.mul` / `money.percent` round half-up without floating point (₹0.85 x 0.7 is ₹0.60, it was ₹0.59).
 - **Browser AI agents (WebMCP, experimental, web only) are off for everyone after the upgrade.** The setting used to be one flag per browser; it is now per person and organization, and the old flag is deleted, never honoured. Anyone who had turned it on must turn it on again in Settings → Account. The organization owner can turn it off for the whole organization (Settings → Account), and the desktop app never registers browser-agent tools. Writes now show the business, the people and amounts involved and what will change; several queued prompts show **N pending** and **Deny all**; and an agent is limited to 20 approved writes per session and 10 per minute. `invoice_update_status` in the browser no longer accepts `cancelled`, so an agent cannot void an invoice (the MCP tool is unchanged). `system.config` and `auth.me` gain a `webmcpDisabled` field; both are additive. Details: [Browser AI Agents](https://docs.hisaabo.in/ai/webmcp/).
 - **Import wizard: Tally and Generic CSV are gone.** The wizard listed them, but the server only has `mybillbook` and `hisaabo` import adapters, so every import from the other two failed on its first batch with "Unknown import source". The wizard now offers myBillBook only. Nothing that worked is removed; there was never a Tally importer. To bring in Tally, Busy or spreadsheet data, convert it to the Hisaabo CSV layout and use `hisaabo import` (see [Import Data](https://docs.hisaabo.in/getting-started/import-data/)). An unregistered `source` sent to the API now returns `BAD_REQUEST` listing the supported sources (it used to be a 500).
 - **MCP import tools default to `source: "hisaabo"`** (they defaulted to `"excel"`, which the server rejected, so calls that did not set `source` failed). Agents that pass `source` explicitly are unaffected.
@@ -173,6 +180,40 @@ Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant
 - **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
 - **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start. That state is **latched**: the first time the API sees more than one row in `tenants` it writes a `system_config` row (`self_host_multi_org_seen`) and keeps the rule on even if the extra organisations are deleted later, because a hard-deleted organisation leaves its businesses in the shared database and they would otherwise appear in the surviving organisation. If you really did remove the extra organisations and their businesses, switch the rule off again with `DELETE FROM system_config WHERE key = 'self_host_multi_org_seen';` (it takes effect within about 15 seconds). Cloud and single-organisation installs never write the row.
 - **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
+
+### Bills made from items priced including tax
+
+Before 0.10.1 a manual bill (web, mobile, POS, CLI) put an item's saved price on the line as the taxable rate. For an item marked **Price includes tax** that price already contained the GST, so the customer was invoiced the tax twice: ₹118 including 18% became 118.00 + 21.24 = ₹139.24, and your GST output, GSTR-1, GSTR-3B and the ledger carried the extra tax. **Nothing is rewritten** (a saved bill, its GST returns and its payments stay as they are). Run the query below to list the lines billed at an item's saved price while the item is marked tax-inclusive, with what the line should have totalled (`should_total`: quantity x price less the line discount) and the difference (`overcharge`). Online-store orders are excluded: the store always honoured the flag.
+
+<!-- inclusive-bills-query -->
+```sql
+SELECT b.name AS business, i.business_id, i.invoice_number, i.document_type::text AS document_type,
+       to_char(i.invoice_date AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS invoice_date, i.status::text AS status,
+       it.name AS item, li.quantity, li.unit_price AS billed_rate, li.tax_percent, li.discount_percent,
+       li.total_amount AS line_total,
+       round(li.quantity * li.unit_price * (1 - li.discount_percent / 100), 2) AS should_total,
+       li.total_amount - round(li.quantity * li.unit_price * (1 - li.discount_percent / 100), 2) AS overcharge
+FROM invoice_items li
+JOIN invoices i ON i.id = li.invoice_id
+JOIN businesses b ON b.id = i.business_id
+JOIN items it ON it.id = li.item_id
+LEFT JOIN item_variants iv ON iv.id = li.variant_id
+WHERE it.tax_inclusive
+  AND i.type = 'sale' AND i.document_type <> 'purchase_return'
+  AND i.deleted_at IS NULL AND i.status <> 'cancelled'
+  AND i.source IS DISTINCT FROM 'online_store'
+  AND li.tax_percent > 0
+  -- billed at the item's saved price: its own, its variant's, or its alternate unit's
+  AND li.unit_price = COALESCE(
+        iv.sale_price,
+        (SELECT (uv ->> 'salePrice')::numeric
+           FROM jsonb_array_elements(COALESCE(it.unit_variants, '[]'::jsonb)) uv
+          WHERE uv ->> 'unit' = li.selected_unit LIMIT 1),
+        it.sale_price)
+ORDER BY b.name, i.invoice_date, i.invoice_number
+```
+
+The query is read-only and a heuristic: a line billed at a price other than the saved one (you typed the exclusive rate yourself) is not listed, and an item you marked tax-inclusive only after billing it is. Save it as `inclusive-bills.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, with the loop in [Running it on every tenant](#running-the-queries-on-every-tenant): put `inclusive-bills.sql` where that loop says `gstr3b-diff.sql`; the loop reads the tenant databases from the `tenants` table). For each row decide with the customer: issue a **credit note** for the overcharge (it reduces the GST of that month), or leave it if the customer was told the exclusive price. Re-file the GSTR-1 / GSTR-3B of an affected month only if your CA says so.
 
 ### Corrected accounting and GST figures
 

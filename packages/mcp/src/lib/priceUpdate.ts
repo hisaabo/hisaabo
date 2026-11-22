@@ -48,6 +48,6 @@ export function propagateFromInvoice(
     documentType: saved.documentType,
     side: saved.type,
     documentId: saved.id,
-    lines: lines.map((l) => ({ itemId: l.itemId, unitPrice: l.unitPrice })),
+    lines: lines.map((l) => ({ itemId: l.itemId, unitPrice: l.unitPrice, taxPercent: l.taxPercent })),
   });
 }

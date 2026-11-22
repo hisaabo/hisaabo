@@ -3,7 +3,7 @@ import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import {
   createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, unitVariantSchema,
-  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis,
+  partialWithoutDefaults, money, updatePricesFromDocumentSchema, priceUpdateKey, supportsPricePropagation, convertPriceBasis, priceIsTaxInclusive,
   type ItemPriceUpdate,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
@@ -548,7 +548,8 @@ export const itemRouter = router({
           // Stated in the other tax basis than the item stores its prices in? Convert
           // at the item's own GST rate; omitted = already the item's basis.
           let newPrice = u.newPrice;
-          if (u.priceIncludesTax !== undefined && u.priceIncludesTax !== item.taxInclusive) {
+          // (only SALE prices can include tax: purchase prices are stored tax-exclusive)
+          if (u.priceIncludesTax !== undefined && u.priceIncludesTax !== priceIsTaxInclusive(item, u.side)) {
             newPrice = convertPriceBasis(newPrice, item.taxPercent, u.priceIncludesTax);
           }
           newPrice = money.add(newPrice, "0");
