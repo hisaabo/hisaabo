@@ -54,6 +54,7 @@ vi.mock("@/lib/trpc", () => {
       item: {
         list: { useQuery: () => ({ data: { data: [catalog.steel, catalog.cement, catalog.rice] }, isFetching: false }) },
         create: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
+        updatePricesFromDocument: { useMutation: () => ({ mutateAsync: h.updateMutate, isPending: false }) },
       },
       invoice: {
         create: { useMutation: mutation(h.createCalls) },
@@ -76,7 +77,6 @@ vi.mock("@/lib/trpc", () => {
         dashboard: { summary: { invalidate: h.invalidate }, shippingSummary: { invalidate: h.invalidate } },
         item: { list: { invalidate: h.invalidate }, getById: { fetch: h.getById, invalidate: h.invalidate } },
         party: { list: { invalidate: h.invalidate } },
-        client: { item: { updatePricesFromDocument: { mutate: h.updateMutate } } },
       }),
     },
   };

@@ -58,7 +58,7 @@ beforeEach(() => {
   stub.mutationResults["invoice.create"] = { id: "inv-1", invoiceNumber: "INV-00001" };
   stub.mutationResults["invoice.update"] = { id: "inv-9" };
   stub.handlers["item.getById"] = (input) => catalog.find((i) => i.id === (input as { id: string }).id) ?? null;
-  stub.handlers["client.item.updatePricesFromDocument"] = () => ({ documentId: "inv-1", updated: [{ itemId: "item-1" }], unchanged: [] });
+  stub.mutationHandlers["item.updatePricesFromDocument"] = () => ({ documentId: "inv-1", updated: [{ itemId: "item-1" }], unchanged: [] });
 });
 
 async function pickParty() {
@@ -77,7 +77,7 @@ function setRate(from: string, to: string) {
 }
 
 const created = () => stub.mutations["invoice.create"] ?? [];
-const priceCalls = () => stub.utilCalls["client.item.updatePricesFromDocument"] ?? [];
+const priceCalls = () => stub.mutations["item.updatePricesFromDocument"] ?? [];
 
 describe("InvoiceCreateScreen — update saved prices", () => {
   it("asks once, listing the changed item with its box checked; [Update item prices] saves the bill, then the prices", async () => {
@@ -159,7 +159,7 @@ describe("InvoiceCreateScreen — update saved prices", () => {
   });
 
   it("a failing price update never blocks the bill: it is saved and a toast explains", async () => {
-    stub.handlers["client.item.updatePricesFromDocument"] = () => {
+    stub.mutationHandlers["item.updatePricesFromDocument"] = () => {
       throw new Error("Item not found");
     };
     const toastError = jest.spyOn(toast, "error").mockImplementation(() => {});

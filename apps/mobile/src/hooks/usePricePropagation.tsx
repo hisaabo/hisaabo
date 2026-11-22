@@ -40,6 +40,7 @@ export function usePricePropagation(documentType: string | null | undefined, sid
   const canUpdateItems = useCan("update", "Item");
   const enabled = canUpdateItems && supportsPricePropagation(documentType);
   const utils = trpc.useUtils();
+  const updatePrices = trpc.item.updatePricesFromDocument.useMutation();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [checking, setChecking] = useState(false);
   const promptRef = useRef<Prompt | null>(null);
@@ -95,7 +96,8 @@ export function usePricePropagation(documentType: string | null | undefined, sid
     async (documentId: string | undefined, accepted: readonly PriceUpdateProposal[]) => {
       if (accepted.length === 0) return;
       try {
-        const res = await utils.client.item.updatePricesFromDocument.mutate({
+        // mutateAsync keeps running if the screen is replaced meanwhile (a mutation outlives its component)
+        const res = await updatePrices.mutateAsync({
           ...(documentId ? { documentId } : {}),
           updates: accepted.map(proposalToUpdate),
         });
@@ -110,7 +112,7 @@ export function usePricePropagation(documentType: string | null | undefined, sid
         );
       }
     },
-    [utils],
+    [utils, updatePrices.mutateAsync],
   );
 
   const dialog = (

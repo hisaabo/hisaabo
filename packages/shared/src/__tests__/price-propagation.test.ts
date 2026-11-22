@@ -4,8 +4,10 @@ import {
   priceUpdateKey,
   proposalToUpdate,
   proposePriceUpdates,
+  propagateBillPrices,
   supportsPricePropagation,
   updatePricesFromDocumentSchema,
+  type PricePropagationClient,
   type PricingCatalogItem,
 } from "../index.js";
 
@@ -274,6 +276,81 @@ describe("convertPriceBasis", () => {
     expect(convertPriceBasis("1180", "18", true)).toBe("1000.00");
     expect(convertPriceBasis("1000", "18", false)).toBe("1180.00");
     expect(convertPriceBasis("100", "0", true)).toBe("100.00");
+  });
+});
+
+describe("propagateBillPrices (CLI / MCP)", () => {
+  const applied = { updated: [{ label: "Ghee 1L", side: "sale" as const, oldPrice: "620.00", newPrice: "600.00" }], unchanged: [] };
+
+  function fakeClient(over: Partial<PricePropagationClient> = {}) {
+    const calls: Array<Parameters<PricePropagationClient["applyUpdates"]>[0]> = [];
+    const client: PricePropagationClient = {
+      getItem: async (id) => items.find((i) => i.id === id) ?? null,
+      applyUpdates: async (input) => {
+        calls.push(input);
+        return applied;
+      },
+      ...over,
+    };
+    return { client, calls };
+  }
+
+  it("updates the items whose rate differs and names the bill it came from", async () => {
+    const { client, calls } = fakeClient();
+    const out = await propagateBillPrices({
+      client, documentType: "invoice", side: "sale", documentId: "inv-1",
+      lines: [{ itemId: ghee.id, unitPrice: "600" }, { itemId: rice.id, unitPrice: "90" }],
+    });
+    expect(out.status).toBe("updated");
+    expect(out.updated).toEqual(applied.updated);
+    expect(calls).toEqual([{
+      documentId: "inv-1",
+      updates: [{ itemId: ghee.id, side: "sale", newPrice: "600.00", priceIncludesTax: true }],
+    }]);
+  });
+
+  it("does nothing, and calls nothing, when every rate equals the saved price", async () => {
+    const { client, calls } = fakeClient();
+    const out = await propagateBillPrices({
+      client, documentType: "invoice", side: "sale", documentId: "inv-1",
+      lines: [{ itemId: ghee.id, unitPrice: "620" }, { unitPrice: "5" }],
+    });
+    expect(out.status).toBe("nothing_to_update");
+    expect(calls).toEqual([]);
+  });
+
+  it("is not applicable to quotations, notes and returns", async () => {
+    const { client, calls } = fakeClient();
+    for (const documentType of ["quotation", "credit_note", "sales_return"]) {
+      const out = await propagateBillPrices({ client, documentType, side: "sale", documentId: "d", lines: [{ itemId: ghee.id, unitPrice: "1" }] });
+      expect(out.status).toBe("not_applicable");
+      expect(out.message).toMatch(/invoices only/);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("never throws: a refused or failing update is reported, the bill stands", async () => {
+    const { client } = fakeClient({ applyUpdates: async () => { throw new Error("You do not have permission to update items"); } });
+    const out = await propagateBillPrices({
+      client, documentType: "invoice", side: "sale", documentId: "inv-1", lines: [{ itemId: ghee.id, unitPrice: "600" }],
+    });
+    expect(out.status).toBe("failed");
+    expect(out.message).toMatch(/bill was saved, but item prices were not updated: You do not have permission/);
+
+    const broken = fakeClient({ getItem: async () => { throw new Error("network down"); } });
+    const out2 = await propagateBillPrices({
+      client: broken.client, documentType: "invoice", side: "sale", documentId: "inv-1", lines: [{ itemId: ghee.id, unitPrice: "600" }],
+    });
+    expect(out2.status).toBe("failed");
+  });
+
+  it("reports lines it could not offer", async () => {
+    const { client } = fakeClient({ applyUpdates: async () => ({ updated: [], unchanged: [] }) });
+    const out = await propagateBillPrices({
+      client, documentType: "invoice", side: "sale", documentId: "inv-1", lines: [{ itemId: tee.id, unitPrice: "320" }],
+    });
+    expect(out.status).toBe("nothing_to_update");
+    expect(out.skipped[0]!.reason).toMatch(/no variant is selected/);
   });
 });
 

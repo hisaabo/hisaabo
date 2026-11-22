@@ -48,8 +48,14 @@ export interface FetchCall {
   body: unknown;
 }
 
-/** Real HisaaboClient whose fetch is stubbed; `respond` maps tRPC path -> result. */
-export function recordingClient(respond: (path: string) => unknown = () => ({})) {
+/**
+ * Real HisaaboClient whose fetch is stubbed; `respond` maps tRPC path -> result.
+ * `errors` makes a path answer with that tRPC error (HTTP 403) instead.
+ */
+export function recordingClient(
+  respond: (path: string) => unknown = () => ({}),
+  errors: Record<string, { code: string; message: string }> = {},
+) {
   const calls: FetchCall[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -57,6 +63,10 @@ export function recordingClient(respond: (path: string) => unknown = () => ({}))
     const path = url.pathname.replace("/api/trpc/", "");
     const body = init?.body ? superjson.deserialize(JSON.parse(String(init.body))) : undefined;
     calls.push({ url, method: init?.method ?? "GET", body });
+    const failure = errors[path];
+    if (failure) {
+      return new Response(JSON.stringify({ error: failure }), { status: 403, headers: { "content-type": "application/json" } });
+    }
     return new Response(JSON.stringify({ result: { data: superjson.serialize(respond(path)) } }), {
       status: 200,
       headers: { "content-type": "application/json" },

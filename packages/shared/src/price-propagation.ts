@@ -265,3 +265,73 @@ export function convertPriceBasis(price: string, taxPercent: string | number, fr
     : Math.round(paise * (1 + rate / 100));
   return money.add(converted / 100, "0");
 }
+
+// ── Orchestration for clients without a dialog (CLI, MCP) ─────────────────────
+
+/** The two API calls `propagateBillPrices` needs, supplied by the CLI / MCP client. */
+export interface PricePropagationClient {
+  /** `item.getById`: null when the item does not exist. */
+  getItem(id: string): Promise<PricingCatalogItem | null>;
+  /** `item.updatePricesFromDocument`. */
+  applyUpdates(input: {
+    documentId: string;
+    updates: ReturnType<typeof proposalToUpdate>[];
+  }): Promise<{
+    updated: Array<{ label: string; side: PriceSide; oldPrice: string | null; newPrice: string }>;
+    unchanged: Array<{ label: string; side: PriceSide; oldPrice: string | null; newPrice: string }>;
+  }>;
+}
+
+export type PricePropagationStatus = "updated" | "nothing_to_update" | "not_applicable" | "failed";
+
+export interface PricePropagationOutcome {
+  status: PricePropagationStatus;
+  /** Catalog prices that were changed. */
+  updated: Array<{ label: string; side: PriceSide; oldPrice: string | null; newPrice: string }>;
+  /** Lines that changed but could not be offered, with the reason. */
+  skipped: PriceUpdateSkip[];
+  /** Why nothing was updated (not applicable / failed). */
+  message?: string;
+}
+
+/**
+ * "--update-item-prices" / `update_item_prices`: after the bill is saved, update the
+ * catalog price of every linked item whose rate differs from the saved price.
+ * There is nobody to ask, so the caller opting in is the confirmation; everything
+ * else is the same rules and the same server procedure as the dialog.
+ *
+ * NEVER throws: the bill is already saved, so a failure (no permission, an item
+ * deleted meanwhile, the network) is reported in the outcome and nothing else.
+ */
+export async function propagateBillPrices(input: {
+  client: PricePropagationClient;
+  documentType: string;
+  side: PriceSide;
+  documentId: string;
+  lines: readonly PriceLineInput[];
+}): Promise<PricePropagationOutcome> {
+  if (!supportsPricePropagation(input.documentType)) {
+    return {
+      status: "not_applicable",
+      updated: [],
+      skipped: [],
+      message: `Item prices are updated from invoices only, not from a ${input.documentType.replace(/_/g, " ")}.`,
+    };
+  }
+  try {
+    const itemIds = [...new Set(input.lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    const fetched = await Promise.all(itemIds.map((id) => input.client.getItem(id)));
+    const items = fetched.filter((i): i is PricingCatalogItem => !!i);
+    const { proposals, skipped } = proposePriceUpdates({ side: input.side, lines: input.lines, items });
+    if (proposals.length === 0) return { status: "nothing_to_update", updated: [], skipped };
+    const res = await input.client.applyUpdates({ documentId: input.documentId, updates: proposals.map(proposalToUpdate) });
+    return { status: res.updated.length > 0 ? "updated" : "nothing_to_update", updated: res.updated, skipped };
+  } catch (err) {
+    return {
+      status: "failed",
+      updated: [],
+      skipped: [],
+      message: `The bill was saved, but item prices were not updated: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}

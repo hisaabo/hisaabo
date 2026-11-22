@@ -40,6 +40,7 @@ export function usePricePropagation(documentType: string, side: PriceSide) {
   const canUpdateItems = useCan("update", "Item");
   const enabled = canUpdateItems && supportsPricePropagation(documentType);
   const utils = trpc.useUtils();
+  const updatePrices = trpc.item.updatePricesFromDocument.useMutation();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [checking, setChecking] = useState(false);
   // The dialog is a promise the form awaits; a ref keeps the latest resolver reachable from the handlers.
@@ -96,7 +97,8 @@ export function usePricePropagation(documentType: string, side: PriceSide) {
     async (documentId: string | undefined, accepted: readonly PriceUpdateProposal[]) => {
       if (accepted.length === 0) return;
       try {
-        const res = await utils.client.item.updatePricesFromDocument.mutate({
+        // mutateAsync keeps running if the form closes meanwhile (a mutation outlives its component)
+        const res = await updatePrices.mutateAsync({
           ...(documentId ? { documentId } : {}),
           updates: accepted.map(proposalToUpdate),
         });
@@ -111,7 +113,7 @@ export function usePricePropagation(documentType: string, side: PriceSide) {
         );
       }
     },
-    [utils],
+    [utils, updatePrices.mutateAsync],
   );
 
   const dialog = (

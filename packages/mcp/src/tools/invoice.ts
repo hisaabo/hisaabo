@@ -17,6 +17,7 @@ import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 import { lineItemSchema, toApiLineItems } from "../lib/lineItems.js";
+import { UPDATE_ITEM_PRICES_DESCRIPTION, propagateFromInvoice } from "../lib/priceUpdate.js";
 import { documentTypes, invoiceStatuses } from "@hisaabo/shared";
 
 const INVOICE_STATUS = invoiceStatuses;
@@ -114,8 +115,10 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
         .describe("Round-off adjustment for the total, e.g. '0.50' or '-0.25' (typically small). Default '0'."),
       reference_document_id: z.string().uuid().optional()
         .describe("UUID of a source document (e.g. quotation UUID when converting quote to invoice)."),
+      update_item_prices: z.boolean().optional().describe(UPDATE_ITEM_PRICES_DESCRIPTION),
     },
     wrapTool(async (input) => {
+      const lineItems = await toApiLineItems(client, input.line_items);
       const invoice = await client.invoice.create({
         partyId: input.party_id,
         type: input.type,
@@ -128,12 +131,17 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
         invoiceDiscountType: input.invoice_discount_type,
         roundOff: input.round_off,
         referenceDocumentId: input.reference_document_id,
-        lineItems: await toApiLineItems(client, input.line_items),
+        lineItems,
       });
+      // The invoice is saved. Updating the saved item prices is a second, independent write:
+      // its outcome rides along and never turns a saved invoice into an error.
+      const itemPriceUpdate = input.update_item_prices
+        ? await propagateFromInvoice(client, { id: invoice.id, documentType: invoice.documentType, type: invoice.type }, lineItems)
+        : undefined;
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(invoice, null, 2),
+          text: JSON.stringify(itemPriceUpdate ? { ...invoice, itemPriceUpdate } : invoice, null, 2),
         }],
       };
     })
@@ -188,9 +196,12 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
         .describe("Whether invoice_discount is a flat amount or percentage."),
       round_off: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional()
         .describe("Updated round-off adjustment."),
+      update_item_prices: z.boolean().optional()
+        .describe(`${UPDATE_ITEM_PRICES_DESCRIPTION} Only meaningful together with line_items.`),
     },
     wrapTool(async (input) => {
       const { invoice_id, ...fields } = input;
+      const lineItems = fields.line_items ? await toApiLineItems(client, fields.line_items) : undefined;
       const invoice = await client.invoice.update({
         id: invoice_id,
         invoiceDate: fields.invoice_date,
@@ -200,12 +211,15 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
         invoiceDiscount: fields.invoice_discount,
         invoiceDiscountType: fields.invoice_discount_type,
         roundOff: fields.round_off,
-        lineItems: fields.line_items ? await toApiLineItems(client, fields.line_items) : undefined,
+        lineItems,
       });
+      const itemPriceUpdate = fields.update_item_prices
+        ? await propagateFromInvoice(client, { id: invoice.id, documentType: invoice.documentType, type: invoice.type }, lineItems)
+        : undefined;
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(invoice, null, 2),
+          text: JSON.stringify(itemPriceUpdate ? { ...invoice, itemPriceUpdate } : invoice, null, 2),
         }],
       };
     })

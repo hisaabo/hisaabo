@@ -30,6 +30,8 @@ export const stub = {
    * with no entry never calls `onSuccess` (the historic behaviour of this stub).
    */
   mutationResults: {} as Record<string, unknown>,
+  /** What `mutateAsync` resolves to (or throws), keyed "<router>.<proc>"; absent = resolves `undefined`. */
+  mutationHandlers: {} as Record<string, (input: unknown) => unknown>,
   /**
    * Answers for `useUtils()` calls, keyed "<router>.<proc>" for `utils.<router>.<proc>.fetch(...)`
    * and "client.<router>.<proc>" for the vanilla client (`utils.client.<router>.<proc>.mutate/query(...)`).
@@ -44,6 +46,7 @@ export const stub = {
     for (const k of Object.keys(this.data)) delete this.data[k];
     for (const k of Object.keys(this.mutations)) delete this.mutations[k];
     for (const k of Object.keys(this.mutationResults)) delete this.mutationResults[k];
+    for (const k of Object.keys(this.mutationHandlers)) delete this.mutationHandlers[k];
     for (const k of Object.keys(this.handlers)) delete this.handlers[k];
     for (const k of Object.keys(this.utilCalls)) delete this.utilCalls[k];
     for (const k of Object.keys(this.params)) delete this.params[k];
@@ -113,7 +116,9 @@ const node = (path: string[]): unknown =>
               },
               mutateAsync: (args: unknown) => {
                 record(key, args);
-                return Promise.resolve(undefined);
+                // a handler may return a result or throw (-> a rejected promise)
+                const handler = stub.mutationHandlers[key];
+                return Promise.resolve().then(() => (handler ? handler(args) : undefined));
               },
               isPending: false,
             };

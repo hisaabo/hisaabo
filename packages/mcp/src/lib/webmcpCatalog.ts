@@ -44,6 +44,12 @@ export interface WebMcpCatalogEntry {
    * when the MCP tier is destructive/admin but the browser variant is not.
    */
   narrowed?: string;
+  /**
+   * An MCP input the browser tool deliberately does not offer (the tool itself is
+   * exposed at the same tier). Documentation with a test behind it: the
+   * catalog-contract test checks the browser schema really lacks it.
+   */
+  omits?: Readonly<Record<string, string>>;
 }
 
 /** Tools that exist only in the browser: orientation and navigation, no network. */
@@ -160,7 +166,13 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
 
   // invoices
   invoice_list: EXPOSED,
-  invoice_create: EXPOSED,
+  invoice_create: {
+    webmcp: "exposed",
+    omits: {
+      updateItemPrices:
+        "MCP's update_item_prices also rewrites catalog prices after the invoice saves. The browser confirmation dialog shows one write (the invoice), so a second hidden write would go unconfirmed; the user answers the \"Update saved prices?\" prompt in the invoice form, or an agent calls item_update (planned) and gets its own confirmation.",
+    },
+  },
   invoice_get: EXPOSED,
   invoice_update: excluded("rewrites-posted-document"),
   invoice_update_status: {

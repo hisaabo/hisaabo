@@ -17,6 +17,7 @@ import type { WebMcpToolDefinition } from "../types";
 interface CatalogEntry {
   webmcp: string;
   narrowed?: string;
+  omits?: Record<string, string>;
 }
 interface ToolMetaEntry {
   tier: "read" | "write" | "admin";
@@ -101,6 +102,23 @@ describe("WebMCP tools vs the exposure catalog", () => {
         expect(NARROWING_CHECKS[def.name], `${def.name} needs a narrowing check in this file`).toBeDefined();
         NARROWING_CHECKS[def.name](def);
       }
+    }
+  });
+
+  it("a declared omitted MCP input is really absent from the browser tool, and explained", () => {
+    // MCP invoice_create can also rewrite catalog prices (update_item_prices); the browser tool must not,
+    // because its confirmation dialog shows one write and the price update would be a second, unconfirmed one.
+    expect(Object.keys(catalog.invoice_create.omits ?? {})).toEqual(["updateItemPrices"]);
+    expect(catalog.invoice_create.omits!.updateItemPrices).toMatch(/second|unconfirmed|confirm/i);
+    const create = webMcpTools.find((t) => t.name === "invoice_create")!;
+    const props = Object.keys(create.inputSchema.properties ?? {});
+    expect(props).not.toContain("updateItemPrices");
+    expect(props).not.toContain("update_item_prices");
+    expect(create.description).not.toMatch(/update_item_prices|updateItemPrices/);
+    for (const [name, entry] of Object.entries(catalog)) {
+      if (!entry.omits) continue;
+      expect(entry.webmcp, `${name} declares omitted inputs, so it must be exposed`).toBe("exposed");
+      for (const [input, why] of Object.entries(entry.omits)) expect(why.length, `${name}.${input}`).toBeGreaterThan(20);
     }
   });
 
