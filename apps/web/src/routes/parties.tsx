@@ -246,8 +246,17 @@ function PartiesPage() {
                 <th
                   className="text-right cursor-pointer select-none hover:text-text-primary transition-colors"
                   onClick={() => toggleSort("balance")}
+                  title="Sorts by the signed balance: positive = they owe you, negative = you owe them"
                 >
-                  Balance {sortBy === "balance" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                  Balance{" "}
+                  {sortBy === "balance" && (
+                    <span className="text-brand-600">
+                      {sortDir === "asc" ? "↑" : "↓"}
+                      <span className="ml-1 text-[11px] font-normal text-text-tertiary">
+                        {sortDir === "asc" ? "most payable first" : "most receivable first"}
+                      </span>
+                    </span>
+                  )}
                 </th>
                 <th></th>
               </tr>
