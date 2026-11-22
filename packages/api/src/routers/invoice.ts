@@ -12,6 +12,7 @@ import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 
 // Reverse the stock (and purchase ITC) impact an invoice had at creation.
 // Shared by delete and cancel so both undo exactly the same effects.
@@ -42,6 +43,13 @@ async function reverseInvoiceEffects(
         eq(itcLedgerEntries.businessId, businessId),
         inArray(itcLedgerEntries.status, ["available", "blocked"]),
       ));
+  }
+
+  // These routes accept any document id, so a purchase-side reversal (purchase return, purchase
+  // debit note, credit note / sales return raised from a purchase invoice) can be cancelled or
+  // deleted here too: its negative ITC entry goes with it, as in the document routers.
+  if (isPurchaseReversal(inv.documentType, inv.type)) {
+    await removePurchaseReversalItc(tx, businessId, inv);
   }
 }
 
@@ -954,6 +962,25 @@ export const invoiceRouter = router({
           .set(updates)
           .where(eq(invoices.id, input.id))
           .returning();
+
+        // A purchase-side reversal's negative ITC entry carries its tax, party and date: record it
+        // again from the saved document so an edit never leaves it stale.
+        if (result && isPurchaseReversal(result.documentType, result.type)) {
+          await removePurchaseReversalItc(tx, ctx.businessId, result);
+          const savedLines = await tx.select({ taxAmount: invoiceItems.taxAmount })
+            .from(invoiceItems)
+            .where(eq(invoiceItems.invoiceId, result.id));
+          await recordPurchaseReversalItc(tx, {
+            businessId: ctx.businessId,
+            documentId: result.id,
+            documentType: result.documentType,
+            type: result.type,
+            partyId: result.partyId,
+            documentDate: result.invoiceDate,
+            taxTotal: result.taxAmount,
+            lineTaxes: savedLines.map((l) => l.taxAmount),
+          });
+        }
 
         return result;
       });
