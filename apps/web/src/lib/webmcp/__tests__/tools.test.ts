@@ -509,8 +509,25 @@ describe("invoice tools", () => {
     expect(client.invoice.updateStatus.mutate).toHaveBeenCalledTimes(1);
   });
 
-  it("warns in its description that cancelling is hard to undo", () => {
-    expect(tool("invoice_update_status").description).toMatch(/hard to undo/i);
+  it("cannot void an invoice: 'cancelled' is neither offered nor accepted", async () => {
+    const def = tool("invoice_update_status");
+    expect(def.inputSchema.properties?.status?.enum).not.toContain("cancelled");
+    expect(def.inputSchema.properties?.status?.enum).toEqual(["draft", "unfulfilled", "sent", "paid", "partial", "overdue"]);
+
+    await expect(def.execute({ invoiceId: UUID_A, status: "cancelled" }, ctx)).rejects.toThrow(
+      /not available to browser agents/i,
+    );
+    expect(client.invoice.updateStatus.mutate).not.toHaveBeenCalled();
+  });
+
+  it("tells the agent to hand cancellation back to the user, not how to do it", () => {
+    const description = tool("invoice_update_status").description;
+    expect(description).toMatch(/cannot cancel or void/i);
+    expect(description).not.toMatch(/void one with/i);
+  });
+
+  it("still lets invoice_list filter by cancelled (a read)", () => {
+    expect(tool("invoice_list").inputSchema.properties?.status?.items?.enum).toContain("cancelled");
   });
 });
 

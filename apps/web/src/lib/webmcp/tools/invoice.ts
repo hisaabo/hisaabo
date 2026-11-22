@@ -46,9 +46,9 @@ const DOCUMENT_TYPES = [
 ] as const;
 
 /**
- * Statuses accepted by `invoice.list` and `invoice.updateStatus`. The stored
- * enum also has "adjusted", but that one is computed from credit notes rather
- * than set by hand, so it is not offered as an input.
+ * Statuses accepted by `invoice.list`. The stored enum also has "adjusted", but
+ * that one is computed from credit notes rather than set by hand, so it is not
+ * offered as an input.
  */
 const INVOICE_STATUSES = [
   "draft",
@@ -59,6 +59,16 @@ const INVOICE_STATUSES = [
   "overdue",
   "cancelled",
 ] as const;
+
+/**
+ * Statuses a browser agent may SET with `invoice_update_status`. "cancelled"
+ * voids the document (removes it from receivables, hard to undo) and is a
+ * destructive tier in the MCP server, so the browser variant does not offer it:
+ * voiding stays a deliberate click in the Invoices page. That is what keeps this
+ * tool non-destructive, matching its annotations and the webmcpCatalog entry.
+ * Filtering a list BY "cancelled" is read-only and stays in INVOICE_STATUSES.
+ */
+const SETTABLE_STATUSES = INVOICE_STATUSES.filter((s) => s !== "cancelled");
 
 const DISCOUNT_TYPES = ["amount", "percent"] as const;
 
@@ -260,17 +270,17 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
   name: "invoice_update_status",
   title: "Change invoice status",
   description: [
-    "Move one invoice to a new status. Use it to mark an invoice 'sent' once it has gone to the customer, to put a mistaken invoice back to 'draft', or to void one with 'cancelled'.",
+    "Move one invoice to a new status. Use it to mark an invoice 'sent' once it has gone to the customer, or to put a mistaken invoice back to 'draft'.",
     "Do not use it to mark an invoice paid: record the money with payment_create, which sets 'paid' or 'partial' itself from the amounts. Forcing 'paid' here leaves the payment ledger wrong.",
-    "'cancelled' is hard to undo — it voids the document, removes it from receivables, and the usual accounting fix afterwards is a fresh invoice or a credit note rather than flipping the status back. Confirm with the user before cancelling.",
+    "This tool cannot cancel or void an invoice — that is deliberately not available to browser agents. If the user wants an invoice cancelled, open it with app_navigate and tell them to cancel it in the Invoices page.",
     "Example: { invoiceId: '3f1c…', status: 'sent' } → { id, invoiceNumber: 'INV-0042', status: 'sent' }",
   ].join(" "),
   inputSchema: objectSchema(
     {
       invoiceId: uuid("Invoice UUID from invoice_list or invoice_create."),
       status: oneOf(
-        INVOICE_STATUSES,
-        "New status. 'sent' = delivered to the customer. 'draft' = back to editable. 'cancelled' = voided (hard to undo). 'unfulfilled' = accepted but not yet delivered. Prefer payment_create over setting 'paid' or 'partial'.",
+        SETTABLE_STATUSES,
+        "New status. 'sent' = delivered to the customer. 'draft' = back to editable. 'unfulfilled' = accepted but not yet delivered. Prefer payment_create over setting 'paid' or 'partial'. Cancelling is not offered.",
       ),
     },
     ["invoiceId", "status"],
@@ -279,9 +289,14 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
   requires: { resource: "Invoice", action: "update" },
   execute: async (input, ctx) => {
     const id = str(input.invoiceId);
-    const status = enumOf(input.status, INVOICE_STATUSES);
     if (!id) throw new Error("invoiceId is required.");
-    if (!status) throw new Error(`status must be one of: ${INVOICE_STATUSES.join(", ")}.`);
+    if (input.status === "cancelled") {
+      throw new Error(
+        "Cancelling an invoice is not available to browser agents. Ask the user to cancel it from the Invoices page; app_navigate can open it for them.",
+      );
+    }
+    const status = enumOf(input.status, SETTABLE_STATUSES);
+    if (!status) throw new Error(`status must be one of: ${SETTABLE_STATUSES.join(", ")}.`);
     return await ctx.client.invoice.updateStatus.mutate({ id, status });
   },
 };
