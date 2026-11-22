@@ -19,7 +19,7 @@ import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
+import { controlDb, getTenantDb, withDedicatedTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
@@ -2240,23 +2240,28 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
       .from(tenants)
       .where(eq(tenants.status, "active"));
 
-    let resolvedDb: Awaited<ReturnType<typeof getTenantDb>> | undefined;
+    // The scan touches every tenant, so each probe uses its own one-connection
+    // client (closed straight away) rather than cycling every tenant through the
+    // shared pool cache. Only the owning tenant then gets a cached pool.
+    let ownerTenantId: string | undefined;
     for (const t of activeTenants) {
-      const tdb = await getTenantDb(t.id);
-      const [biz] = await tdb
-        .select({ id: businesses.id })
-        .from(businesses)
-        .where(eq(businesses.id, businessId))
-        .limit(1);
-      if (biz) {
-        resolvedDb = tdb;
+      const found = await withDedicatedTenantDb(t.id, async (tdb) => {
+        const [biz] = await tdb
+          .select({ id: businesses.id })
+          .from(businesses)
+          .where(eq(businesses.id, businessId))
+          .limit(1);
+        return Boolean(biz);
+      });
+      if (found) {
+        ownerTenantId = t.id;
         break;
       }
     }
-    if (!resolvedDb) {
+    if (!ownerTenantId) {
       return c.json({ error: "Business not found" }, 404);
     }
-    db = resolvedDb;
+    db = await getTenantDb(ownerTenantId);
   }
 
   let eventTime = new Date();
