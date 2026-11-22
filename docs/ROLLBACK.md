@@ -3,9 +3,9 @@
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
 **Last updated**: 2026-11-22
-**Applies to**: self-hosted migrations 0000 through 0023 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0010) migration sets; the equivalents for 0014-0023 are listed in section 3.
+**Applies to**: self-hosted migrations 0000 through 0028 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0010) and tenant (`drizzle-tenant`, 0000-0013) migration sets; the equivalents for 0014-0028 are listed in section 3.
 
-Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
+Downgrading the application from v0.10.1 to v0.10.0, or from v0.10.0 to v0.9.0, needs no reverse SQL; see [Downgrading to v0.10.0](#downgrading-to-v0100) and [Downgrading to v0.9.0](#downgrading-to-v090).
 
 ---
 
@@ -13,6 +13,11 @@ Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Do
 
 | Migration | Name | Risk | Data Loss | Recommended Strategy |
 |-----------|------|------|-----------|---------------------|
+| 0028 | Cache triggers re-installed with `webmcp_disabled` in the `tenants` trigger column list (v0.10.1) | Low | None | Leave in place; if you drop 0027's column, re-create the trigger first (see section 3) |
+| 0027 | `tenants.webmcp_disabled` (v0.10.1) | Low | The organization owners' browser-agent switch | Leave in place (older code ignores it) |
+| 0026 | `idempotency_keys` table (v0.10.1) | Low | Idempotency keys (they live 15 minutes) | Leave in place (older code ignores it) |
+| 0025 | `audit_log.source` (v0.10.1) | Low | The recorded origin (`webmcp` / `mcp`) of audit entries | Leave in place (older code ignores it) |
+| 0024 | System accounts 4020, 5020, 5030, 2900 in `chart_of_accounts` (v0.10.1, data only) | Low | None | Leave in place (older code ignores them) |
 | 0023 | `recurring_invoice_runs.scheduled_for` and its partial unique index (v0.10.1) | Low | That column's values | Leave in place (older code ignores it) |
 | 0022 | Notifications (inbox, outbox, preferences, push devices, push quotas) | Low | Notification inbox and outbox rows, preferences, registered push devices | Leave in place (older code ignores them) |
 | 0021 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
@@ -37,6 +42,8 @@ Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Do
 | 0002 | Feature expansion + ENUMs | **Critical** | Too large for manual rollback | Backup restore only |
 | 0001 | Alt-unit columns | Low | Unit conversion data lost | Backup restore only |
 | 0000 | Initial schema | **Critical** | Everything | Backup restore only |
+
+The v0.10.1 rows (0023-0028 self-hosted) are the same changes as control 0009-0010 and tenant 0010-0013 on a multi-tenant deployment (the mapping is in section 3). All of them are expand-only: on a rollback to v0.10.0 they are **left in place**, no reverse SQL is needed, and the removal script in section 3 is optional.
 
 ---
 
@@ -886,7 +893,7 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 
 ---
 
-### Migrations 0014-0023: Released after v0.9.0
+### Migrations 0014-0028: Released after v0.9.0
 
 | Self-hosted | Control DB | Tenant DB | Change |
 |---|---|---|---|
@@ -900,10 +907,26 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 | 0021 | 0007 (`queue_and_ops`) | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
 | 0022 | 0008 (`notifications`: `notification_preferences`, `push_devices`, `push_quota_usage`, `user_notification_settings`) | 0009 (`notifications`: `notification_inbox`, `notification_outbox`) | The six notification tables (all six in the self-hosted database) |
 | 0023 (v0.10.1) | - | 0010 (`recurring_run_occurrence`) | `recurring_invoice_runs.scheduled_for` and the partial unique index `recurring_run_occurrence_uniq` |
+| 0024 (v0.10.1) | - | 0011 (`ledger_adjustment_accounts`) | Data only: system accounts `4020 Other Charges`, `5020 Discount Allowed`, `5030 Round Off` and `2900 Suspense / Unreconciled` in `chart_of_accounts` for every business that did not already have the code |
+| 0025 (v0.10.1) | - | 0012 (`webmcp_audit_source`) | `audit_log.source` (nullable text: `webmcp`, `mcp` or null) |
+| 0026 (v0.10.1) | - | 0013 (`idempotency_keys`) | The `idempotency_keys` table and its two indexes, behind the opt-in `idempotencyKey` input of `invoice.create` and `payment.create` |
+| 0027 (v0.10.1) | 0009 (`tenant_webmcp_disabled`) | - | `tenants.webmcp_disabled` (boolean, default false NOT NULL) |
+| 0028 (v0.10.1) | 0010 (`webmcp_cache_invalidation_triggers`) | - | Re-installs `hisaabo_cache_notify()` and every cache trigger; the only change is that `hisaabo_cache_tenants` now fires on `UPDATE OF status, plan, webmcp_disabled` instead of `UPDATE OF status, plan` |
 
 The migration step also tries to install the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`. If the install fails (for example the role lacks `CREATE` on the database) the step logs `job queue schema NOT installed` and continues; nothing in this release depends on the queue yet.
 
-Everything here is additive: no existing column is dropped, retyped or made `NOT NULL` without a default. Older code ignores the new objects, so the recommended "rollback" is to leave them in place and only change the application image.
+Everything here is additive (expand-only): no existing column is dropped, retyped or made `NOT NULL` without a default. Older code ignores the new objects, so the recommended "rollback" is to leave them in place and only change the application image. That includes every v0.10.1 migration (0023-0028 self-hosted, control 0009-0010, tenant 0010-0013): **they are all left in place on a rollback to v0.10.0, rolling back needs no reverse SQL, and the removal script below is optional.**
+
+#### Downgrading to v0.10.0
+
+All six v0.10.1 migrations are expand-only and are **left in place**: v0.10.0 does not read the new column, table or accounts, and the re-installed cache triggers (0028) fire on a superset of the old columns, which at worst causes one extra, harmless cache invalidation. There is nothing to reverse and no data to restore. Stop `api` and `worker`, set `HISAABO_API_IMAGE` back to `v0.10.0` (see [Rolling a release back](#6-rolling-back-a-release) for the order of frontends and API), and start it. The migration step of v0.10.0 is a no-op on an upgraded database.
+
+What does not come back, or behaves differently on 0.10.0:
+
+- **Opening balances you reviewed or changed under 0.10.1 flip meaning again.** 0.10.1 reads a party's `opening_balance` as one signed number for everyone (positive = they owe you, negative = you owe them), where 0.10.0 showed a bare "Opening Balance" box and added a supplier's purchases to what you typed (a positive supplier opening balance meant you owe the supplier). If, following the review in [UPGRADING.md](UPGRADING.md#corrected-accounting-and-gst-figures), you flipped the sign of any supplier (or customer) opening balance, or entered one with the mobile app's "To receive" / "To pay" selector, that stored number now means the opposite on 0.10.0, and the supplier's balance and statement start from the other side again. After rolling back, re-run the review query from UPGRADING.md and flip the rows you changed under 0.10.1 back, or accept the 0.10.0 reading deliberately. Supplier balances you never touched are unchanged in the database.
+- **Browser-agent (WebMCP) protections and idempotency.** 0.10.0 ignores `tenants.webmcp_disabled`, `audit_log.source` and `idempotency_keys`: an organization's switch is not honoured while you are on 0.10.0, audit entries written meanwhile carry no `source`, and a keyed `invoice.create` or `payment.create` is not de-duplicated (0.10.0 clients never send a key). The stored values are intact and read again on the next upgrade.
+- **Ledger adjustment accounts.** 0.10.1's derived ledger posts an invoice's round-off, invoice-level discount and additional charges to 5030, 5020 and 4020 (and a document that does not add up to 2900). 0.10.0 does not post them, so the trial balance and balance sheet can again be out of balance for invoices that use those fields. The accounts stay in the chart of accounts, unused; do not delete them (a later upgrade posts to them again).
+- **Recurring invoices.** 0.10.0 has the old scheduler: with more than one API replica it can again generate an occurrence twice. The new column and index are ignored, not violated.
 
 #### Downgrading to v0.9.0
 
@@ -922,10 +945,24 @@ What does not come back:
 
 #### Removing the new objects (optional)
 
-Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (marked below). The script below is for a self-hosted database; on a multi-tenant deployment run, in each database, only the statements for objects that the control or tenant migrations in the table above created there. Then remove the matching migration rows from `drizzle.__drizzle_migrations` in each database.
+Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (marked below). Nothing here is needed to run v0.10.0 or v0.10.1: every object is expand-only and rollback leaves it in place. The script below is for a self-hosted database; on a multi-tenant deployment run, in each database, only the statements for objects that the control or tenant migrations in the table above created there. Then remove the matching migration rows from `drizzle.__drizzle_migrations` in each database.
 
 ```sql
 BEGIN;
+-- 0028 / control 0010 (v0.10.1): MUST run before dropping tenants.webmcp_disabled below. The
+-- hisaabo_cache_tenants trigger lists that column (UPDATE OF status, plan, webmcp_disabled), and
+-- Postgres refuses ALTER TABLE tenants DROP COLUMN webmcp_disabled while a trigger depends on it
+-- ("cannot drop column webmcp_disabled of table tenants because other objects depend on it").
+-- Re-create the trigger exactly as migration 0018 / control 0006 defined it. The function
+-- hisaabo_cache_notify() is unchanged between 0018 and 0028, and the other triggers are identical.
+DROP TRIGGER IF EXISTS hisaabo_cache_tenants ON tenants;
+CREATE TRIGGER hisaabo_cache_tenants AFTER UPDATE OF status, plan OR DELETE ON tenants FOR EACH ROW EXECUTE FUNCTION hisaabo_cache_notify('id');
+-- 0027 / control 0009 (v0.10.1). Destructive: resets every organization's browser-agent switch.
+ALTER TABLE tenants DROP COLUMN IF EXISTS webmcp_disabled;
+-- 0026 / tenant 0013 (v0.10.1). Only holds idempotency keys younger than 15 minutes.
+DROP TABLE IF EXISTS idempotency_keys;
+-- 0025 / tenant 0012 (v0.10.1). Destructive: erases the recorded origin (webmcp / mcp) of audit entries.
+ALTER TABLE audit_log DROP COLUMN IF EXISTS source;
 -- 0024 / tenant 0011 (v0.10.1, ledger_adjustment_accounts): data only. It added system accounts
 -- 4020, 5020, 5030 and 2900 to chart_of_accounts; older code ignores them. Leave them in place:
 -- 0.10.1 journals and documents may already post to them, and deleting them breaks nothing but the
