@@ -11,8 +11,17 @@ export {
   provisionTenantDatabase,
   cleanupTenantDatabase,
   scramSha256Verifier,
+  generateTenantDbNames,
   type TenantDbConfig,
+  type TenantDbNames,
 } from "./provision-tenant.js";
+
+// Who may connect to a tenant database (PUBLIC revoked, tenant role granted)
+export {
+  restrictTenantDatabaseAccess,
+  restrictExistingTenantDatabases,
+  type TenantDbAccessReport,
+} from "./tenant-db-access.js";
 
 // Migration-layout startup sanity check (called from API server boot)
 export {

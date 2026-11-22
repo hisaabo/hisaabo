@@ -16,6 +16,7 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/authz.js";
+import { warnIfMultiOrgSelfHosted } from "./lib/tenant-businesses.js";
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
@@ -502,8 +503,11 @@ async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): 
 
 // ── Shared business access check for non-tRPC endpoints ─────────
 // Mirrors the hasBusinessAccess middleware in trpc.ts: verifies the business
-// exists in the tenant DB AND (for self-hosted shared-DB mode) that the
-// business creator is a member of the caller's tenant.
+// exists in the tenant DB AND, only where one database holds several
+// organisations (a self-hosted install with more than one tenant, now or ever),
+// that the business creator is a member of the caller's tenant. On cloud and on
+// a single-organisation install the database is the boundary and the creator
+// check is skipped (lib/tenant-businesses.ts creatorRuleApplies).
 async function verifyBusinessAccess(
   db: Awaited<ReturnType<typeof getTenantDb>>,
   businessId: string,
@@ -2354,6 +2358,12 @@ function notFoundResponse(c: Context) {
     logger.fatal("Refusing to start — fix the bundle/deploy layout and retry");
     process.exit(1);
   }
+}
+
+// A self-hosted database holding more than one organisation isolates them by
+// business-creator membership only (until businesses.tenant_id exists, 0.11.0).
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  void warnIfMultiOrgSelfHosted((msg, data) => logger.warn(data ?? {}, msg));
 }
 
 // ── Cross-process cache invalidation ─────────────────────────

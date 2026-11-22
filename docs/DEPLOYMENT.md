@@ -355,6 +355,28 @@ You can upgrade by only pulling the new image (`docker compose pull && docker co
 - **Invitations need working email.** An invited person signs up by requesting an email sign-in link and then accepts the invitation. Email (`RESEND_API_KEY`) is required in production, as it was in v0.9.0; there is no password sign-up form, and onboarding new people on a server without working email is not supported. For an account that already exists (for example one created with a password under v0.9.0), opening the invitation link while signed in still accepts the invitation on a self-hosted server, where the invitation token counts as proof of the address (not on the cloud). The in-app "accept" button (no link) requires a verified email.
 - **No working email?** Accounts that have a password can use "Sign in with password instead" on the web login page, and operators can print a one-time link with the [break-glass command](#break-glass-sign-in-when-email-is-not-working).
 
+### Tenant databases and roles (multi-tenant)
+
+With `MULTI_TENANT=true` the control database (`CONTROL_DATABASE_URL`: users, sessions, tenants) is separate from one database per tenant, all on the same server (or on the host each `tenants.db_host`/`db_port` names).
+
+| | New tenants (0.10.1 and later) | Tenants created before 0.10.1 |
+|---|---|---|
+| Database | `t_<32 random hex>` | `tenant_<slug, lowercased, at most 40 characters>` |
+| Role (used by the API at runtime) | `t_<same hex>_u`, random password | `tenant_<slug...>_user`, random password |
+
+- **The names are data, not a convention.** They are stored in `tenants.db_name` and `tenants.db_user` (the password, encrypted with `ENCRYPTION_KEY`, in `tenants.db_password`) and every component reads them from there. New names are random and unrelated to the slug (so two organisations with similar names can never collide); do not derive a tenant database from a slug in scripts, read `tenants.db_name`. Nothing is renamed on upgrade.
+- **Who can connect to a tenant database:** the tenant's own role, the role that owns the database (the `CONTROL_DATABASE_URL` role, which creates the database, runs its migrations and is what the admin dashboard, `ops`, `rotate-key` and `backup.sh` use) and superusers. Every other role, including the roles of other tenants, is refused with `permission denied for database`. Provisioning grants `CONNECT`/`TEMPORARY` to the tenant role and revokes them from `PUBLIC` (Postgres grants them to `PUBLIC` on every new database); the migration step repeats this for every database in `tenants` on each start, so databases created by older releases are closed too. See [UPGRADING.md](UPGRADING.md#from-v0100-to-v0101-docker-compose-and-once).
+- **Giving another role access** (BI, monitoring, a separate backup role): grant it explicitly, per database, from the control database. Explicit grants are kept; only `PUBLIC` is revoked:
+
+  ```sql
+  SELECT format('GRANT CONNECT ON DATABASE %I TO %I', db_name, 'bi_reader')
+  FROM tenants WHERE db_name IS NOT NULL \gexec
+  ```
+
+  Postgres has no default privileges for databases, so run it again after new tenants are created. Granting to `PUBLIC` again does not stick (the next start revokes it).
+- **Re-running the access pass by hand:** `docker compose ... exec api node packages/db/dist/migrate.mjs --restrict-tenant-db-access` (multi-tenant only; exit code 1 if any database could not be changed). Run it after restoring a tenant database from a dump, which comes back with default privileges.
+- The control database and the `postgres` maintenance database are not part of this and keep the default `PUBLIC` connect privilege.
+
 ### Admin dashboard
 
 The API image ships a read-only terminal dashboard with platform statistics (tenants, users, businesses, invoices, amount managed, collections, receivables, a 12-month sales chart, per-tenant table, Postgres health) and an Ops Health screen (e-invoicing, recurring invoice runs, bank and GSTR-2B reconciliation, e-way bills, store orders, shipments, recent failures) with an alerts strip that flags failed e-invoices, failed recurring runs, stalled imports, unreachable tenant databases and similar problems. It runs with the plain `node` binary in the image and needs nothing else:
@@ -382,7 +404,7 @@ The Infra screen compares each database's migration tracking table (`drizzle.__d
 
 All personally identifiable data (tenant names and slugs, database names, user emails and names) and where the databases live (each tenant database's host and port, shown as `db-host-<id>:•••`) is masked by default, in the tables, the tenant detail, the `--json` output and inside error messages and the footer (connection errors, `host:port/db` keys, IP addresses, database user names), so output can be shared freely. Add `--reveal` or press `p` in the live view to see the real values.
 
-In multi-tenant deployments it queries each tenant database once per refresh (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+In multi-tenant deployments it queries each tenant database once per refresh (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to connect to the tenant databases (it owns them, see [Tenant databases and roles](#tenant-databases-and-roles-multi-tenant)). A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
 
 **Large multi-tenant installs (hundreds of tenants).** The dashboard shares Postgres' `max_connections` (100 by default) with the live API, so it is built never to hold a connection per tenant:
 

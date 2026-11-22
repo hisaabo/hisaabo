@@ -8,11 +8,11 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, and, gt, isNull, count } from "drizzle-orm";
+import { eq, and, gt, isNull, count, sql } from "drizzle-orm";
 import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
-import { getTenantMemberUserIds, businessTenantScope } from "./tenant-businesses.js";
+import { tenantBusinessScope } from "./tenant-businesses.js";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
 
@@ -158,22 +158,35 @@ export async function enforceOrgCreationLimit(userId: string): Promise<void> {
   }
 }
 
+/** A transaction on a tenant database (what `tenantDb.transaction(async (tx) => ...)` passes in). */
+export type TenantTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
+
 /**
  * Enforce business creation limit.
  * Counts existing businesses in the tenant DB and compares against the plan limit.
+ *
+ * Must be called inside the transaction that inserts the business, before the
+ * insert. A count and an insert in separate transactions let two concurrent
+ * creates both read "0 of 1" and both insert, so on a limited plan this takes a
+ * transaction-scoped advisory lock first (released at COMMIT/ROLLBACK): the
+ * second create waits, then counts the first one's committed row. The lock is
+ * per tenant database; in self-hosted shared-DB mode it also serialises
+ * business creation across tenants, which is rare and cheap.
  */
-export async function enforceBusinessLimit(tenantId: string, tenantDb: TenantDatabase): Promise<void> {
+export async function enforceBusinessLimit(tenantId: string, tx: TenantTx): Promise<void> {
   const plan = await getTenantPlan(tenantId);
   const limits = getLimits(plan);
   if (limits.maxBusinesses === Infinity) return;
 
+  const bizScope = await tenantBusinessScope(tenantId);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('business-create'))`);
+
   // Count only this tenant's businesses. In self-hosted shared-DB mode a bare
   // count would tally every tenant's businesses and wrongly block creation.
-  const memberIds = await getTenantMemberUserIds(tenantId);
-  const [{ count: bizCount }] = await tenantDb
+  const [{ count: bizCount }] = await tx
     .select({ count: count() })
     .from(businesses)
-    .where(businessTenantScope(memberIds));
+    .where(bizScope);
 
   if (bizCount >= limits.maxBusinesses) {
     throw new TRPCError({
