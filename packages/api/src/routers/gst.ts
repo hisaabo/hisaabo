@@ -3,7 +3,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { invoices, businesses } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
-import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson } from "../lib/gst-reports.js";
+import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson, assertGstr1JsonExportable, Gstr1ExportBlockedError } from "../lib/gst-reports.js";
+import { TRPCError } from "@trpc/server";
 import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterWindow } from "../lib/gst-period.js";
@@ -54,6 +55,16 @@ export const gstRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
       const report = await generateGSTR1(ctx.businessId, input.year, input.month, ctx.db);
+
+      // Table 12 cannot be filed with a made-up HSN: refuse the file (not the on-screen report) until fixed.
+      try {
+        assertGstr1JsonExportable(report);
+      } catch (err) {
+        if (err instanceof Gstr1ExportBlockedError) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+        }
+        throw err;
+      }
 
       const [biz] = await ctx.db
         .select({ gstin: businesses.gstin })

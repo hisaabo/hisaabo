@@ -44,6 +44,7 @@ test itself.
 | `18-gstr1-hsn-summary` | GSTR-1 Table 12: one row per HSN + UQC + rate, real UQC, JSON `rt`, CSV section; ties to B2B + B2CS = GSTR-3B 3.1(a); exact quantities | pass |
 | `19-month-windows` | Half-open IST month / quarter windows: GSTR-1, 3B, 9, 2B, CMP-08, ITC period, IRP date, dashboard; 23:59:59.500 and 00:00:00.000 either side of a month and of the FY | pass |
 | `20-eway-bill-hsn` | e-way bill HSN: missing HSN refused per line before the NIC, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
+| `21-gstr1-hsn-missing` | GSTR-1 with a line that has no HSN: JSON export refused with the list to fix, report and CSV flag it; with an HSN everywhere the JSON carries `rt` and the real UQC | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

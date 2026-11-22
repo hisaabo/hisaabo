@@ -28,6 +28,15 @@ export interface GSTR1Note {
   igst: number;
 }
 
+/** One sale line that has no HSN code (`itemId` is null for a line typed in without an item). */
+export interface GSTR1HsnMissingLine {
+  invoiceNumber: string;
+  /** 1-based line number on the invoice */
+  line: number;
+  itemName: string;
+  itemId: string | null;
+}
+
 export interface GSTR1Report {
   period: string; // e.g. "Apr 2025"
   businessGstin: string;
@@ -77,6 +86,10 @@ export interface GSTR1Report {
     igst: number;
     totalValue: number;
   }>;
+  // Sale lines with no HSN code (a typed-in line, or an item that has none). Table 12 files them
+  // under "0000", which is not a real code: the portal JSON export is refused while this list is
+  // not empty, and the CSV flags them. Fix the item (or the line) first.
+  hsnMissing: GSTR1HsnMissingLine[];
   // Credit Notes (sales returns / adjustments reducing output tax)
   creditNotes: GSTR1Note[];
   // Debit Notes (sale-side: additional charges to the buyer, increasing output tax)
@@ -214,7 +227,7 @@ export async function generateGSTR1(
         .from(itemsTable)
         .where(inArray(itemsTable.id, [...allItemIds]))
     : [];
-  const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, i.hsn || "0000"]));
+  const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, i.hsn?.trim() || ""]));
   const itemUnitLookup = new Map(itemHsnData.map((i) => [i.id, i.unit as string | null]));
 
   // Fix 3: State comparison using stateCode (preferred) with text fallback
@@ -234,6 +247,7 @@ export async function generateGSTR1(
   }>();
   // Table 12 rows keyed by HSN + UQC + GST rate (see `hsnRowKey`); the quantity is summed in
   // integer thousandths (stored quantities have three decimals), never as JS floats.
+  const hsnMissing: GSTR1HsnMissingLine[] = [];
   const hsnSummaryMap = new Map<string, {
     hsn: string; description: string; uqc: string; taxRate: number; quantityMilli: bigint;
     taxable: string; totalValue: string; cgst: string; sgst: string; igst: string;
@@ -306,10 +320,13 @@ export async function generateGSTR1(
     }
 
     // Table 12 (HSN summary): the item's HSN, the unit the quantity is in, and the GST rate.
-    for (const li of lineItems) {
-      const itemHsn = li.itemId
-        ? (itemHsnLookup.get(li.itemId) || "0000")
-        : "0000";
+    for (const [lineIdx, li] of lineItems.entries()) {
+      const realHsn = li.itemId ? (itemHsnLookup.get(li.itemId) || "") : "";
+      if (!realHsn) {
+        hsnMissing.push({ invoiceNumber: inv.invoiceNumber, line: (li.sortOrder ?? lineIdx) + 1, itemName: li.itemName, itemId: li.itemId ?? null });
+      }
+      // "0000" stands in for a missing HSN so the totals still tie; see `hsnMissing`
+      const itemHsn = realHsn || "0000";
       // The quantity is in the unit the line was billed in (the base unit when none was chosen).
       const uqc = toUqc(li.selectedUnit ?? (li.itemId ? itemUnitLookup.get(li.itemId) : null));
       const taxRate = parseFloat(li.taxPercent);
@@ -449,6 +466,7 @@ export async function generateGSTR1(
       igst: money.toNumber(e.igst),
       totalValue: money.toNumber(e.totalValue),
     })),
+    hsnMissing,
     creditNotes,
     debitNotes,
     totalTaxableValue: money.toNumber(totalTaxableValue),
@@ -839,7 +857,14 @@ export function gstr1ToCSV(report: GSTR1Report): string {
 
   // HSN summary (Table 12): one row per HSN + UQC + GST rate
   lines.push("HSN - Summary of Outward Supplies (Table 12)");
-  lines.push("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value");
+  if (report.hsnMissing.length > 0) {
+    // The JSON export is refused for these; the CSV carries them, flagged, so nothing is hidden.
+    lines.push(csvRow([`WARNING: ${report.hsnMissing.length} line(s) have no HSN code and are filed under 0000, which is not a real HSN code. Fix them before filing`]));
+    for (const m of report.hsnMissing) {
+      lines.push(csvRow(["NO HSN", m.invoiceNumber, `line ${m.line}`, m.itemName, m.itemId ? "item has no HSN: add it on the item" : "typed in without an item"]));
+    }
+  }
+  lines.push("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag");
   for (const row of report.hsn) {
     lines.push(csvRow([
       row.hsn, row.description, row.uqc, row.quantity, row.taxRate,
@@ -848,6 +873,7 @@ export function gstr1ToCSV(report: GSTR1Report): string {
       // TODO(0.11.0): cess is not modelled on sales lines yet; always 0 until it is.
       "0.00",
       row.totalValue.toFixed(2),
+      row.hsn === "0000" ? "NO HSN" : "",
     ]));
   }
   lines.push("");
@@ -863,4 +889,52 @@ export function gstr1ToCSV(report: GSTR1Report): string {
   lines.push(`Total Invoice Value,${report.totalInvoiceValue.toFixed(2)}`);
 
   return lines.join("\n");
+}
+
+// ── JSON export guard ───────────────────────────────────────────
+
+/** Raised when a GSTR-1 JSON export would carry lines with no HSN code. */
+export class Gstr1ExportBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Gstr1ExportBlockedError";
+  }
+}
+
+/**
+ * Refuse to build the GSTR-1 portal JSON while any sale line has no HSN code: Table 12 would carry
+ * "0000", which is not a real code, and the filing would be wrong or rejected. The message lists
+ * what to fix: items with no HSN (with the invoices that sold them) and lines typed in without an
+ * item. The on-screen report and the CSV are not blocked; they show the lines, flagged.
+ */
+export function assertGstr1JsonExportable(report: GSTR1Report): void {
+  if (report.hsnMissing.length === 0) return;
+  const MAX_SHOWN = 10;
+  const byItem = new Map<string, { name: string; where: string[] }>();
+  const typedIn: string[] = [];
+  for (const m of report.hsnMissing) {
+    const where = `${m.invoiceNumber} line ${m.line}`;
+    if (!m.itemId) {
+      typedIn.push(`${where} ('${m.itemName}')`);
+      continue;
+    }
+    const entry = byItem.get(m.itemId) ?? { name: m.itemName, where: [] };
+    entry.where.push(where);
+    byItem.set(m.itemId, entry);
+  }
+  const parts: string[] = [];
+  const items = [...byItem.values()];
+  if (items.length > 0) {
+    const shown = items.slice(0, MAX_SHOWN).map((e) => `'${e.name}' (${e.where.join(", ")})`);
+    const more = items.length > MAX_SHOWN ? `, and ${items.length - MAX_SHOWN} more` : "";
+    parts.push(`add the HSN on these items: ${shown.join("; ")}${more}`);
+  }
+  if (typedIn.length > 0) {
+    const shown = typedIn.slice(0, MAX_SHOWN).join(", ");
+    const more = typedIn.length > MAX_SHOWN ? `, and ${typedIn.length - MAX_SHOWN} more` : "";
+    parts.push(`these lines were typed in without an item and cannot carry an HSN: ${shown}${more}; bill a catalogue item with an HSN instead`);
+  }
+  throw new Gstr1ExportBlockedError(
+    `Cannot export GSTR-1 JSON for ${report.period}: ${report.hsnMissing.length} line(s) have no HSN code, and Table 12 cannot be filed with a made-up one. To fix: ${parts.join(". Also ")}. The on-screen report and the CSV still show these lines under HSN 0000, flagged.`,
+  );
 }

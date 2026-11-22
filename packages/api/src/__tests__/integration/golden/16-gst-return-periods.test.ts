@@ -79,8 +79,10 @@ describe.each([4, 1, 7] as const)("golden 16: GST return periods, books start in
       stateCode: "27",
       openingBalance: "0",
     });
+    // a real HSN on every line: the GSTR-1 JSON export is refused for a line without one
+    const goods = await w.caller.item.create({ name: "Goods", hsn: "730890", unit: "pcs", taxPercent: "18" });
     for (const s of SALES) {
-      await addInvoice(w, "sale", buyer.id, [{ name: "Goods", qty: s.qty, price: s.price, tax: "18" }], { date: s.date });
+      await addInvoice(w, "sale", buyer.id, [{ name: "Goods", qty: s.qty, price: s.price, tax: "18", itemId: goods.id }], { date: s.date });
     }
   });
 

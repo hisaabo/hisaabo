@@ -46,6 +46,7 @@ const DATE = (day: string) => `2026-01-${day}T12:00:00.000Z`;
 
 describe("golden 18: GSTR-1 Table 12, one row per HSN + UQC + rate", () => {
   let w: GoldenWorld;
+  let packingInvoiceNumber: string;
 
   beforeAll(async () => {
     w = await createGoldenWorld();
@@ -67,10 +68,10 @@ describe("golden 18: GSTR-1 Table 12, one row per HSN + UQC + rate", () => {
       { name: "Steel Rods", itemId: steel, qty: "2.5", price: "100.00", tax: "5" },
       { name: "Cotton", itemId: cotton, qty: "1", price: "5.80", tax: "5" },
     ], { date: DATE("11") });
-    await addInvoice(w, "sale", b2cKa, [
+    packingInvoiceNumber = (await addInvoice(w, "sale", b2cKa, [
       { name: "Steel Rods", itemId: steel, qty: "1", price: "100.00", tax: "18" },
       { name: "Packing", qty: "1", price: "10.00", tax: "0" },
-    ], { date: DATE("12") });
+    ], { date: DATE("12") })).invoiceNumber;
     await addInvoice(w, "sale", b2bKa, [
       { name: "Cotton", itemId: cotton, qty: "10", price: "100.00", tax: "12" },
     ], { date: DATE("13") });
@@ -153,17 +154,11 @@ describe("golden 18: GSTR-1 Table 12, one row per HSN + UQC + rate", () => {
     expect(b.outwardSupplies.taxable).toEqual({ taxableValue: 3415.8, cgst: 122.65, sgst: 122.64, igst: 138 });
   });
 
-  it("the portal JSON carries rt and the real UQC on every row", async () => {
-    const r = await w.caller.gst.gstr1Json({ year: 2026, month: 1 });
-    const hsn = (r.json as { hsn: { data: Array<Record<string, unknown>> } }).hsn.data;
-    expect(hsn.map((h) => [h.num, h.hsn_sc, h.uqc, h.qty, h.rt, h.txval, h.camt, h.samt, h.iamt, h.csamt])).toEqual([
-      [1, "0000", "NOS", 1, 0, 10, 0, 0, 0, 0],
-      [2, "5208", "MTR", 1, 5, 5.8, 0.15, 0.14, 0, 0],
-      [3, "5208", "MTR", 10, 12, 1000, 0, 0, 120, 0],
-      [4, "730890", "GMS", 500, 5, 50, 1.25, 1.25, 0, 0],
-      [5, "730890", "KGS", 12.5, 5, 1250, 31.25, 31.25, 0, 0],
-      [6, "730890", "KGS", 5, 18, 1100, 90, 90, 18, 0],
-    ]);
+  it("the portal JSON export is refused while a line has no HSN (the typed-in Packing line); golden 21 covers the rule", async () => {
+    await expect(w.caller.gst.gstr1Json({ year: 2026, month: 1 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining(`${packingInvoiceNumber} line 2 ('Packing')`),
+    });
   });
 
   it("the CSV has the HSN section with the rate and UQC", async () => {
@@ -173,14 +168,17 @@ describe("golden 18: GSTR-1 Table 12, one row per HSN + UQC + rate", () => {
     expect(at).toBeGreaterThan(-1);
     // every cell of a data row is quoted (CSV formula-injection guard); the header is plain
     const row = (...cells: string[]) => cells.map((c) => `"${c}"`).join(",");
-    expect(lines.slice(at + 1, at + 8)).toEqual([
-      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value",
-      row("0000", "Packing", "NOS", "1", "0", "10.00", "0.00", "0.00", "0.00", "0.00", "10.00"),
-      row("5208", "Cotton", "MTR", "1", "5", "5.80", "0.15", "0.14", "0.00", "0.00", "6.09"),
-      row("5208", "Cotton", "MTR", "10", "12", "1000.00", "0.00", "0.00", "120.00", "0.00", "1120.00"),
-      row("730890", "Steel Rods", "GMS", "500", "5", "50.00", "1.25", "1.25", "0.00", "0.00", "52.50"),
-      row("730890", "Steel Rods", "KGS", "12.5", "5", "1250.00", "31.25", "31.25", "0.00", "0.00", "1312.50"),
-      row("730890", "Steel Rods", "KGS", "5", "18", "1100.00", "90.00", "90.00", "18.00", "0.00", "1298.00"),
+    expect(lines.slice(at + 1, at + 10)).toEqual([
+      // the typed-in Packing line has no HSN: flagged, not hidden
+      row("WARNING: 1 line(s) have no HSN code and are filed under 0000, which is not a real HSN code. Fix them before filing"),
+      row("NO HSN", packingInvoiceNumber, "line 2", "Packing", "typed in without an item"),
+      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
+      row("0000", "Packing", "NOS", "1", "0", "10.00", "0.00", "0.00", "0.00", "0.00", "10.00", "NO HSN"),
+      row("5208", "Cotton", "MTR", "1", "5", "5.80", "0.15", "0.14", "0.00", "0.00", "6.09", ""),
+      row("5208", "Cotton", "MTR", "10", "12", "1000.00", "0.00", "0.00", "120.00", "0.00", "1120.00", ""),
+      row("730890", "Steel Rods", "GMS", "500", "5", "50.00", "1.25", "1.25", "0.00", "0.00", "52.50", ""),
+      row("730890", "Steel Rods", "KGS", "12.5", "5", "1250.00", "31.25", "31.25", "0.00", "0.00", "1312.50", ""),
+      row("730890", "Steel Rods", "KGS", "5", "18", "1100.00", "90.00", "90.00", "18.00", "0.00", "1298.00", ""),
     ]);
   });
 });

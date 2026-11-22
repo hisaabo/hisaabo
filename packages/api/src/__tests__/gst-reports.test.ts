@@ -39,7 +39,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { gstr1ToCSV, gstr1ToPortalJson, toUqc, type GSTR1Report } from "../lib/gst-reports.js";
+import { gstr1ToCSV, gstr1ToPortalJson, toUqc, assertGstr1JsonExportable, Gstr1ExportBlockedError, type GSTR1Report } from "../lib/gst-reports.js";
 import { units } from "@hisaabo/shared";
 
 // =============================================================================
@@ -628,6 +628,7 @@ function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     b2cLarge: [],
     b2cSmall: [],
     hsn: [],
+    hsnMissing: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -921,6 +922,7 @@ function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     b2cLarge: [],
     b2cSmall: [],
     hsn: [],
+    hsnMissing: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -1626,8 +1628,65 @@ describe("Table 12 rows in the portal JSON and the CSV", () => {
     const lines = csv.split("\n");
     const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
     expect(at).toBeGreaterThan(-1);
-    expect(lines[at + 1]).toBe("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value");
-    expect(lines[at + 2]).toBe(`"730890","'=1+1","KGS","12.5","5","1250.00","31.25","31.25","0.00","0.00","1312.50"`);
-    expect(lines[at + 3]).toBe(`"730890","Steel Rods","KGS","5","18","1100.00","90.00","90.00","18.00","0.00","1298.00"`);
+    expect(lines[at + 1]).toBe("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag");
+    expect(lines[at + 2]).toBe(`"730890","'=1+1","KGS","12.5","5","1250.00","31.25","31.25","0.00","0.00","1312.50",""`);
+    expect(lines[at + 3]).toBe(`"730890","Steel Rods","KGS","5","18","1100.00","90.00","90.00","18.00","0.00","1298.00",""`);
+  });
+});
+
+describe("a GSTR-1 JSON export is refused while a line has no HSN", () => {
+  const missing = (n: number, itemId: string | null, name: string, invoice = "INV-1") =>
+    ({ invoiceNumber: invoice, line: n, itemName: name, itemId });
+
+  it("nothing missing: allowed", () => {
+    expect(() => assertGstr1JsonExportable(makePortalReport())).not.toThrow();
+  });
+
+  it("groups the lines of one item, lists typed-in lines separately, and says how to fix each", () => {
+    const report = makePortalReport({
+      period: "Jan 2026",
+      hsnMissing: [
+        missing(1, "item-a", "Copper Wire", "INV-1"),
+        missing(2, null, "Packing", "INV-1"),
+        missing(1, "item-a", "Copper Wire", "INV-7"),
+      ],
+    });
+    expect(() => assertGstr1JsonExportable(report)).toThrow(Gstr1ExportBlockedError);
+    expect(() => assertGstr1JsonExportable(report)).toThrow(
+      "Cannot export GSTR-1 JSON for Jan 2026: 3 line(s) have no HSN code, and Table 12 cannot be filed with a made-up one. " +
+        "To fix: add the HSN on these items: 'Copper Wire' (INV-1 line 1, INV-7 line 1). " +
+        "Also these lines were typed in without an item and cannot carry an HSN: INV-1 line 2 ('Packing'); bill a catalogue item with an HSN instead. " +
+        "The on-screen report and the CSV still show these lines under HSN 0000, flagged.",
+    );
+  });
+
+  it("a long list is cut to ten items and says how many more", () => {
+    const hsnMissing = Array.from({ length: 12 }, (_, i) => missing(1, `item-${i}`, `Item ${i + 1}`, `INV-${i + 1}`));
+    let message = "";
+    try {
+      assertGstr1JsonExportable(makePortalReport({ hsnMissing }));
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("12 line(s) have no HSN code");
+    expect(message).toContain("'Item 10' (INV-10 line 1)");
+    expect(message).not.toContain("'Item 11'");
+    expect(message).toContain(", and 2 more");
+  });
+
+  it("the CSV lists each missing line, flagged, ahead of the HSN table", () => {
+    const csv = gstr1ToCSV(makeReport({
+      hsn: [{ hsn: "0000", description: "Packing", uqc: "NOS", taxRate: 0, quantity: 1, taxableValue: 10, cgst: 0, sgst: 0, igst: 0, totalValue: 10 }],
+      hsnMissing: [missing(2, null, "Packing", "INV-1"), missing(1, "item-a", "=Copper", "INV-2")],
+    }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(lines.slice(at + 1, at + 6)).toEqual([
+      `"WARNING: 2 line(s) have no HSN code and are filed under 0000, which is not a real HSN code. Fix them before filing"`,
+      `"NO HSN","INV-1","line 2","Packing","typed in without an item"`,
+      `"NO HSN","INV-2","line 1","'=Copper","item has no HSN: add it on the item"`,
+      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
+      `"0000","Packing","NOS","1","0","10.00","0.00","0.00","0.00","0.00","10.00","NO HSN"`,
+    ]);
   });
 });

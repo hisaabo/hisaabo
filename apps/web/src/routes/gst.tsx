@@ -8,6 +8,7 @@ import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { MissingHsnWarning } from "@/components/reports/MissingHsnWarning";
 import { Combobox } from "@/components/ui/Combobox";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -166,6 +167,8 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
 
   return (
     <div className="space-y-5">
+      <MissingHsnWarning lines={data.hsnMissing} />
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Invoice Count" value={data.invoiceCount} />
