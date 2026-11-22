@@ -54,6 +54,25 @@ describe("Invoice detail panel", () => {
     expect(within(panel).queryByRole("link", { name: "Custom charge" })).toBeNull();
   });
 
+  it("warns when the IRN is cancelled but the invoice is still active, and only then", () => {
+    stub.search = { id: "inv-1" };
+    const open = (extra: Record<string, unknown>) => {
+      const inv = { ...invoice([]), ...extra };
+      stub.data["invoice.list"] = { data: [inv], total: 1 };
+      stub.data["invoice.getById"] = inv;
+      return render(<Invoices />);
+    };
+
+    const stuck = open({ eInvoiceStatus: "cancelled", status: "sent" });
+    const panel = screen.getByRole("dialog", { name: "Invoice INV-001" });
+    expect(within(panel).getByRole("alert")).toHaveTextContent(/IRN\) for this invoice is cancelled, but the invoice is still active/);
+    expect(within(panel).getByRole("alert")).toHaveTextContent(/Cancel invoice/);
+    stuck.unmount();
+
+    open({ eInvoiceStatus: "cancelled", status: "cancelled" });
+    expect(within(screen.getByRole("dialog", { name: "Invoice INV-001" })).queryByRole("alert")).toBeNull();
+  });
+
   it("selecting a row pushes ?id= to the URL (so back returns to the invoice)", () => {
     const inv = invoice([]);
     stub.data["invoice.list"] = { data: [inv], total: 1 };

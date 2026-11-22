@@ -911,14 +911,18 @@ describe("eInvoice.cancel also cancels the invoice", () => {
 
   it("an invoice left half-cancelled by 0.10.0 (IRN cancelled, invoice live) is finished by the normal cancel, which never calls the IRP", async () => {
     const { caller, item, invoice } = await generatedSale();
+    const unfinished = async () => (await caller.eInvoice.dashboard({ page: 1, limit: 1 })).unfinishedCancellations;
+    const baseline = await unfinished();
     // The exact state the old code left behind (plus the explanation a failed finish records).
     await getTenantTestDb()
       .update(invoices)
       .set({ eInvoiceStatus: "cancelled", eInvoiceCancelReason: "2", eInvoiceError: "IRN cancelled at the IRP, but the invoice is still active" })
       .where(eq(invoices.id, invoice.id));
     expect(await gstr1Has(invoice.invoiceNumber)).toBe(true);
+    expect(await unfinished()).toBe(baseline + 1); // the dashboard counts it, so it is discoverable
 
     const cancelled = await caller.invoice.updateStatus({ id: invoice.id, status: "cancelled" });
+    expect(await unfinished()).toBe(baseline);
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.eInvoiceError).toBeNull(); // the stale "still active" warning is cleared
     expect(irp.__mockCancelIRN).not.toHaveBeenCalled();

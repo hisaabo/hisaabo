@@ -723,6 +723,20 @@ export const eInvoiceRouter = router({
         }
       }
 
+      // IRN cancelled but the invoice still live: the cancel was never finished (a
+      // release before 0.10.1, or a failure after the IRP succeeded, see `cancel`).
+      const [{ unfinishedCancellations }] = await ctx.db
+        .select({ unfinishedCancellations: sql<number>`count(*)::int` })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.businessId, ctx.businessId),
+            isNull(invoices.deletedAt),
+            eq(invoices.eInvoiceStatus, "cancelled"),
+            sql`${invoices.status} <> 'cancelled'`,
+          ),
+        );
+
       // Invoice list with filters
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
@@ -788,6 +802,7 @@ export const eInvoiceRouter = router({
         page: input.page,
         limit: input.limit,
         counts,
+        unfinishedCancellations,
       };
     }),
 

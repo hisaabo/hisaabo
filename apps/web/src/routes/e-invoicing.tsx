@@ -115,9 +115,32 @@ function DashboardTab() {
   ];
 
   const hasFailed = (counts.failed + counts.pending) > 0;
+  const unfinishedCancellations = data?.unfinishedCancellations ?? 0;
 
   return (
     <div className="space-y-5">
+      {/* Cancelled IRN, invoice still active: the cancel was never finished */}
+      {unfinishedCancellations > 0 && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 flex-wrap rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+        >
+          <span>
+            {unfinishedCancellations === 1
+              ? "1 invoice has a cancelled IRN but is still active"
+              : `${unfinishedCancellations} invoices have a cancelled IRN but are still active`}
+            . They still count in your GST returns, ledger and stock. Finish cancelling them.
+          </span>
+          <button
+            type="button"
+            className="ml-auto text-xs font-medium underline"
+            onClick={() => { setTab("cancelled"); setPage(1); }}
+          >
+            Show them
+          </button>
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[

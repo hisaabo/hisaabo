@@ -559,6 +559,30 @@ describe("E-invoicing page", () => {
     expect(stub.mutations["eInvoice.cancel"]).toEqual([{ invoiceId: "5", cancelReason: "1", cancelRemarks: undefined }]);
   });
 
+  it("warns on the dashboard how many invoices have a cancelled IRN but are still active", () => {
+    stub.data["eInvoice.dashboard"] = {
+      data: [inv("5", "cancelled", "IRN-555", "sent")],
+      total: 1,
+      counts: { generated: 0, pending: 0, failed: 0, cancelled: 1 },
+      unfinishedCancellations: 1,
+    };
+    renderAs("admin", EInvoicing);
+    expect(screen.getByRole("alert")).toHaveTextContent("1 invoice has a cancelled IRN but is still active");
+    fireEvent.click(screen.getByRole("button", { name: "Show them" }));
+    expect(screen.getByRole("button", { name: "Cancelled (1)" }).className).toMatch(/bg-brand-50/);
+  });
+
+  it("shows no warning when there is nothing unfinished", () => {
+    stub.data["eInvoice.dashboard"] = {
+      data: [inv("6", "cancelled", "IRN-666", "cancelled")],
+      total: 1,
+      counts: { generated: 0, pending: 0, failed: 0, cancelled: 1 },
+      unfinishedCancellations: 0,
+    };
+    renderAs("admin", EInvoicing);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("accountant does not get the finish-cancel action", () => {
     stub.data["eInvoice.dashboard"] = {
       data: [inv("5", "cancelled", "IRN-555", "sent")],
