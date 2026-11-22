@@ -307,6 +307,9 @@ export const itcRouter = router({
           eq(itcLedgerEntries.businessId, ctx.businessId),
           eq(itcLedgerEntries.status, "available"),
           isNull(invoices.deletedAt),
+          // Only purchase INVOICES carry the 180-day payment rule (a purchase-side reversal's
+          // negative entry is not credit at risk)
+          eq(invoices.documentType, "invoice"),
           // Invoice older than 150 days
           sql`${invoices.invoiceDate} < NOW() - INTERVAL '150 days'`,
           // Invoice not fully paid: totalAmount - amountPaid > 0
