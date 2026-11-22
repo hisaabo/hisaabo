@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { generateKeyPairSync, publicEncrypt, constants } from "node:crypto";
 import { pkcs1Decrypt } from "./helpers/rsa-pkcs1.js";
-import { mkdtempSync, writeFileSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readdirSync, readFileSync, rmSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -117,10 +117,59 @@ describe("loadIrpPublicKey", () => {
       expect(() => loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: missing })).toThrow(/cannot be read \(ENOENT\)/);
     });
 
+    it("an unreadable file (permission denied)", () => {
+      // root ignores file modes, so there is nothing to deny there.
+      if (process.getuid?.() === 0) return;
+      const file = join(dir, "locked.pem");
+      writeFileSync(file, publicPem);
+      chmodSync(file, 0o000);
+      const err = (() => { try { loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: file }); } catch (e) { return e; } })() as Error;
+      expect(err).toBeInstanceOf(IRPNotConfiguredError);
+      expect(err.message).toMatch(CLEAR);
+      expect(err.message).toContain(`IRP_PUBLIC_KEY_PATH points to ${file}, which cannot be read (EACCES)`);
+    });
+
+    it("a path that is a directory", () => {
+      expect(() => loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: dir })).toThrow(/cannot be read \(EISDIR\)/);
+    });
+
     it("an invalid file", () => {
       const file = join(dir, "bad.pem");
       writeFileSync(file, "not a key");
       expect(() => loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: file })).toThrow(/is set but is not a valid PEM/);
+    });
+
+    it("an empty file", () => {
+      const file = join(dir, "empty.pem");
+      writeFileSync(file, "");
+      expect(() => loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: file })).toThrow(/IRP_PUBLIC_KEY_PATH .* is set but is not a valid PEM/);
+    });
+
+    it("a file with a non-RSA key", () => {
+      const ec = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ type: "spki", format: "pem" }).toString();
+      const file = join(dir, "ec.pem");
+      writeFileSync(file, ec);
+      expect(() => loadIrpPublicKey(false, { IRP_PUBLIC_KEY_PATH: file })).toThrow(/is not an RSA key/);
+    });
+
+    it("a key file that is removed after it was loaded is reported as missing, not served from the cache", () => {
+      const file = join(dir, "vanishing.pem");
+      writeFileSync(file, publicPem);
+      const env = { IRP_PUBLIC_KEY_PATH: file };
+      expect(roundTrips(loadIrpPublicKey(false, env))).toBe(true);
+      rmSync(file);
+      expect(() => loadIrpPublicKey(false, env)).toThrow(/cannot be read \(ENOENT\)/);
+    });
+
+    it("a key file is cached while unchanged and re-read when its content changes", () => {
+      const file = join(dir, "rotating.pem");
+      writeFileSync(file, publicPem);
+      const env = { IRP_PUBLIC_KEY_PATH: file };
+      const first = loadIrpPublicKey(false, env);
+      expect(loadIrpPublicKey(false, env)).toBe(first);
+      const rotated = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ type: "spki", format: "pem" }).toString();
+      writeFileSync(file, rotated);
+      expect(loadIrpPublicKey(false, env)).not.toBe(first);
     });
 
     it("never exposes key material or an opaque OpenSSL message", () => {

@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { createCipheriv, createDecipheriv, generateKeyPairSync, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { resetIrpPublicKeyCache } from "../lib/irp-public-key.js";
 import { pkcs1Decrypt } from "./helpers/rsa-pkcs1.js";
@@ -20,6 +21,7 @@ import type { TenantDatabase } from "../trpc.js";
 
 const nic = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const nicPublicPem = nic.publicKey.export({ type: "spki", format: "pem" }).toString();
+const tooSmallPublicPem = readFileSync(new URL("./fixtures/rsa-512-test-only.pub.pem", import.meta.url), "utf8");
 
 const config = {
   id: "cfg", businessId: "b", gstin: "27AABCU9603R1ZM", clientId: "client-id", clientSecret: "client-secret",
@@ -110,8 +112,9 @@ describe("authentication request", () => {
   });
 
   it("a key that cannot encrypt the request (too small) is reported as a key problem", async () => {
-    process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 512 })
-      .publicKey.export({ type: "spki", format: "pem" }).toString();
+    // A committed, public-key-only 512-bit fixture rather than a key generated here: the
+    // test only needs encryption to be refused, never a decryption, so no private half.
+    process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = tooSmallPublicPem;
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     await expect(new IRPClient(config, db).authenticate()).rejects.toThrow(/NIC public key is missing or invalid .*2048 bits/);
