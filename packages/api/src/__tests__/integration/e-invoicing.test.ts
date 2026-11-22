@@ -27,7 +27,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { invoices, eInvoiceConfigs, items as itemsTable, auditLog, paymentAllocations } from "@hisaabo/db";
+import { invoices, eInvoiceConfigs, items as itemsTable, auditLog, paymentAllocations, itcLedgerEntries } from "@hisaabo/db";
 import {
   createTestWorld,
   createParty,
@@ -1117,6 +1117,44 @@ describe("eInvoice.cancel also cancels the invoice", () => {
     await caller.eInvoice.cancel({ invoiceId: doc.id, cancelReason: "2" });
     expect((await row(doc.id)).status).toBe("cancelled");
     expect(await stock(item.id)).toBeCloseTo(10, 3);
+  });
+
+  it("a purchase-side credit note's IRN cancel takes its negative ITC entry away, like every other cancel path", async () => {
+    await setupEInvoiceConfig();
+    const db = getTenantTestDb();
+    const caller = callerForRamesh();
+    // Intra-state supplier (the business is in Maharashtra, 27): 18% on 1000 = CGST 90 + SGST 90.
+    const supplier = await createParty(db, world.business1.id, {
+      name: "Cotton Supplier",
+      type: "supplier",
+      gstin: "27AABCS0000R1ZM",
+      state: "Maharashtra",
+      stateCode: "27",
+      openingBalance: "0.00",
+    });
+    const line = { itemName: "Raw cotton", quantity: "1", unitPrice: "1000.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" };
+    const purchase = await caller.invoice.create({ type: "purchase", partyId: supplier.id, invoiceDate: SALE_DATE, lineItems: [line] });
+    const note = await caller.creditNote.create({
+      type: "purchase",
+      partyId: supplier.id,
+      invoiceDate: SALE_DATE,
+      referenceDocumentId: purchase.id,
+      lineItems: [line],
+    });
+    const entryOf = async (id: string) =>
+      db.select().from(itcLedgerEntries).where(eq(itcLedgerEntries.invoiceId, id));
+
+    expect(await entryOf(note.id)).toHaveLength(1);
+    expect(await entryOf(note.id)).toMatchObject([{ status: "available", cgst: "-90.00", sgst: "-90.00" }]);
+
+    // The IRN is set directly: the IRP flow generates IRNs for sale-side documents only.
+    await db.update(invoices).set({ irn: "C".repeat(64), irnAckDate: new Date(), eInvoiceStatus: "generated" }).where(eq(invoices.id, note.id));
+
+    const result = await caller.eInvoice.cancel({ invoiceId: note.id, cancelReason: "2" });
+    expect(result.status).toBe("cancelled");
+    expect(await entryOf(note.id)).toHaveLength(0);
+    // The purchase's own credit is untouched.
+    expect(await entryOf(purchase.id)).toMatchObject([{ status: "available", cgst: "90.00", sgst: "90.00" }]);
   });
 });
 

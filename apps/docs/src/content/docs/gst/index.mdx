@@ -39,8 +39,8 @@ GST reports are available for **all** businesses — both GST-registered and unr
 | **B2C Large** | Inter-state sale invoices to unregistered parties exceeding ₹2.5 lakh |
 | **B2C Small** | Intra-state and small inter-state sales to unregistered parties, aggregated by tax rate |
 | **HSN Summary** | Total quantity and value sold, broken down by HSN code |
-| **Credit Notes** | Credit note documents issued during the period |
-| **Debit Notes** | Debit note documents issued during the period |
+| **Credit Notes** | Credit notes and sales returns issued from sale invoices during the period (one raised from a purchase invoice reverses the purchase and reduces your input credit instead) |
+| **Debit Notes** | Sale-side debit notes issued during the period (debit notes and returns you raise against a supplier are purchase-side and are **not** outward supplies, so they never appear here) |
 
 See [GSTR-1](/gst/gstr1) for detailed instructions.
 
@@ -50,11 +50,17 @@ See [GSTR-1](/gst/gstr1) for detailed instructions.
 
 | Section | What it contains |
 |---|---|
-| **3.1 Outward Supplies** | Total taxable value and tax broken down by IGST, CGST, SGST |
+| **3.1 Outward Supplies** | Taxable value and tax by IGST, CGST, SGST, **net of the month's credit notes and sales returns and including its sale-side debit notes** |
 | **3.2 Inter-state to unregistered** | State-wise IGST on large inter-state B2C supplies |
-| **4 ITC (Input Tax Credit)** | GST paid on purchase invoices |
-| **Tax Payable** | Total output tax (from sales) |
-| **Net Tax** | Tax payable minus ITC = tax you owe to the government |
+| **4 ITC (Input Tax Credit)** | GST on purchase invoices, **less the GST on purchase returns and purchase-side debit notes** of the month |
+| **Tax Payable** | Output tax (from sales), net of credit notes and including sale-side debit notes |
+| **Net Tax** | Tax payable minus ITC = tax you owe to the government (negative = credit carried forward) |
+
+GSTR-1 lists your invoices at their full value and the notes in their own sections; GSTR-3B nets them, so the two returns differ by the notes of the month, as they should. GST is split into CGST and SGST **line by line**, the same way the e-invoice (IRP) payload does: for each line CGST is half the tax rounded half-up and SGST is the remainder, so an odd paisa on a line goes to CGST (a line with ₹0.29 of GST is CGST ₹0.15 + SGST ₹0.14). The invoice, the books, GSTR-1, GSTR-3B, GSTR-9, the PDF and the e-way bill all use this one rule, so CGST + SGST always equals the tax charged and the sections of GSTR-1 tie to its totals.
+
+:::note[Past months changed in v0.10.1]
+Before v0.10.1, GSTR-3B ignored credit notes, returns and debit notes on the output side, added purchase returns to ITC, and rounded the odd paisa up for both CGST and SGST (a different split from the invoice and the e-invoice). Reports are recomputed every time you open them, so months you have already filed may now show different figures. Compare them with what was filed; see [Upgrading](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md).
+:::
 
 ## CSV export
 

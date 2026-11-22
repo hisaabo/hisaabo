@@ -169,6 +169,13 @@
       "when": 1795337182898,
       "tag": "0023_recurring_run_occurrence",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795339529895,
+      "tag": "0024_ledger_adjustment_accounts",
+      "breakpoints": true
     }
   ]
 }

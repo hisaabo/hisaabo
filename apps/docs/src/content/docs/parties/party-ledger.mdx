@@ -32,18 +32,26 @@ Each row in the ledger represents one transaction. The columns are:
 |---|---|
 | Date | The date of the transaction (invoice date or payment date) |
 | Document | Invoice number or payment number, clickable to open the full record |
-| Type | `Opening Balance`, `Invoice`, or `Payment` |
-| Debit | Money the party owes you (increases outstanding balance) |
-| Credit | Money received or paid (decreases outstanding balance) |
+| Type | `Opening Balance`, `Invoice`, `Credit Note`, `Sales Return`, `Purchase Return`, `Debit Note`, or `Payment` |
+| Debit | Increases what the party owes you (or reduces what you owe them) |
+| Credit | Reduces what the party owes you (or increases what you owe them) |
 | Balance | Running balance after this transaction |
+
+Quotations, proforma invoices and delivery challans are not financial documents: they never appear in the ledger and never change a balance.
 
 ### Opening balance entry
 
 The first row is always the **Opening Balance** entry. This is the balance you entered when creating the party — the amount outstanding before you started using Hisaabo.
 
+The ledger is debit minus credit and starts from the opening balance exactly as you entered it: positive when they owe you (**To receive**), negative when you owe them (**To pay**).
+
 ### Invoice rows
 
 Each invoice appears as a debit entry (for sale invoices — you are owed money) or a credit entry (for purchase invoices — you owe money to the supplier).
+
+### Credit notes, returns and debit notes
+
+A credit note or sales return is a credit (it reduces what the customer owes). A sale-side debit note is a debit, like a sale invoice. On the purchase side, a purchase return or a debit note you raise against a supplier is a **debit**: it reduces what you owe them.
 
 ### Payment rows
 
@@ -53,9 +61,11 @@ Each payment appears as a credit entry against the party (you received money, so
 
 The final balance in the ledger is the current outstanding amount:
 
-- **Positive**: The party owes you money. For a customer, this means they have unpaid invoices.
-- **Negative**: You owe the party money. For a supplier, this means you have unpaid bills.
+- **Positive** (Dr): The party owes you money. For a customer, this means they have unpaid invoices.
+- **Negative** (Cr): You owe the party money. For a supplier, this means you have unpaid bills ("You will pay" on mobile).
 - **Zero**: All invoices are fully paid — no outstanding balance.
+
+The **Balance** on the party's profile and in the party list uses the same sign: a supplier you owe ₹14,000 shows **-₹14,000** there too.
 
 ## Filtering the ledger
 
@@ -82,9 +92,11 @@ Tap the **Share** button on the ledger view to open the native share sheet with 
 The running balance is computed as:
 
 ```
-balance = openingBalance
-         + sum(sale invoice totals)
+balance = openingBalance            (as entered: positive = they owe you, negative = you owe them)
+         + sum(sale invoice and sale debit note totals)
+         - sum(credit note and sales return totals)
          - sum(purchase invoice totals)
+         + sum(purchase return and purchase-side debit note totals)
          - sum(payments received from party)
          + sum(payments made to supplier)
 ```

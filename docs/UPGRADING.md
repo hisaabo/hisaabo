@@ -25,7 +25,7 @@ A bug-fix release. Take the usual backup, then **upgrade the API first**: set `H
 
 ### Migrations
 
-One additive migration, applied automatically by the migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+Two additive migrations, applied automatically by the migration step. The first is `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted); the second, `ledger_adjustment_accounts` (`drizzle-tenant/0011`; `drizzle/0024`), is data-only and described under [Corrected accounting and GST figures](#corrected-accounting-and-gst-figures). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
 
 - **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
 - It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
@@ -143,6 +143,129 @@ Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant
 - **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
 - **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start. That state is **latched**: the first time the API sees more than one row in `tenants` it writes a `system_config` row (`self_host_multi_org_seen`) and keeps the rule on even if the extra organisations are deleted later, because a hard-deleted organisation leaves its businesses in the shared database and they would otherwise appear in the surviving organisation. If you really did remove the extra organisations and their businesses, switch the rule off again with `DELETE FROM system_config WHERE key = 'self_host_multi_org_seen';` (it takes effect within about 15 seconds). Cloud and single-organisation installs never write the row.
 - **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
+
+### Corrected accounting and GST figures
+
+> **Warning: figures for past periods will change. Review previously filed returns.**
+> Hisaabo does not store GSTR-1, GSTR-3B, party balances or the trial balance. It recomputes them from your invoices, notes and payments every time you open them. After this upgrade the **past periods** are recomputed with the corrected rules below, so a GSTR-3B or GSTR-1 you have already filed can now show different numbers from the ones you filed, and party balances, party statements, the P&L, the trial balance and the balance sheet can differ from what you saw before. Before you file the next return or an amendment, re-open the months you have already filed, compare them with what was filed, and take any difference to your CA.
+
+What was wrong, and what you see now:
+
+| Where | Before | Now |
+|---|---|---|
+| **Round-off, invoice discount, additional charges (books)** | An invoice, credit note, debit note or return that carried a round-off, an invoice-level discount or additional charges was posted to the ledger without them, so the trial balance and balance sheet were out of balance by exactly that amount. | They post to accounts of their own, mirrored for notes and returns: round-off to **Round Off** (5030, either sign), the discount to **Discount Allowed** (5020) on sales and **Discount Received** (4200) on purchases, additional charges to **Other Charges** (4020) on sales and **Direct Expenses** (5100) on purchases. Every document balances, and net profit now includes them. The GST on the document is unchanged (it is computed before the invoice-level discount, as the invoice shows). |
+| **Gross profit** | Sales returns were never deducted and purchase returns were ignored. | Gross profit is (Sales + Sales Returns) - (Purchases + Purchase Returns + Direct Expenses). |
+| **GSTR-3B, input tax credit (Table 4)** | Purchase returns, purchase-side debit notes and credit notes / sales returns raised from a purchase invoice were **added** to the credit, overstating it, and so was **every other purchase-type document**: the query had no document-type filter, so purchase quotations, proformas and delivery challans counted as if they were bills. | They **reduce** it, by head (CGST, SGST, IGST), as in your books, and **purchase-type documents that are not invoices or reversals no longer count toward input credit at all**. |
+| **GSTR-3B, output tax (Table 3.1(a), Tax Payable, Net Tax)** | Credit notes, sales returns and sale-side debit notes were ignored, overstating the tax when you issued credit notes. | Taxable value and tax are **net of credit notes and sales returns and include sale-side debit notes**, per head. GSTR-1 still lists the invoices gross and the notes in their own section. In a month where credit notes exceed sales, the net 3.1(a) figures (and Tax Payable) are **negative**: that is a credit to carry forward, not an error. |
+| **Which side a credit note belongs to** | The web and mobile apps create a credit note or sales return from a **purchase** invoice with the type of that invoice, but the books, GSTR-1 and GSTR-3B treated every credit note / sales return as a sale-side document: they were posted against a receivable and output GST, listed in GSTR-1 and netted from output tax. | One classifier everywhere, by the document's **type**: a credit note or sales return raised from a purchase invoice reverses the purchase (Dr Payable / Cr Purchase Returns / Cr Input GST), reduces input credit, is **not** in GSTR-1, and reduces what you owe the supplier; sale-side ones are unchanged. |
+| **CGST / SGST on an odd paisa** | GSTR-1 and GSTR-3B rounded the odd paisa up for both heads (an invoice with GST of 102.59 reported 51.30 + 51.30 = 102.60), while the books, the invoice's ITC entry and the PDF each split it differently again (the PDF printed tax / 2 for each head). | One rule everywhere, the **e-invoice (IRP) one**, because the IRP-signed e-invoice is what the government holds: each **line's** tax is halved with CGST rounded half-up and SGST the remainder (the odd paisa goes to CGST), and a document's CGST / SGST is the sum of its lines. The ledger, GSTR-1 (invoice rows, B2CS, HSN and totals now tie), GSTR-3B, GSTR-9, the PDF and the e-way bill all follow it. Limits to know: **PDFs you downloaded earlier** printed tax / 2 per head, so on an odd-paisa invoice an old PDF can differ by one paisa per head from the reports (a re-downloaded PDF uses the new split); **e-invoices already submitted are not touched**; and the IRP payload computed the half in floating point, which rounded a few odd paise (about 1 in 22) down, so for those lines the CGST / SGST in a payload sent earlier can differ by one paisa from the exact rule now used. |
+| **GSTR-1, debit notes** | Purchase-side debit notes and purchase returns, which you issue to a supplier, were listed as outward debit notes. | Only sale-side debit notes are listed. |
+| **Party balance (party page, party list, "Outstanding" filter)** | Quotations, proformas and delivery challans were counted, a purchase-side debit note was added to what you owe a supplier instead of reducing it, and a **supplier's balance was shown as a positive number** (the web and mobile apps then labelled it "Receivable" / "You will receive", although the API, CLI and MCP documentation say negative = you owe them). | The balance is **signed, debit minus credit, for customers and suppliers alike**: positive = they owe you, negative = you owe them. A supplier you owe 14,000 now shows **-14,000** (Payable). Only invoices, credit notes, sales returns, purchase returns and debit notes count, and credit notes, returns and purchase-side debit notes move the balance the right way. The "Outstanding" filter lists every party whose balance is not zero, in either direction. The dashboard "Payable" card, which stays a positive amount, now includes suppliers' opening balances and the same reversals. |
+| **Party ledger tab, statement and PDF** | On the party's **Ledger tab**, payments to a supplier were shown as credits, purchase-side debit notes were on the wrong side and deleted payments were listed. | Fixed; the tab, the party statement report, the CSV and the PDF all start from the opening balance exactly as stored and agree with the party's balance (they add payments as their own rows, so they match whenever every payment is allocated to an invoice). |
+| **ITC utilisation** | Recording a period's utilisation a second time posted the credit a second time, and Input GST went negative. | Recording a period again **replaces** its journal: the earlier one is reversed (marked void, with a mirror entry; nothing is deleted) and the new one posted. Recording zero amounts clears the period. |
+| **ITC ledger and the utilisation limit** | The ITC ledger was written only when a purchase invoice was created, so a purchase return reduced GSTR-3B but not the ITC dashboard, and a utilisation could exceed the credit GSTR-3B reports. | A purchase-side reversal created from now on writes a **negative** ITC entry (and cancelling or deleting it removes the entry), so the ITC dashboard, Table 4 and the utilisation limit are net and equal GSTR-3B. **Reversals created before this release have no entry**: for those months the ITC dashboard stays gross while GSTR-3B Table 4, which is computed from the documents, is net. |
+| **A document that does not add up** | A document whose stored total is not explained by its subtotal, tax, discount, charges and round-off (a legacy import, hand-edited data) had the whole difference posted as round-off, however large. | Up to ₹1.00 it is still a round-off. A larger difference is parked in a new **Suspense / Unreconciled** account (2900, a balance-sheet account, so it never looks like profit) and the API logs a warning with the document id: find it in the log, fix the document, and the account clears. |
+
+#### What the accounting migration does
+
+`0024_ledger_adjustment_accounts` (`0011_ledger_adjustment_accounts` for tenant databases) only adds four system accounts to every existing business: **4020 Other Charges**, **5020 Discount Allowed**, **5030 Round Off** and **2900 Suspense / Unreconciled**. It is idempotent and rewrites no document. If a business already has an account of its own coded 4020, 5020, 5030 or 2900 it is left untouched, and the adjustment then posts to Other Income (4100), Miscellaneous Expenses (5990) or Other Current Liabilities (2300) instead of failing.
+
+#### What to do after upgrading
+
+1. **Find the months that change.** Save the query below as `gstr3b-diff.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, see [Running it on every tenant](#running-the-queries-on-every-tenant) below). It lists, per business and month, the GSTR-3B output tax and input credit the old rules produced and the corrected ones, and only months where the net tax payable differs. Figures are totals over CGST + SGST + IGST (the head split follows the same rules); months are calendar months in UTC, which is what the reports use on the Docker image.
+
+   <!-- gstr3b-diff-query -->
+   ```sql
+   WITH docs AS (
+     SELECT i.business_id,
+            date_trunc('month', i.invoice_date AT TIME ZONE 'UTC')::date AS month,
+            i.type::text AS type,
+            i.document_type::text AS document_type,
+            i.tax_amount::numeric AS tax,
+            -- the side a document belongs to, by its type (the ledger's rule); a purchase
+            -- return is purchase-side whatever type it was stored with
+            CASE
+              WHEN i.document_type = 'purchase_return' THEN 'purchase'
+              WHEN i.document_type IN ('invoice', 'credit_note', 'sales_return', 'debit_note') THEN i.type::text
+            END AS side,
+            -- credit notes / returns, and a debit note raised against a supplier, take tax back
+            (i.document_type IN ('credit_note', 'sales_return', 'purchase_return')
+             OR (i.document_type = 'debit_note' AND i.type = 'purchase')) AS reverses
+     FROM invoices i
+     WHERE i.status <> 'cancelled' AND i.deleted_at IS NULL
+   ), m AS (
+     SELECT business_id, month,
+            -- before: only sale invoices; after: net of credit notes / returns, plus sale debit notes
+            COALESCE(SUM(tax) FILTER (WHERE type = 'sale' AND document_type = 'invoice'), 0) AS old_output,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND reverses), 0) AS new_output,
+            -- before: EVERY purchase-type document; after: invoices less reversals
+            COALESCE(SUM(tax) FILTER (WHERE type = 'purchase'), 0) AS old_itc,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND reverses), 0) AS new_itc
+     FROM docs
+     GROUP BY business_id, month
+   )
+   SELECT b.name AS business, m.business_id, to_char(m.month, 'YYYY-MM') AS month,
+          m.old_output, m.new_output, m.old_itc, m.new_itc,
+          m.old_output - m.old_itc AS old_net_tax, m.new_output - m.new_itc AS new_net_tax,
+          (m.new_output - m.new_itc) - (m.old_output - m.old_itc) AS change
+   FROM m JOIN businesses b ON b.id = m.business_id
+   WHERE (m.old_output - m.old_itc) <> (m.new_output - m.new_itc)
+   ORDER BY b.name, m.month
+   ```
+
+   A positive `change` means more tax payable than before, a negative one less. It does not show the odd-paisa CGST / SGST difference (a paisa per affected invoice).
+
+   <a id="running-the-queries-on-every-tenant"></a>
+   **Running it on every tenant (multi-tenant).** Connected with `psql` to the **control database** as the control role, in the directory that holds `gstr3b-diff.sql`, this generates one `\c` + `\i` pair per tenant database and runs them (a `psql` `\gexec` cannot be used here: it runs generated SQL in the *same* database and cannot switch databases):
+
+   ```
+   \t on
+   \a
+   \o each-tenant.psql
+   SELECT format(E'\\echo == %s\n\\c %I %I %s %s\n\\i gstr3b-diff.sql',
+                 slug, db_name, current_user, coalesce(db_host, 'localhost'), coalesce(db_port, '5432'))
+   FROM tenants WHERE db_name IS NOT NULL ORDER BY slug;
+   \o
+   \t off
+   \a
+   \i each-tenant.psql
+   ```
+
+   It reconnects as the same role to each tenant's host, port and database (set `PGPASSWORD` or use a `.pgpass` entry so it does not prompt per tenant) and prints one `== <slug>` heading per tenant followed by that tenant's rows. The same loop runs the opening-balance review query in step 5: replace `gstr3b-diff.sql` with its file name.
+2. **Re-open every GSTR-3B and GSTR-1 you have already filed** for the months it lists (GST, pick the month) and compare with what was filed. Differences come from credit notes, returns, debit notes, purchase-type documents that are not bills, and odd-paisa GST; if one is material, your CA decides whether to amend.
+3. Open the **trial balance** and **balance sheet**: they now balance for invoices with a round-off, discount or charges. New rows (Round Off, Discount Allowed, Other Charges) appear in the P&L when you used those fields. If **Suspense / Unreconciled** shows a balance, a document does not add up: the API log names it.
+4. **ITC utilisation recorded twice before this release** is not rewritten automatically. Open ITC, **Utilization**, pick the period, and save it again: the doubled journal is reversed and one correct journal is posted.
+5. **Review supplier and customer opening balances. Their meaning may have changed for you.** The documented convention (docs, API, CLI, MCP) is one signed number for everyone: **positive = they owe you, negative = you owe them**. Hisaabo 0.10.0 showed a bare "Opening Balance" box with no direction, and its party page added a supplier's purchases to whatever you typed, so a supplier's opening balance entered as a **positive** number (for example `14000`, meant as "we owe them 14,000") behaved as an amount you owe. Under the convention it now means **they owe you 14,000**: the supplier's balance and statement start from the other side. Customers are the mirror image (a negative opening balance means you owe the customer). Nothing is changed automatically, because only you know what each number meant. Run this read-only query (same way as step 1) to list the candidates, the rows whose sign differs from the usual direction:
+
+   <!-- opening-balance-review-query -->
+   ```sql
+   SELECT b.name AS business, p.id AS party_id, p.business_id, p.type, p.name AS party,
+          p.opening_balance,
+          CASE WHEN p.type = 'supplier' THEN 'positive: the supplier now OWES YOU this' ELSE 'negative: YOU now owe the customer this' END AS meaning_now
+   FROM parties p JOIN businesses b ON b.id = p.business_id
+   WHERE (p.type = 'supplier' AND p.opening_balance::numeric > 0)
+      OR (p.type = 'customer' AND p.opening_balance::numeric < 0)
+   ORDER BY b.name, p.type, p.name
+   ```
+
+   For each row, decide what the number was meant to be. If it is right as it stands (an advance you paid a supplier is a positive supplier balance; an advance a customer paid you is a negative customer balance), leave it. If it was typed as "the amount I owe the supplier" (or "the amount the customer owes me" typed negative), flip its sign **after confirming**, either by editing the party in the mobile app (its edit screen has **To receive** / **To pay**) or with this optional per-party statement, run in the right database:
+
+   <!-- opening-balance-flip -->
+   ```sql
+   UPDATE parties
+   SET opening_balance = -opening_balance, updated_at = now()
+   WHERE id = '<party_id from the query>' AND business_id = '<business_id from the query>';
+   ```
+
+   There is deliberately no bulk migration. The statement is safe to run once per party; running it twice flips it back.
+
+#### Points to confirm with your CA
+
+- A **purchase-side debit note** (a debit note you raise against a supplier) is treated like a purchase return: it reduces input credit in GSTR-3B Table 4, matching the books. Under the GST law a *debit note issued by the supplier* increases credit; Hisaabo's purchase-side debit note is the one you issue.
+- An **invoice-level discount** is booked after GST (as a Discount Allowed expense); it does not reduce the taxable value or the GST on the invoice.
+- **Round Off** is an expense account that can carry either sign; a net credit shows as a negative expense.
 
 ### E-invoicing never signed in to the IRP
 

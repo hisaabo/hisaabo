@@ -20,6 +20,7 @@
  */
 
 import type { TenantDatabase } from "@hisaabo/db";
+import { money } from "@hisaabo/shared";
 import { generateGSTR1, generateGSTR3B, type GSTR1Report, type GSTR3BReport } from "./gst-reports.js";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -173,29 +174,30 @@ function addRow(a: TaxRow, b: TaxRow): TaxRow {
   };
 }
 
-/** Sum credit notes from a GSTR-1 report into a TaxRow */
+/**
+ * Sum credit notes from a GSTR-1 report into a TaxRow, by head. Each note carries its own
+ * CGST / SGST / IGST (split like its ledger entry, odd paisa to CGST), so an inter-state
+ * credit note lands in IGST instead of being halved into CGST and SGST.
+ */
 function sumCreditNotes(gstr1: GSTR1Report): TaxRow {
   const row = zeroRow();
   for (const cn of gstr1.creditNotes) {
-    const tax = parseFloat(cn.taxAmount);
-    const taxable = parseFloat(cn.taxableAmount);
-    // We don't have per-note CGST/SGST/IGST split stored — use half each as approximation
-    row.taxableValue += taxable;
-    row.cgst += tax / 2;
-    row.sgst += tax / 2;
+    row.taxableValue = money.toNumber(money.add(row.taxableValue, cn.taxableAmount));
+    row.cgst = money.toNumber(money.add(row.cgst, cn.cgst));
+    row.sgst = money.toNumber(money.add(row.sgst, cn.sgst));
+    row.igst = money.toNumber(money.add(row.igst, cn.igst));
   }
   return row;
 }
 
-/** Sum debit notes from a GSTR-1 report into a TaxRow */
+/** Sum debit notes from a GSTR-1 report into a TaxRow, by head (see `sumCreditNotes`). */
 function sumDebitNotes(gstr1: GSTR1Report): TaxRow {
   const row = zeroRow();
   for (const dn of gstr1.debitNotes) {
-    const tax = parseFloat(dn.taxAmount);
-    const taxable = parseFloat(dn.taxableAmount);
-    row.taxableValue += taxable;
-    row.cgst += tax / 2;
-    row.sgst += tax / 2;
+    row.taxableValue = money.toNumber(money.add(row.taxableValue, dn.taxableAmount));
+    row.cgst = money.toNumber(money.add(row.cgst, dn.cgst));
+    row.sgst = money.toNumber(money.add(row.sgst, dn.sgst));
+    row.igst = money.toNumber(money.add(row.igst, dn.igst));
   }
   return row;
 }

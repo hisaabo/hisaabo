@@ -8,6 +8,10 @@
  *     purchase ITC reversal) for documentType "invoice";
  *   - `applyDocumentCancel`: the same guard and the stock reversal for the other
  *     document types (credit/debit notes, challans, returns, ...).
+ * A purchase-side reversal (purchase return, purchase-side debit note, credit
+ * note / sales return raised from a purchase invoice) also has a negative ITC
+ * ledger entry (itc-reversal-entries.ts): every path that cancels or deletes
+ * one, through either function above, takes it away again.
  * `invoice.updateStatus` and the document router factory each lock the row and
  * run their own status transition, then call the matching `apply...Cancel`.
  * `cancelInvoiceInTx` is the whole thing (lock, rules, effects, status write) for
@@ -31,6 +35,7 @@ import { requireCan, type AppAbility } from "./permissions.js";
 import { applyStockDeltas } from "./stock-adjust.js";
 import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
 import { DOCUMENT_STOCK_EFFECT, reverseDocumentStockEffect, type StockEffect } from "./document-stock-reversal.js";
+import { removePurchaseReversalItc } from "./itc-reversal-entries.js";
 
 export type CancelTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 
@@ -82,6 +87,10 @@ export async function reverseInvoiceEffects(
         inArray(itcLedgerEntries.status, ["available", "blocked"]),
       ));
   }
+
+  // invoice.delete accepts any document id: a purchase-side reversal deleted here loses its
+  // negative ITC entry as well (a no-op for every other document).
+  await removePurchaseReversalItc(tx, businessId, inv);
 }
 
 /**
@@ -126,6 +135,8 @@ export async function applyDocumentCancel(
 ): Promise<void> {
   await assertNoPaymentsOrActiveIrn(tx, "cancel", target);
   await reverseDocumentStockEffect(tx, businessId, target.id, stockEffect);
+  // A purchase-side reversal's negative ITC entry goes with it (a no-op for every other document).
+  await removePurchaseReversalItc(tx, businessId, target);
 }
 
 /**

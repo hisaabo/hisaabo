@@ -27,6 +27,7 @@ import { applyDocumentCancel, staleEInvoiceErrorPatch } from "./invoice-cancel.j
 import { buildBusinessDateFilter } from "./business-date.js";
 import { reverseDocumentStockEffect } from "./document-stock-reversal.js";
 import { applyStockDeltas } from "./stock-adjust.js";
+import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "./itc-reversal-entries.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -197,6 +198,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         if (!canCreateDocumentType(ctx.role, docType, input.type)) {
           throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
         }
+        // A purchase return is a purchase-side document whatever `type` the caller sent (the CLI
+        // used to send "sale" for every document): store and post it as purchase, so the ledger,
+        // GSTR-1 / 3B, the party balance and the ITC ledger all see the same side. Credit notes
+        // and sales returns legitimately take either type (the type of the invoice they adjust).
+        const docSide: "sale" | "purchase" = docType === "purchase_return" ? "purchase" : input.type;
         const doc = await ctx.db.transaction(async (tx) => {
           // Security: validate that partyId belongs to the current business.
           const [partyCheck] = await tx.select({ id: parties.id })
@@ -349,12 +355,25 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             }
           }
 
+          // The reversal of a reverse-charge purchase is itself reverse-charge: it takes credit back
+          // from the RCM bucket in GSTR-3B Table 3.1(d) and in its ITC entry, not from ordinary ITC.
+          let reverseCharge = input.isReverseCharge;
+          if (!reverseCharge && input.referenceDocumentId && isPurchaseReversal(docType, docSide)) {
+            const [ref] = await tx
+              .select({ isReverseCharge: invoices.isReverseCharge })
+              .from(invoices)
+              .where(and(eq(invoices.id, input.referenceDocumentId), eq(invoices.businessId, ctx.businessId)))
+              .limit(1);
+            reverseCharge = ref?.isReverseCharge ?? false;
+          }
+
           const [result] = await tx
             .insert(invoices)
             .values({
               businessId: ctx.businessId,
               partyId: input.partyId,
-              type: input.type,
+              type: docSide,
+              isReverseCharge: reverseCharge,
               // ALWAYS use config.documentType — never trust client-supplied value
               documentType: docType as DocumentType,
               invoiceNumber: docNumber,
@@ -380,6 +399,20 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .insert(invoiceItems)
               .values(processedItems.map((li) => ({ ...li, invoiceId: result.id })));
           }
+
+          // A purchase-side reversal takes input credit back: mirror the invoice path's ITC entry
+          // with a negative one, so the ITC ledger (and the utilisation limit) is net of it.
+          await recordPurchaseReversalItc(tx, {
+            businessId: ctx.businessId,
+            documentId: result.id,
+            documentType: docType,
+            type: docSide,
+            partyId: input.partyId,
+            documentDate: result.invoiceDate,
+            taxTotal: totals.taxTotal,
+            lineTaxes: processedItems.map((li) => li.taxAmount),
+            isReverseCharge: reverseCharge,
+          });
 
           // Stock effects (adjusted for unit conversion). Deltas are grouped per
           // item/variant and applied in one batched NUMERIC UPDATE per table.
@@ -544,6 +577,9 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           if (doc.status !== "cancelled") {
             await reverseDocumentStockEffect(tx, ctx.businessId, doc.id, config.stockEffect);
           }
+
+          // A purchase-side reversal's negative ITC entry goes with it (a cancelled one is already gone).
+          await removePurchaseReversalItc(tx, ctx.businessId, doc);
 
           // Soft delete: set deletedAt + cancel the document
           await tx

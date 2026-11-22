@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from "vitest";
 import { money } from "../money.js";
+import { splitGstByLine } from "../calc.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // money.add — addition of two money values
@@ -299,5 +300,65 @@ describe("money.toNumber — converts money string to JS number (display use onl
 
   it("handles negative values", () => {
     expect(money.toNumber("-99.99")).toBe(-99.99);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// money.splitHalf — the one CGST / SGST split
+// ─────────────────────────────────────────────────────────────────────────────
+describe("money.splitHalf — splits an amount in two halves that sum exactly, odd paisa to the FIRST (CGST, the e-invoice rule)", () => {
+  it("splits an even number of paise equally", () => {
+    expect(money.splitHalf("100.00")).toEqual(["50.00", "50.00"]);
+    expect(money.splitHalf("900.00")).toEqual(["450.00", "450.00"]);
+  });
+
+  it("gives the odd paisa to the first half (CGST = round-half-up(tax / 2), SGST = remainder)", () => {
+    // 10259 paise -> 5130 + 5129
+    expect(money.splitHalf("102.59")).toEqual(["51.30", "51.29"]);
+    expect(money.splitHalf("0.01")).toEqual(["0.01", "0.00"]);
+    expect(money.splitHalf("1.01")).toEqual(["0.51", "0.50"]);
+    expect(money.splitHalf("0.29")).toEqual(["0.15", "0.14"]); // 0.29 / 2 = 0.145: the IRP float rounds this DOWN
+  });
+
+  it("the halves always add back to the input", () => {
+    for (const amount of ["0.00", "0.01", "0.03", "17.77", "102.59", "999999999.99"]) {
+      const [a, b] = money.splitHalf(amount);
+      expect(money.add(a, b)).toBe(money.add(amount, "0"));
+    }
+  });
+
+  it("accepts numbers as well as strings", () => {
+    expect(money.splitHalf(102.59)).toEqual(["51.30", "51.29"]);
+  });
+
+  it("splits a negative amount symmetrically", () => {
+    expect(money.splitHalf("-102.59")).toEqual(["-51.30", "-51.29"]);
+    expect(money.splitHalf("-0.01")).toEqual(["-0.01", "0.00"]);
+  });
+
+  it("treats junk as zero, like the rest of the module", () => {
+    expect(money.splitHalf("abc")).toEqual(["0.00", "0.00"]);
+  });
+});
+
+describe("splitGstByLine — the document CGST / SGST is the sum of each line's split (the IRP payload rule)", () => {
+  it("one line is the plain split", () => {
+    expect(splitGstByLine(["102.59"])).toEqual({ cgst: "51.30", sgst: "51.29" });
+  });
+
+  it("every odd line gives its odd paisa to CGST: two 0.01 lines are CGST 0.02, SGST 0.00 (not 0.01 / 0.01)", () => {
+    expect(splitGstByLine(["0.01", "0.01"])).toEqual({ cgst: "0.02", sgst: "0.00" });
+    expect(money.splitHalf("0.02")).toEqual(["0.01", "0.01"]); // the document-level split would differ
+  });
+
+  it("golden 12: the seven line taxes of the rounding scenario", () => {
+    // paise: 500, 1037, 2700, 1780, 2828, 1364, 50; only 1037 is odd -> CGST 519, SGST 518
+    const r = splitGstByLine(["5.00", "10.37", "27.00", "17.80", "28.28", "13.64", "0.50"]);
+    expect(r).toEqual({ cgst: "51.30", sgst: "51.29" });
+    expect(money.add(r.cgst, r.sgst)).toBe("102.59");
+  });
+
+  it("no lines, no tax", () => {
+    expect(splitGstByLine([])).toEqual({ cgst: "0.00", sgst: "0.00" });
   });
 });

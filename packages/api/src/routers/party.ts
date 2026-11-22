@@ -1,4 +1,4 @@
-import { eq, and, ilike, or, sql, desc, asc, isNull } from "drizzle-orm";
+import { eq, and, ilike, or, sql, desc, asc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow } from "@hisaabo/shared";
@@ -10,6 +10,7 @@ import { warnTallyCsvExportDeprecated } from "../lib/deprecations.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
+import { documentLedgerSide, invoiceBalanceSql, invoiceIsLedgerDebitSql, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
 
 
 export const partyRouter = router({
@@ -34,16 +35,18 @@ export const partyRouter = router({
       } else if (effectiveFilter === "supplier") {
         conditions.push(eq(parties.type, "supplier"));
       } else if (effectiveFilter === "outstanding") {
-        // Parties where opening_balance + unpaid invoice balance > 0
+        // Parties with a balance either way: opening + the same signed document sum `balance`
+        // uses, not zero (positive: they owe you, negative: you owe them).
         conditions.push(sql`(
           ${parties.openingBalance}::numeric + COALESCE((
-            SELECT SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+            SELECT SUM(${invoiceBalanceSql()})
             FROM ${invoices}
             WHERE ${invoices.partyId} = ${parties.id}
               AND ${invoices.businessId} = ${parties.businessId}
-              AND ${invoices.status} NOT IN ('paid', 'cancelled')
+              AND ${invoices.status} NOT IN ('cancelled')
+              AND ${invoices.deletedAt} IS NULL
           ), 0)
-        ) > 0`);
+        ) <> 0`);
       } else if (effectiveFilter === "overdue") {
         // Parties that have at least one overdue invoice
         conditions.push(sql`EXISTS (
@@ -67,11 +70,9 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
-      // Credit notes, sales returns, and purchase returns REDUCE the balance.
-      const invoiceDue = sql`CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
-          THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-          ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-        END`;
+      // Credit notes, sales returns, purchase returns and purchase-side debit notes REDUCE the
+      // balance; quotations, proformas and challans never count (lib/party-balance.ts).
+      const invoiceDue = invoiceBalanceSql();
       const invoiceFilter = and(
         eq(invoices.businessId, ctx.businessId),
         sql`${invoices.status} NOT IN ('cancelled')`,
@@ -162,14 +163,10 @@ export const partyRouter = router({
 
       if (!party) return null;
 
-      // Calculate balance: CN/SR/PR reduce the outstanding, invoices/DN add to it
+      // Calculate balance: CN/SR/PR and purchase-side debit notes reduce the outstanding,
+      // invoices and sale-side debit notes add to it, quotations/proformas/challans are ignored.
       const [balanceResult] = await ctx.db.select({
-        netBalance: sql<string>`coalesce(sum(
-          CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
-            THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-            ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-          END
-        ), 0)`,
+        netBalance: sql<string>`coalesce(sum(${invoiceBalanceSql()}), 0)`,
       }).from(invoices)
         .where(and(
           eq(invoices.partyId, input.id),
@@ -409,7 +406,7 @@ export const partyRouter = router({
       const invoiceConditions = [
         eq(invoices.partyId, input.partyId),
         eq(invoices.businessId, ctx.businessId),
-        sql`${invoices.documentType} IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')`,
+        inArray(invoices.documentType, [...BALANCE_DOCUMENT_TYPES]),
         sql`${invoices.status} NOT IN ('cancelled')`,
         isNull(invoices.deletedAt),
       ];
@@ -448,15 +445,13 @@ export const partyRouter = router({
         invoice: "", credit_note: "Credit Note", sales_return: "Sales Return",
         purchase_return: "Purchase Return", debit_note: "Debit Note",
       };
-      const isReduction = (dt: string) => ["credit_note", "sales_return", "purchase_return"].includes(dt);
 
       const entries = [
         ...partyInvoices.map(inv => {
           const label = DOC_LABELS[inv.documentType] || (inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice");
-          const reduce = isReduction(inv.documentType);
-          // Sale invoice = debit; sale credit note = credit (reversal). Mirror for purchase.
-          const isSaleDir = inv.type === "sale";
-          const debit = (isSaleDir && !reduce) || (!isSaleDir && reduce) ? inv.totalAmount : "0";
+          // Sale invoice / sale debit note = debit; credit note / sales return = credit (reversal).
+          // Mirror for purchase: invoice = credit; purchase return / purchase debit note = debit.
+          const debit = documentLedgerSide(inv.documentType, inv.type) === "debit" ? inv.totalAmount : "0";
           const credit = debit === "0" ? inv.totalAmount : "0";
           return {
             date: inv.date,
@@ -487,7 +482,9 @@ export const partyRouter = router({
         }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      // Compute running balance and summary using the money module
+      // Compute running balance and summary using the money module. The statement is
+      // debit minus credit and the opening balance is used as stored: positive = they owe you,
+      // negative = you owe them (the documented convention, same as `balance`).
       let runningBalance = party.openingBalance;
       const entriesWithBalance = entries.map(e => {
         runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
@@ -538,7 +535,7 @@ export const partyRouter = router({
       const invoiceConditions = [
         eq(invoices.partyId, input.partyId),
         eq(invoices.businessId, ctx.businessId),
-        sql`${invoices.documentType} IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')`,
+        inArray(invoices.documentType, [...BALANCE_DOCUMENT_TYPES]),
         sql`${invoices.status} NOT IN ('cancelled')`,
         isNull(invoices.deletedAt),
       ];
@@ -575,14 +572,11 @@ export const partyRouter = router({
         invoice: "", credit_note: "Credit Note", sales_return: "Sales Return",
         purchase_return: "Purchase Return", debit_note: "Debit Note",
       };
-      const isReduction = (dt: string) => ["credit_note", "sales_return", "purchase_return"].includes(dt);
 
       const entries = [
         ...partyInvoices.map(inv => {
           const label = DOC_LABELS[inv.documentType] || (inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice");
-          const reduce = isReduction(inv.documentType);
-          const isSaleDir = inv.type === "sale";
-          const debit = (isSaleDir && !reduce) || (!isSaleDir && reduce) ? inv.totalAmount : "0";
+          const debit = documentLedgerSide(inv.documentType, inv.type) === "debit" ? inv.totalAmount : "0";
           const credit = debit === "0" ? inv.totalAmount : "0";
           return { date: inv.date, number: inv.invoiceNumber, description: label, debit, credit };
         }),
@@ -817,7 +811,7 @@ export const partyRouter = router({
       requireCan(ctx.ability, "read", "Party");
       // Verify party belongs to this business
       const [party] = await ctx.db
-        .select({ id: parties.id, openingBalance: parties.openingBalance })
+        .select({ id: parties.id, type: parties.type, openingBalance: parties.openingBalance })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -827,144 +821,56 @@ export const partyRouter = router({
       }
 
       const offset = (input.page - 1) * input.limit;
+      const paymentDebit = party.type === "supplier" ? paymentSettledSql() : sql`0::numeric`;
+      const paymentCredit = party.type === "supplier" ? sql`0::numeric` : paymentSettledSql();
 
-      const openingBalanceNum = money.toNumber(party.openingBalance);
+      // Debit-minus-credit running balance from the opening balance as stored (positive: they
+      // owe you, negative: you owe them). Passed to SQL as the string it is, never as a float.
 
       // Build date filter conditions inline
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
       const toDate = input.toDate ? new Date(input.toDate) : null;
 
-      // UNION ALL: invoices + CN/SR/PR/DN + payments
-      // CN/SR/PR reverse the normal debit/credit direction.
+      // UNION ALL: posting documents + payments
       const ledgerRows = await ctx.db.execute(sql`
         WITH ledger AS (
-          -- Sale invoices: debit (customer owes us)
+          -- Every posting document (invoice, credit note, sales return, purchase return, debit
+          -- note). Which side it lands on follows lib/party-balance.ts (classifyLedgerDocument):
+          -- sale invoice and sale debit note = debit; purchase invoice = credit; credit note /
+          -- sales return = credit; purchase return, purchase-side debit note and a credit note /
+          -- sales return raised from a purchase invoice (type = 'purchase') = debit.
           SELECT
             invoice_date AS entry_date,
-            'invoice'::text AS entry_type,
+            CASE WHEN document_type = 'invoice' AND type = 'purchase' THEN 'purchase'
+                 ELSE document_type::text END AS entry_type,
             invoice_number AS document_number,
             id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
+            CASE WHEN ${invoiceIsLedgerDebitSql()} THEN total_amount::numeric ELSE 0::numeric END AS debit,
+            CASE WHEN ${invoiceIsLedgerDebitSql()} THEN 0::numeric ELSE total_amount::numeric END AS credit,
             status
           FROM invoices
           WHERE party_id = ${input.partyId}
             AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type = 'invoice'
+            AND document_type IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')
             AND status NOT IN ('cancelled')
             AND deleted_at IS NULL
 
           UNION ALL
 
-          -- Purchase invoices: credit (we owe supplier)
-          SELECT
-            invoice_date AS entry_date,
-            'purchase'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            0::numeric AS debit,
-            total_amount::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type = 'invoice'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Sale credit notes / sales returns: credit (reduces what customer owes)
-          SELECT
-            invoice_date AS entry_date,
-            document_type::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            0::numeric AS debit,
-            total_amount::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type IN ('credit_note', 'sales_return')
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Purchase credit notes / purchase returns: debit (reduces what we owe)
-          SELECT
-            invoice_date AS entry_date,
-            document_type::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type IN ('credit_note', 'purchase_return')
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Sale debit notes: debit (customer owes more)
-          SELECT
-            invoice_date AS entry_date,
-            'debit_note'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type = 'debit_note'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Purchase debit notes: credit (we owe more)
-          SELECT
-            invoice_date AS entry_date,
-            'debit_note'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            0::numeric AS debit,
-            total_amount::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type = 'debit_note'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Payments received from customer: credit the SETTLED amount
-          -- (net cash + TDS withheld), otherwise TDS stays "outstanding".
+          -- Payments received from a customer: credit the SETTLED amount (net cash + TDS
+          -- withheld), otherwise TDS stays "outstanding". Payments made to a supplier: debit.
           SELECT
             payment_date AS entry_date,
             'payment'::text AS entry_type,
             coalesce(payment_number, id::text) AS document_number,
             id AS document_id,
-            0::numeric AS debit,
-            ${paymentSettledSql()} AS credit,
+            ${paymentDebit} AS debit,
+            ${paymentCredit} AS credit,
             NULL AS status
           FROM payments
           WHERE party_id = ${input.partyId}
             AND business_id = ${ctx.businessId}
+            AND deleted_at IS NULL
         ),
         filtered AS (
           SELECT * FROM ledger
@@ -974,7 +880,7 @@ export const partyRouter = router({
         with_balance AS (
           SELECT
             *,
-            ${openingBalanceNum}::numeric
+            ${party.openingBalance}::numeric
               + SUM(debit - credit) OVER (
                   ORDER BY entry_date ASC, document_number ASC
                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW

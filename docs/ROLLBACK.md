@@ -926,6 +926,10 @@ Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (mark
 
 ```sql
 BEGIN;
+-- 0024 / tenant 0011 (v0.10.1, ledger_adjustment_accounts): data only. It added system accounts
+-- 4020, 5020, 5030 and 2900 to chart_of_accounts; older code ignores them. Leave them in place:
+-- 0.10.1 journals and documents may already post to them, and deleting them breaks nothing but the
+-- ledger's fall-back to 5990 / 4100.
 -- 0023 / tenant 0010 (v0.10.1; older code ignores both, so this is optional)
 DROP INDEX IF EXISTS recurring_run_occurrence_uniq;
 ALTER TABLE recurring_invoice_runs DROP COLUMN IF EXISTS scheduled_for;
