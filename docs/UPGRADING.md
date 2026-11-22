@@ -355,6 +355,33 @@ The HSN summary in GSTR-1 had one row per HSN code. An HSN sold at 5% on some in
 
 If you downloaded or uploaded GSTR-1 Table 12 before 0.10.1, compare it with the new one: rows for an HSN sold at more than one rate are now split.
 
+### GST months follow the Indian calendar, with no gaps
+
+**Figures for past periods can change. Review the months you have already filed.**
+
+A GST month was built as "the 1st to 23:59:59 of the month **in the API server's time zone**". Two things were wrong with that:
+
+- **A document dated the 1st of a month, entered in an Indian browser, fell into the previous month on a server running in UTC.** The web app sends a date-only "1 April" as the browser's local midnight, which is 31 March 18:30 UTC. The shipped images and Compose files set no `TZ`, so the API runs in UTC unless you set one, and GSTR-1 and GSTR-3B put that invoice in **March**. Every invoice, credit note and purchase dated the 1st of a month was filed a month early.
+- **The month ended at 23:59:59.000, so a document stamped in the last second of the month after `.000` (23:59:59.500, say) was in no month at all.**
+
+From 0.10.1 a month (and a quarter) is the half-open window **[00:00 IST on day 1, 00:00 IST on day 1 of the next month)**: IST is UTC+05:30 all year (India has no daylight saving), nothing falls between two months and nothing is in two. The result no longer depends on the server's time zone. It applies to GSTR-1, GSTR-3B (output tax and input credit), GSTR-9, GSTR-2B "missing in 2B", CMP-08 and the dashboard's this-month / last-month comparison, and to the **return period that a purchase (or a purchase return) writes to the ITC ledger**. The document date sent to the IRP (e-invoice) and the NIC (e-way bill) is now the IST calendar date as well: a "1 April" invoice used to be sent as 31 March on a UTC server.
+
+If your API server already runs with `TZ=Asia/Kolkata`, only the last-second gap changes for you. On a UTC server, find what moves: documents whose month differs between the two calendars
+
+```sql
+SELECT business_id, invoice_number, document_type, type, invoice_date,
+       to_char(invoice_date AT TIME ZONE 'UTC', 'YYYY-MM')           AS month_before,
+       to_char(invoice_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM')  AS month_now
+FROM invoices
+WHERE deleted_at IS NULL AND status <> 'cancelled'
+  AND to_char(invoice_date AT TIME ZONE 'UTC', 'YYYY-MM') <> to_char(invoice_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM')
+ORDER BY invoice_date;
+```
+
+(in a multi-tenant install, run it in each tenant database). For each row, the month in `month_before` was filed with that document and `month_now` is where it belongs. If a return you filed included such a document, the corrected figures differ from what you filed: talk to your CA about whether to amend. Documents entered through the API, the CLI or an import with an explicit UTC time are rarely affected.
+
+**ITC ledger rows written before 0.10.1 keep the period they were written with** (the old server-time month). GSTR-3B always recomputes input credit from the documents, so it is right; the ITC dashboard and the utilisation limit read the stored period, so for a purchase dated on the 1st they can still show last month's credit until that row is corrected. The query above lists those purchases (`type = 'purchase'`). Rows written from 0.10.1 on are right.
+
 ### E-invoice cancellation now cancels the invoice
 
 Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.

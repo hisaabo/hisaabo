@@ -1,4 +1,4 @@
-import { gte, lte, type SQL, type SQLWrapper } from "drizzle-orm";
+import { gte, lt, lte, type SQL, type SQLWrapper } from "drizzle-orm";
 import { businessDateColumnFor, type BusinessDateTable } from "@hisaabo/db";
 
 /**
@@ -28,6 +28,11 @@ function coerce(v: BusinessDateBound): Date | SQL | SQLWrapper | undefined {
  *
  * Omitted bounds produce no condition for that side.
  *
+ * `to` is INCLUSIVE (a user-entered end-of-day such as 23:59:59.999). A computed period
+ * (a month, a quarter) should use `before` instead: the EXCLUSIVE start of the next period.
+ * A period written as "to 23:59:59" leaves a gap before the next one, and a document stamped
+ * in it is in no period. Give `to` or `before`, not both.
+ *
  * @example
  *   conditions.push(...buildBusinessDateFilter(invoices, input));
  *
@@ -43,13 +48,15 @@ function coerce(v: BusinessDateBound): Date | SQL | SQLWrapper | undefined {
  */
 export function buildBusinessDateFilter(
   table: BusinessDateTable,
-  range: { from?: BusinessDateBound; to?: BusinessDateBound },
+  range: { from?: BusinessDateBound; to?: BusinessDateBound; before?: BusinessDateBound },
 ): SQL[] {
   const col = businessDateColumnFor(table);
   const f = coerce(range.from);
   const t = coerce(range.to);
+  const b = coerce(range.before);
   const out: SQL[] = [];
   if (f !== undefined) out.push(gte(col, f));
   if (t !== undefined) out.push(lte(col, t));
+  if (b !== undefined) out.push(lt(col, b));
   return out;
 }

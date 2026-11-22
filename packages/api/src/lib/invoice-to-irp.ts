@@ -22,6 +22,7 @@
 import type { IRPInvoiceJson } from "./irp-client.js";
 import { money } from "@hisaabo/shared";
 import { validateHsnForTurnover } from "./hsn-data.js";
+import { formatIstDate } from "./gst-period.js";
 
 // ── Types (subset of what we need from DB rows) ────────────────────────────────
 
@@ -200,12 +201,9 @@ function toIRPDocType(documentType: string): string {
 // ── Date formatting ────────────────────────────────────────────────────────────
 
 function toIRPDate(date: Date): string {
-  // IRP requires DD/MM/YYYY
-  const d = new Date(date);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  // DD/MM/YYYY on the IST calendar: the IRN is registered against this date (and its financial
+  // year), and a date-only "1 April" is stored as 31 March 18:30 UTC.
+  return formatIstDate(new Date(date));
 }
 
 // ── Number helpers ─────────────────────────────────────────────────────────────

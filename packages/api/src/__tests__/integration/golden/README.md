@@ -42,6 +42,7 @@ test itself.
 | `16-gst-return-periods` | GSTR-1 JSON, GSTR-9 and CMP-08 periods are April-March for businesses whose books start in April, January or July; only the trial balance follows the books year | pass |
 | `17-einvoice-hsn` | IRP payload HSN: missing HSN refused per line, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
 | `18-gstr1-hsn-summary` | GSTR-1 Table 12: one row per HSN + UQC + rate, real UQC, JSON `rt`, CSV section; ties to B2B + B2CS = GSTR-3B 3.1(a); exact quantities | pass |
+| `19-month-windows` | Half-open IST month / quarter windows: GSTR-1, 3B, 9, 2B, CMP-08, ITC period, IRP date, dashboard; 23:59:59.500 and 00:00:00.000 either side of a month and of the FY | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

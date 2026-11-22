@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { eq, and, sql, desc, isNull, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, inArray, gte, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { gstr2bUploads, gstr2bRecords, invoices, parties, businesses } from "@hisaabo/db";
 import {
@@ -28,6 +28,7 @@ import {
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "../lib/gst-split.js";
+import { gstMonthWindow } from "../lib/gst-period.js";
 import {
   parseGSTR2BJSON,
   parseGSTR2BCSV,
@@ -498,8 +499,7 @@ export const gstr2bRouter = router({
 
       // Determine period date range
       const [year, month] = input.returnPeriod.split("-").map(Number);
-      const periodStart = new Date(year!, month! - 1, 1);
-      const periodEnd   = new Date(year!, month!, 0, 23, 59, 59);
+      const { from: periodStart, before: periodBefore } = gstMonthWindow(year!, month!);
 
       const purchaseRows = await ctx.db
         .select({
@@ -522,7 +522,7 @@ export const gstr2bRouter = router({
             sql`${invoices.status} != 'cancelled'`,
             isNull(invoices.deletedAt),
             gte(invoices.invoiceDate, periodStart),
-            lte(invoices.invoiceDate, periodEnd),
+            lt(invoices.invoiceDate, periodBefore),
             sql`${parties.gstin} IS NOT NULL`,
           ),
         );

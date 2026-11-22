@@ -5,6 +5,7 @@ import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { gstMonthWindow, istYearMonth } from "../lib/gst-period.js";
 import { paymentSettledSql } from "../lib/payment-settlement.js";
 
 // "Collected" means two different things and must not be mixed within a widget:
@@ -869,11 +870,10 @@ export const dashboardRouter = router({
     .query(async ({ ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const now = new Date();
-      const currMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const currMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-      const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+      // This and last calendar month on the IST business calendar, half-open (see gst-period.ts)
+      const { year: nowYear, month: nowMonth } = istYearMonth(new Date());
+      const { from: currMonthStart, before: currMonthBefore } = gstMonthWindow(nowYear, nowMonth);
+      const { from: prevMonthStart, before: prevMonthBefore } = gstMonthWindow(nowYear, nowMonth - 1);
 
       const [
         [currSales],
@@ -890,7 +890,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
@@ -900,21 +900,21 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, before: prevMonthBefore }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          ...buildBusinessDateFilter(expenses, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(expenses, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          ...buildBusinessDateFilter(expenses, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(expenses, { from: prevMonthStart, before: prevMonthBefore }),
         )),
 
         ctx.db.select({
@@ -924,7 +924,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
@@ -934,7 +934,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, before: prevMonthBefore }),
         )),
       ]);
 
@@ -945,8 +945,8 @@ export const dashboardRouter = router({
         return Math.round(((c - p) / p) * 100);
       }
 
-      const currMonthName = currMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
-      const prevMonthName = prevMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
+      const currMonthName = currMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit", timeZone: "Asia/Kolkata" });
+      const prevMonthName = prevMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit", timeZone: "Asia/Kolkata" });
 
       return {
         currMonth: currMonthName,

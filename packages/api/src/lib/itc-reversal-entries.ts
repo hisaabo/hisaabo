@@ -23,6 +23,7 @@ import { businesses, itcLedgerEntries, parties } from "@hisaabo/db";
 import { money, splitDocumentGst } from "@hisaabo/shared";
 import { classifyLedgerDocument } from "./ledger-documents.js";
 import { isIntraStateSupply } from "./gst-split.js";
+import { gstReturnPeriodOf } from "./gst-period.js";
 
 // A Drizzle transaction (tenant DB).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,7 +95,7 @@ export async function recordPurchaseReversalItc(
   await tx.insert(itcLedgerEntries).values({
     businessId: p.businessId,
     invoiceId: p.documentId,
-    returnPeriod: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    returnPeriod: gstReturnPeriodOf(d),
     status: "available",
     cgst,
     sgst,

@@ -6,7 +6,7 @@ import { requireCan } from "../lib/permissions.js";
 import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson } from "../lib/gst-reports.js";
 import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
-import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterMonths } from "../lib/gst-period.js";
+import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterWindow } from "../lib/gst-period.js";
 import { money } from "@hisaabo/shared";
 
 export const gstRouter = router({
@@ -120,9 +120,8 @@ export const gstRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const q = gstQuarterMonths(input.year, input.quarter);
-      const quarterStart = new Date(q.startYear, q.startMonth - 1, 1);
-      const quarterEnd = new Date(q.endYear, q.endMonth, 0, 23, 59, 59, 999); // last instant of the 3rd month
+      // Half-open window on the IST business calendar (see gst-period.ts)
+      const { from: quarterStart, before: quarterBefore } = gstQuarterWindow(input.year, input.quarter);
 
       const rows = await ctx.db.select({
         totalAmount: invoices.totalAmount,
@@ -132,7 +131,7 @@ export const gstRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
           sql`${invoices.status} != 'cancelled'`,
-          ...buildBusinessDateFilter(invoices, { from: quarterStart, to: quarterEnd }),
+          ...buildBusinessDateFilter(invoices, { from: quarterStart, before: quarterBefore }),
         ));
 
       // Exact paise arithmetic; never JS floats for money.
@@ -147,7 +146,8 @@ export const gstRouter = router({
         taxableValue,
         taxPayable,
         quarterStart: quarterStart.toISOString(),
-        quarterEnd: quarterEnd.toISOString(),
+        // the last millisecond of the quarter (the window itself is half-open)
+        quarterEnd: new Date(quarterBefore.getTime() - 1).toISOString(),
       };
     }),
 });

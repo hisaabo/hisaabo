@@ -17,6 +17,7 @@
 import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
 import { money, splitDocumentGst } from "@hisaabo/shared";
+import { formatIstDate } from "./gst-period.js";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -88,10 +89,8 @@ function docTypeCode(documentType: string, _invoiceType: "sale" | "purchase"): "
  * Format Date to DD/MM/YYYY as required by NIC.
  */
 function formatNICDate(date: Date): string {
-  const d = String(date.getDate()).padStart(2, "0");
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const y = date.getFullYear();
-  return `${d}/${m}/${y}`;
+  // IST calendar date (see gst-period.ts): a date-only "1 April" is stored as 31 March 18:30 UTC.
+  return formatIstDate(date);
 }
 
 /**

@@ -19,6 +19,7 @@ import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 import { isIntraStateSupply } from "../lib/gst-split.js";
+import { gstReturnPeriodOf } from "../lib/gst-period.js";
 
 /** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
 type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
@@ -440,7 +441,7 @@ export const invoiceRouter = router({
 
         if (bizForItc?.gstRegistrationType !== "composition") {
           const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
-          const returnPeriod = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, "0")}`;
+          const returnPeriod = gstReturnPeriodOf(invoiceDate);
 
           // The same test GSTR-3B and a purchase return's ITC entry use (state codes, then names)
           const sameState = isIntraStateSupply(bizForItc, partyCheck);

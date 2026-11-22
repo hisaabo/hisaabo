@@ -3,6 +3,7 @@ import { invoices, invoiceItems, parties, businesses, items as itemsTable } from
 import type { TenantDatabase } from "@hisaabo/db";
 import { csvCell, csvRow, money, splitDocumentGst } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
+import { gstMonthWindow } from "./gst-period.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
 import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "./gst-split.js";
 
@@ -153,8 +154,8 @@ export async function generateGSTR1(
   month: number, // 1-12
   db: TenantDatabase
 ): Promise<GSTR1Report> {
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 0, 23, 59, 59);
+  // The calendar month on the IST business calendar, half-open (see gst-period.ts).
+  const { from: startDate, before: endBefore } = gstMonthWindow(year, month);
 
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
 
@@ -178,7 +179,7 @@ export async function generateGSTR1(
       eq(invoices.documentType, "invoice"),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
-      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
+      ...buildBusinessDateFilter(invoices, { from: startDate, before: endBefore }),
     ))
     .orderBy(invoices.invoiceDate);
 
@@ -343,7 +344,7 @@ export async function generateGSTR1(
     inArray(invoices.documentType, ["credit_note", "sales_return", "debit_note"]),
     sql`${invoices.status} != 'cancelled'`,
     isNull(invoices.deletedAt),
-    ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
+    ...buildBusinessDateFilter(invoices, { from: startDate, before: endBefore }),
   ];
   const rawNotes = await db.select({
     id: invoices.id,
@@ -471,8 +472,8 @@ export async function generateGSTR3B(
   const gstr1 = precomputedGstr1 ?? await generateGSTR1(businessId, year, month, db);
 
   // Get purchase invoices for ITC
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 0, 23, 59, 59);
+  // The calendar month on the IST business calendar, half-open (see gst-period.ts).
+  const { from: startDate, before: endBefore } = gstMonthWindow(year, month);
 
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
 
@@ -487,7 +488,7 @@ export async function generateGSTR3B(
     inArray(invoices.documentType, ["invoice", "debit_note", "credit_note", "sales_return", "purchase_return"]),
     sql`${invoices.status} != 'cancelled'`,
     isNull(invoices.deletedAt),
-    ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
+    ...buildBusinessDateFilter(invoices, { from: startDate, before: endBefore }),
   ];
   const purchaseDocs = await db.select({
     id: invoices.id,
