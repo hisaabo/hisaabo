@@ -12,6 +12,10 @@ node_modules/
 apps/*
 !apps/ops
 apps/ops/dist
+# Re-exclude after the !apps/ops negation above, which would otherwise pull a
+# local apps/ops/node_modules into the build context and break `docker build`
+# in any checkout where `pnpm install` has run.
+apps/ops/node_modules
 
 # Build artifacts (rebuilt inside container)
 dist/
