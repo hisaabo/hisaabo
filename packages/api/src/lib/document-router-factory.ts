@@ -26,7 +26,7 @@ import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { reverseDocumentStockEffect } from "./document-stock-reversal.js";
 import { applyStockDeltas } from "./stock-adjust.js";
-import { recordPurchaseReversalItc, removePurchaseReversalItc } from "./itc-reversal-entries.js";
+import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "./itc-reversal-entries.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -354,12 +354,25 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             }
           }
 
+          // The reversal of a reverse-charge purchase is itself reverse-charge: it takes credit back
+          // from the RCM bucket in GSTR-3B Table 3.1(d) and in its ITC entry, not from ordinary ITC.
+          let reverseCharge = input.isReverseCharge;
+          if (!reverseCharge && input.referenceDocumentId && isPurchaseReversal(docType, docSide)) {
+            const [ref] = await tx
+              .select({ isReverseCharge: invoices.isReverseCharge })
+              .from(invoices)
+              .where(and(eq(invoices.id, input.referenceDocumentId), eq(invoices.businessId, ctx.businessId)))
+              .limit(1);
+            reverseCharge = ref?.isReverseCharge ?? false;
+          }
+
           const [result] = await tx
             .insert(invoices)
             .values({
               businessId: ctx.businessId,
               partyId: input.partyId,
               type: docSide,
+              isReverseCharge: reverseCharge,
               // ALWAYS use config.documentType — never trust client-supplied value
               documentType: docType as DocumentType,
               invoiceNumber: docNumber,
@@ -397,6 +410,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             documentDate: result.invoiceDate,
             taxTotal: totals.taxTotal,
             lineTaxes: processedItems.map((li) => li.taxAmount),
+            isReverseCharge: reverseCharge,
           });
 
           // Stock effects (adjusted for unit conversion). Deltas are grouped per

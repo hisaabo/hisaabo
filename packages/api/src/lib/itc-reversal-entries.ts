@@ -22,6 +22,7 @@ import { and, eq } from "drizzle-orm";
 import { businesses, itcLedgerEntries, parties } from "@hisaabo/db";
 import { money, splitDocumentGst } from "@hisaabo/shared";
 import { classifyLedgerDocument } from "./ledger-documents.js";
+import { isIntraStateSupply } from "./gst-split.js";
 
 // A Drizzle transaction (tenant DB).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,24 +50,34 @@ export async function recordPurchaseReversalItc(
     documentDate: Date;
     taxTotal: string;
     lineTaxes: string[];
+    /**
+     * The reversal of a reverse-charge purchase is itself reverse-charge: its entry then takes
+     * credit back from the RCM bucket (Table 3.1(d) / 4A(3)), not from ordinary ITC.
+     */
+    isReverseCharge?: boolean;
   },
 ): Promise<void> {
   if (!isPurchaseReversal(p.documentType, p.type)) return;
   if (!money.isPositive(p.taxTotal)) return;
 
   const [biz] = await tx
-    .select({ gstRegistrationType: businesses.gstRegistrationType, stateCode: businesses.stateCode })
+    .select({
+      gstRegistrationType: businesses.gstRegistrationType,
+      stateCode: businesses.stateCode,
+      state: businesses.state,
+    })
     .from(businesses)
     .where(eq(businesses.id, p.businessId))
     .limit(1);
   if (biz?.gstRegistrationType === "composition") return;
 
   const [party] = await tx
-    .select({ stateCode: parties.stateCode })
+    .select({ stateCode: parties.stateCode, state: parties.state })
     .from(parties)
     .where(and(eq(parties.id, p.partyId), eq(parties.businessId, p.businessId)))
     .limit(1);
-  const sameState = !!(biz?.stateCode && party?.stateCode && biz.stateCode === party.stateCode);
+  // The same test GSTR-3B and the invoice's own ITC entry use (state codes, then names).
+  const sameState = isIntraStateSupply(biz, party);
 
   let cgst = "0";
   let sgst = "0";
@@ -89,7 +100,7 @@ export async function recordPurchaseReversalItc(
     sgst,
     igst,
     cess: "0",
-    isReverseCharge: false,
+    isReverseCharge: p.isReverseCharge ?? false,
     notes: "Input credit taken back by a purchase return / purchase-side note",
   });
 }

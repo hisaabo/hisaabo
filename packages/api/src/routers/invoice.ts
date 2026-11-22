@@ -13,6 +13,7 @@ import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
+import { isIntraStateSupply } from "../lib/gst-split.js";
 
 // Reverse the stock (and purchase ITC) impact an invoice had at creation.
 // Shared by delete and cancel so both undo exactly the same effects.
@@ -263,7 +264,7 @@ export const invoiceRouter = router({
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
-      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode })
+      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode, state: parties.state })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -459,13 +460,15 @@ export const invoiceRouter = router({
         const [bizForItc] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
           stateCode: businesses.stateCode,
+          state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
 
         if (bizForItc?.gstRegistrationType !== "composition") {
           const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
           const returnPeriod = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, "0")}`;
 
-          const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
+          // The same test GSTR-3B and a purchase return's ITC entry use (state codes, then names)
+          const sameState = isIntraStateSupply(bizForItc, partyCheck);
 
           // The one CGST/SGST split (per line, odd paisa to CGST: the e-invoice rule), shared with
           // the ledger and the GST returns
@@ -979,6 +982,7 @@ export const invoiceRouter = router({
             documentDate: result.invoiceDate,
             taxTotal: result.taxAmount,
             lineTaxes: savedLines.map((l) => l.taxAmount),
+            isReverseCharge: result.isReverseCharge,
           });
         }
 

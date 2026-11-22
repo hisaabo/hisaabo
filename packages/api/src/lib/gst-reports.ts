@@ -4,7 +4,7 @@ import type { TenantDatabase } from "@hisaabo/db";
 import { csvCell, csvRow, money, splitDocumentGst } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
-import { documentGstSplit, loadLineGstSplits } from "./gst-split.js";
+import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "./gst-split.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -193,14 +193,8 @@ export async function generateGSTR1(
   const itemHsnLookup = new Map(itemHsnData.map((i) => [i.id, i.hsn || "0000"]));
 
   // Fix 3: State comparison using stateCode (preferred) with text fallback
-  const isSameState = (partyState: string | null, partyStateCode: string | null) => {
-    // Prefer state code comparison (2-digit GST codes — more reliable)
-    if (biz?.stateCode && partyStateCode) {
-      return biz.stateCode === partyStateCode;
-    }
-    // Fallback to text comparison
-    return biz?.state && partyState && biz.state.toLowerCase() === partyState.toLowerCase();
-  };
+  const isSameState = (partyState: string | null, partyStateCode: string | null) =>
+    isIntraStateSupply(biz, { state: partyState, stateCode: partyStateCode });
 
   // All money below is accumulated as decimal strings (integer paise) and only
   // converted to the JS numbers of the report types when the rows are emitted.
@@ -491,11 +485,7 @@ export async function generateGSTR3B(
       cls.kind === "reversal" ? money.sub(acc, amount) : money.add(acc, amount);
 
     const tax = money.add(inv.taxAmount, "0");
-    // Prefer state code comparison; fall back to text
-    const sameState = (biz?.stateCode && inv.partyStateCode)
-      ? biz.stateCode === inv.partyStateCode
-      : (biz?.state && inv.partyState &&
-          biz.state.toLowerCase() === inv.partyState.toLowerCase());
+    const sameState = isIntraStateSupply(biz, { state: inv.partyState, stateCode: inv.partyStateCode });
     const [cgst, sgst] = sameState ? documentGstSplit(tax, purchaseLineSplits.get(inv.id)) : ["0.00", "0.00"];
     const igst = sameState ? "0.00" : tax;
 

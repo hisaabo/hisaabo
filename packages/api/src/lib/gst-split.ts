@@ -23,6 +23,19 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { invoiceItems, invoices } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
 
+/**
+ * Is this an intra-state supply (CGST + SGST) or inter-state (IGST)? The one test the GST
+ * returns and the ITC ledger share: 2-digit state codes when both sides have one, otherwise the
+ * state names, case-insensitively; when neither can be compared it is NOT intra-state (IGST).
+ */
+export function isIntraStateSupply(
+  business: { stateCode?: string | null; state?: string | null } | null | undefined,
+  party: { stateCode?: string | null; state?: string | null } | null | undefined,
+): boolean {
+  if (business?.stateCode && party?.stateCode) return business.stateCode === party.stateCode;
+  return !!(business?.state && party?.state && business.state.toLowerCase() === party.state.toLowerCase());
+}
+
 /** What the lines of one document add up to, in integer paise. */
 export interface LineGstSplit {
   /** Sum of the line taxes. */
