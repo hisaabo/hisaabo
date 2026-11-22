@@ -23,6 +23,8 @@ import {
   DuplicateLinesNotice,
   SkipDuplicatesToggle,
   importSummaryMessage,
+  type ImportOutcome,
+  type SkippedDuplicateLine,
 } from "@/components/bank-recon/DuplicateLines";
 
 export const Route = createFileRoute("/bank-reconciliation")({
@@ -114,7 +116,7 @@ function BankReconciliationPage() {
   // Duplicate lines skipped by the import that was just confirmed. Only known
   // right after confirmMapping (not stored), so it is cleared when a different
   // import is opened.
-  const [lastImport, setLastImport] = useState<{ importId: string; duplicatesSkipped: number; totalLines: number } | null>(null);
+  const [lastImport, setLastImport] = useState<ImportOutcome | null>(null);
   const canImport = useCan("create", "BankReconciliation");
   const tabs = canImport ? TABS : TABS.filter((t) => t.value !== "upload");
 
@@ -164,6 +166,7 @@ function BankReconciliationPage() {
           importId={selectedImportId}
           duplicatesSkipped={lastImport?.importId === selectedImportId ? lastImport.duplicatesSkipped : 0}
           importedLines={lastImport?.importId === selectedImportId ? lastImport.totalLines : 0}
+          duplicateLines={lastImport?.importId === selectedImportId ? lastImport.duplicates : []}
         />
       )}
       {activeTab === "summary" && (
@@ -357,7 +360,7 @@ type DetectedTemplate = {
 function UploadTab({
   onSuccess,
 }: {
-  onSuccess: (result: { importId: string; duplicatesSkipped: number; totalLines: number }) => void;
+  onSuccess: (result: ImportOutcome) => void;
 }) {
   const [step, setStep] = useState<"upload" | "mapping">("upload");
   const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -423,6 +426,7 @@ function UploadTab({
       onSuccess({
         importId: data.importId,
         duplicatesSkipped: data.duplicatesSkipped,
+        duplicates: data.duplicates,
         totalLines: data.totalLines,
       });
     },
@@ -838,10 +842,12 @@ function ReviewTab({
   importId,
   duplicatesSkipped = 0,
   importedLines = 0,
+  duplicateLines = [],
 }: {
   importId: string | null;
   duplicatesSkipped?: number;
   importedLines?: number;
+  duplicateLines?: SkippedDuplicateLine[];
 }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
@@ -906,7 +912,7 @@ function ReviewTab({
 
   return (
     <div className="space-y-5">
-      <DuplicateLinesNotice count={duplicatesSkipped} importedLines={importedLines} />
+      <DuplicateLinesNotice count={duplicatesSkipped} importedLines={importedLines} lines={duplicateLines} />
 
       {/* Import stats bar */}
       {importDetail && (

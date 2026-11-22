@@ -60,6 +60,9 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Most skipped duplicate lines confirmMapping lists back (the count is always complete). */
+const MAX_DUPLICATES_RETURNED = 500;
+
 function toColumnMapping(raw: z.infer<typeof bankReconColumnMappingSchema>): ColumnMapping {
   return {
     date: raw.date,
@@ -264,6 +267,18 @@ export const bankReconRouter = router({
       // and re-inserts them below, so they must not count as duplicates.
       let newLines = parsedLines;
       let duplicatesSkipped = 0;
+      // What was skipped, so the user can review it (no schema change: returned
+      // once, not stored). Capped; `duplicatesSkipped` is always the full count.
+      const duplicates: Array<{
+        lineNumber: number;
+        transactionDate: Date;
+        debit: string;
+        credit: string;
+        referenceNumber: string | null;
+        narration: string;
+        existingImportId: string;
+        existingImportFileName: string;
+      }> = [];
       const dedupRange = input.skipDuplicates ? dedupWindow(parsedLines) : null;
       if (dedupRange) {
         const existingLines = await ctx.db
@@ -273,6 +288,8 @@ export const bankReconRouter = router({
             credit: bankStatementLines.credit,
             referenceNumber: bankStatementLines.referenceNumber,
             narration: bankStatementLines.narration,
+            importId: bankStatementLines.importId,
+            importFileName: bankStatementImports.fileName,
           })
           .from(bankStatementLines)
           .innerJoin(bankStatementImports, eq(bankStatementImports.id, bankStatementLines.importId))
@@ -283,10 +300,24 @@ export const bankReconRouter = router({
             ne(bankStatementLines.importId, input.importId),
             gte(bankStatementLines.transactionDate, dedupRange.from),
             lte(bankStatementLines.transactionDate, dedupRange.to),
-          ));
+          ))
+          // Earliest import first, so which import "holds" a line is stable.
+          .orderBy(asc(bankStatementImports.createdAt), asc(bankStatementLines.lineNumber));
         const split = splitDuplicateLines(parsedLines, existingLines);
         newLines = split.fresh;
         duplicatesSkipped = split.duplicates.length;
+        for (const { line, existing } of split.duplicates.slice(0, MAX_DUPLICATES_RETURNED)) {
+          duplicates.push({
+            lineNumber: line.lineNumber,
+            transactionDate: line.transactionDate,
+            debit: line.debit,
+            credit: line.credit,
+            referenceNumber: line.referenceNumber ?? null,
+            narration: line.narration,
+            existingImportId: existing.importId,
+            existingImportFileName: existing.importFileName,
+          });
+        }
       }
 
       // Fetch categorization rules for auto-categorization
@@ -453,6 +484,7 @@ export const bankReconRouter = router({
         matchedLines: matchedCount,
         unmatchedLines: newLines.length - matchedCount,
         duplicatesSkipped,
+        duplicates,
       };
     }),
 

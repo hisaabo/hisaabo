@@ -124,13 +124,25 @@ print(f"Detected {result['totalRows']} rows, template: {result.get('detectedTemp
         { name: "skipDuplicates", type: "boolean", required: false, description: "Skip lines that already exist in another import of the same bank account (same day, debit, credit and reference; normalized narration when the reference is empty). Opt-in: when omitted or false every line is imported, which is what clients that predate the flag (0.10.0) rely on. The 0.10.1 web app always sends it (its checkbox is on by default).", default: "false" },
       ],
       output: {
-        description: "Matching summary: imported, matched, unmatched and skipped-duplicate line counts. `totalLines` counts the lines actually imported; the file held `totalLines + duplicatesSkipped` parsed lines.",
+        description: "Matching summary: imported, matched, unmatched and skipped-duplicate line counts. `totalLines` counts the lines actually imported; the file held `totalLines + duplicatesSkipped` parsed lines. `duplicates` lists the skipped lines (at most 500, in file order; `duplicatesSkipped` is always the full count) so they can be reviewed: position in the file, date, debit, credit, reference, narration, and the earlier import (`existingImportId`, `existingImportFileName`) that already holds the line. Both are empty/0 unless `skipDuplicates` is true, and the list is returned only by this call (not stored).",
         example: {
           importId: "imp-uuid",
           totalLines: 87,
           matchedLines: 62,
           unmatchedLines: 25,
           duplicatesSkipped: 12,
+          duplicates: [
+            {
+              lineNumber: 3,
+              transactionDate: "2026-04-02T00:00:00.000Z",
+              debit: "0.00",
+              credit: "50000.00",
+              referenceNumber: "NEFT222",
+              narration: "NEFT/SALARY/ACME",
+              existingImportId: "imp-earlier-uuid",
+              existingImportFileName: "hdfc-jan-mar.csv",
+            },
+          ],
         },
       },
       codeExamples: {

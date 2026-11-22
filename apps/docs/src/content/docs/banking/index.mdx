@@ -122,7 +122,7 @@ A line counts as a duplicate when an **earlier import of the same bank account**
 
 - Only the same bank account is compared. The same transaction on another account, or in another business, is imported normally.
 - Two identical lines inside one file are both kept (two identical card swipes on one day are two transactions). If an earlier import held one such line and the new file holds two, only one is skipped.
-- After you confirm the column mapping, the review screen shows how many duplicate lines were skipped. Lines skipped as duplicates are not imported and do not appear in the review list.
+- After you confirm the column mapping, the review screen shows how many duplicate lines were skipped and lets you expand a list of them (date, amount, narration, and the earlier statement that already has each one), so you can check nothing legitimate was left out. Lines skipped as duplicates are not imported and do not appear in the review list.
 - The mapping step has a checkbox, **Skip lines already imported from an earlier statement**, which is on by default. Turn it off to import every line.
 - The skipped count is shown once, straight after the import; it is not stored.
 

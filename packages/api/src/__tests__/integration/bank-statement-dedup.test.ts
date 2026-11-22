@@ -165,6 +165,71 @@ describe("bankRecon.confirmMapping duplicate detection", () => {
     expect(imp!.closingBalance).toBe("141800.00");
   });
 
+  it("lists every skipped line, with the import that already holds it, so it can be reviewed", async () => {
+    const caller = callerForRamesh();
+    const account = await newAccount(world.business1.id);
+
+    const first = await importCsv(caller, account.id, csv(L1, L2, L3));
+    const second = await importCsv(caller, account.id, csv(L2, L3, L4));
+
+    expect(second.result.duplicatesSkipped).toBe(2);
+    expect(second.result.duplicates).toHaveLength(2);
+    const [d2, d3] = second.result.duplicates;
+    // Fields of the skipped line as parsed from this file (line numbers are positions in it).
+    expect(d2).toMatchObject({
+      lineNumber: 1,
+      narration: "NEFT/SALARY/ACME",
+      referenceNumber: "NEFT222",
+      debit: "0.00",
+      credit: "50000.00",
+    });
+    expect(d2!.transactionDate.toISOString().slice(0, 10)).toMatch(/^2026-04-0[12]$/);
+    expect(d3).toMatchObject({ lineNumber: 2, narration: "ATM/WDL/HDFC", debit: "2000.00", credit: "0.00" });
+    // ... and the earlier import that already has them.
+    expect(d2!.existingImportId).toBe(first.importId);
+    expect(d3!.existingImportId).toBe(first.importId);
+    expect(d2!.existingImportFileName).toBe("statement.csv");
+    // Skipped lines were not inserted.
+    expect(await linesOf(second.importId)).toHaveLength(1);
+  });
+
+  it("returns an empty list when nothing was skipped or the flag is off", async () => {
+    const caller = callerForRamesh();
+    const account = await newAccount(world.business1.id);
+
+    const first = await importCsv(caller, account.id, csv(L1, L2));
+    expect(first.result.duplicates).toEqual([]);
+
+    const off = await importCsv(caller, account.id, csv(L1, L2), { skipDuplicates: false });
+    expect(off.result).toMatchObject({ duplicatesSkipped: 0, duplicates: [] });
+  });
+
+  it("names the right import when the duplicates come from different earlier imports", async () => {
+    const caller = callerForRamesh();
+    const account = await newAccount(world.business1.id);
+
+    const a = await importCsv(caller, account.id, csv(L1));
+    const b = await importCsv(caller, account.id, csv(L3));
+    const c = await importCsv(caller, account.id, csv(L1, L3));
+
+    const byRef = new Map(c.result.duplicates.map((d) => [d.referenceNumber, d.existingImportId]));
+    expect(byRef.get("UPI111")).toBe(a.importId);
+    expect(byRef.get("ATM333")).toBe(b.importId);
+  });
+
+  it("caps the listed duplicates at 500 while still counting all of them", async () => {
+    const caller = callerForRamesh();
+    const account = await newAccount(world.business1.id);
+
+    const rows = Array.from({ length: 520 }, (_, i) => `10/04/2026,BULK ${i},BULKREF${i},10.00,,1000.00`);
+    await importCsv(caller, account.id, csv(...rows));
+    const again = await importCsv(caller, account.id, csv(...rows));
+
+    expect(again.result.duplicatesSkipped).toBe(520);
+    expect(again.result.totalLines).toBe(0);
+    expect(again.result.duplicates).toHaveLength(500);
+  });
+
   it("skips every line when the same file is uploaded again", async () => {
     const caller = callerForRamesh();
     const account = await newAccount(world.business1.id);

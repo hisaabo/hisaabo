@@ -93,7 +93,34 @@ describe("splitDuplicateLines", () => {
     const c = line({ referenceNumber: "C" });
     const { fresh, duplicates } = splitDuplicateLines([a, b, c], [line({ referenceNumber: "B" })]);
     expect(fresh).toEqual([a, c]);
-    expect(duplicates).toEqual([b]);
+    expect(duplicates.map((d) => d.line)).toEqual([b]);
+  });
+
+  it("pairs each duplicate with the existing line it matched (carrying the existing line's extra fields)", () => {
+    type Existing = DedupLine & { importId: string };
+    const existing: Existing[] = [
+      { ...line({ referenceNumber: "A" }), importId: "imp-A" },
+      { ...line({ referenceNumber: "B" }), importId: "imp-B" },
+    ];
+    const { duplicates } = splitDuplicateLines([line({ referenceNumber: "B" })], existing);
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0]!.existing.importId).toBe("imp-B");
+  });
+
+  it("hands out equal existing lines in the order given, one per incoming line", () => {
+    type Existing = DedupLine & { importId: string };
+    const swipe = (importId: string): Existing => ({
+      ...line({ referenceNumber: null, narration: "Tea Stall" }),
+      importId,
+    });
+    const incoming = [
+      line({ referenceNumber: null, narration: "Tea Stall" }),
+      line({ referenceNumber: null, narration: "Tea Stall" }),
+      line({ referenceNumber: null, narration: "Tea Stall" }),
+    ];
+    const { duplicates, fresh } = splitDuplicateLines(incoming, [swipe("first"), swipe("second")]);
+    expect(duplicates.map((d) => d.existing.importId)).toEqual(["first", "second"]);
+    expect(fresh).toHaveLength(1);
   });
 
   it("consumes existing lines one-for-one (multiset)", () => {

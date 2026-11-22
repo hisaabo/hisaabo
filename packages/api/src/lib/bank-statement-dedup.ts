@@ -72,31 +72,30 @@ export function dedupKey(line: DedupLine): string {
 
 /**
  * Split `incoming` into lines to import (`fresh`) and the lines that already
- * exist in `existing` (`duplicates`). `existing` must come from other imports of
- * the same bank account, never from the import being (re-)confirmed. Order is
- * preserved in both lists.
+ * exist in `existing` (`duplicates`, each paired with the existing line it
+ * matched). `existing` must come from other imports of the same bank account,
+ * never from the import being (re-)confirmed. Order is preserved in both lists.
  */
-export function splitDuplicateLines<T extends DedupLine>(
+export function splitDuplicateLines<T extends DedupLine, E extends DedupLine = DedupLine>(
   incoming: readonly T[],
-  existing: readonly DedupLine[],
-): { fresh: T[]; duplicates: T[] } {
-  const available = new Map<string, number>();
+  existing: readonly E[],
+): { fresh: T[]; duplicates: Array<{ line: T; existing: E }> } {
+  // One queue of still-unclaimed existing lines per key; each incoming line
+  // claims at most one (multiset matching).
+  const available = new Map<string, E[]>();
   for (const line of existing) {
     const key = dedupKey(line);
-    available.set(key, (available.get(key) ?? 0) + 1);
+    const queue = available.get(key);
+    if (queue) queue.push(line);
+    else available.set(key, [line]);
   }
 
   const fresh: T[] = [];
-  const duplicates: T[] = [];
+  const duplicates: Array<{ line: T; existing: E }> = [];
   for (const line of incoming) {
-    const key = dedupKey(line);
-    const remaining = available.get(key) ?? 0;
-    if (remaining > 0) {
-      available.set(key, remaining - 1);
-      duplicates.push(line);
-    } else {
-      fresh.push(line);
-    }
+    const match = available.get(dedupKey(line))?.shift();
+    if (match) duplicates.push({ line, existing: match });
+    else fresh.push(line);
   }
   return { fresh, duplicates };
 }
