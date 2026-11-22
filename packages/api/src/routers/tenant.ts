@@ -206,6 +206,7 @@ export const tenantRouter = router({
       // Self-hosted: join/create default tenant. Once the default tenant has
       // an owner this needs a pending invitation unless open signup is on.
       let touchedTenantId: string | undefined;
+      let insertedTenantId: string | undefined;
       const defaultTenantId = await controlDb.transaction(async (tx) => {
         await lockSignup(tx);
 
@@ -215,6 +216,7 @@ export const tenantRouter = router({
           [defaultTenant] = await tx.insert(tenants).values({
             name: "Default Organization", slug: "default",
           }).returning({ id: tenants.id });
+          insertedTenantId = defaultTenant.id;
         }
 
         const memberCount = await tx.select({ id: tenantMembers.id })
@@ -248,6 +250,9 @@ export const tenantRouter = router({
         if (touchedTenantId) {
           cacheBus.invalidate({ kind: "membership", tenantId: touchedTenantId, userId: ctx.user.id });
         }
+        // A new tenant row changes the "how many organisations" answer
+        // (tenant-businesses.ts creatorRuleApplies).
+        if (insertedTenantId) cacheBus.invalidate({ kind: "tenant", tenantId: insertedTenantId });
       });
 
       const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenantId);

@@ -16,6 +16,7 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/authz.js";
+import { warnIfMultiOrgSelfHosted } from "./lib/tenant-businesses.js";
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
@@ -2345,6 +2346,12 @@ function notFoundResponse(c: Context) {
     logger.fatal("Refusing to start — fix the bundle/deploy layout and retry");
     process.exit(1);
   }
+}
+
+// A self-hosted database holding more than one organisation isolates them by
+// business-creator membership only (until businesses.tenant_id exists, 0.11.0).
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  void warnIfMultiOrgSelfHosted((msg, data) => logger.warn(data ?? {}, msg));
 }
 
 // ── Cross-process cache invalidation ─────────────────────────

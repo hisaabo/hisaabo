@@ -2,8 +2,8 @@
  * Re-establishes a tenant job's context in the worker (docs/architecture/
  * queue.md §5.2 rule 4). Nothing in the envelope is trusted beyond its ids:
  * the tenant must still be active, the business must still belong to it (the
- * lib/authz getBusinessAccess predicate), and the actor must still be a
- * member. Queries go straight to the DB — the worker runs no cache listener,
+ * lib/authz getBusinessAccess predicate, including its multi-org-only creator
+ * rule), and the actor must still be a member. Queries go straight to the DB — the worker runs no cache listener,
  * so the API's authz caches could be stale here.
  *
  * A failed check is a PermanentError (retrying cannot fix it); a DB error is
@@ -13,6 +13,7 @@ import { eq, and } from "drizzle-orm";
 import { controlDb, getTenantDb, tenants, tenantMembers, businesses, type TenantDatabase } from "@hisaabo/db";
 import type { Envelope } from "./envelope.js";
 import { PermanentError } from "./errors.js";
+import { creatorRuleApplies } from "../lib/tenant-businesses.js";
 
 async function isMember(tenantId: string, userId: string): Promise<boolean> {
   const [row] = await controlDb
@@ -42,7 +43,10 @@ export async function establishTenantContext(envelope: Envelope): Promise<{ db: 
       .from(businesses)
       .where(eq(businesses.id, envelope.businessId))
       .limit(1);
-    if (!biz || !(await isMember(tenantId, biz.createdByUserId))) {
+    // Same decision as getBusinessAccess: the creator must still be a member
+    // only where one database holds several organisations. Fresh (uncached)
+    // read: the worker runs no cache listener.
+    if (!biz || ((await creatorRuleApplies({ fresh: true })) && !(await isMember(tenantId, biz.createdByUserId)))) {
       throw new PermanentError("Business not found");
     }
   }

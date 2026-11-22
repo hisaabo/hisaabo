@@ -12,7 +12,7 @@ import { eq, and, gt, isNull, count, sql } from "drizzle-orm";
 import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
-import { getTenantMemberUserIds, businessTenantScope } from "./tenant-businesses.js";
+import { tenantBusinessScope } from "./tenant-businesses.js";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
 
@@ -178,7 +178,7 @@ export async function enforceBusinessLimit(tenantId: string, tx: TenantTx): Prom
   const limits = getLimits(plan);
   if (limits.maxBusinesses === Infinity) return;
 
-  const memberIds = await getTenantMemberUserIds(tenantId);
+  const bizScope = await tenantBusinessScope(tenantId);
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('business-create'))`);
 
   // Count only this tenant's businesses. In self-hosted shared-DB mode a bare
@@ -186,7 +186,7 @@ export async function enforceBusinessLimit(tenantId: string, tx: TenantTx): Prom
   const [{ count: bizCount }] = await tx
     .select({ count: count() })
     .from(businesses)
-    .where(businessTenantScope(memberIds));
+    .where(bizScope);
 
   if (bizCount >= limits.maxBusinesses) {
     throw new TRPCError({
