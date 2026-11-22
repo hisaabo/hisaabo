@@ -19,7 +19,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
-import { calcInvoiceTotals } from "@hisaabo/shared";
+import { calcInvoiceTotals, type PriceUpdateProposal } from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -28,6 +28,7 @@ import { DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
 import { useCan, useCanCreateDocument } from "../../../src/hooks/useCan";
+import { usePricePropagation } from "../../../src/hooks/usePricePropagation";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -55,6 +56,11 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  /**
+   * The rate the Rate field held when the line was picked or loaded. A rate that
+   * still equals it was not edited, so it never proposes a catalog price update.
+   */
+  originalUnitPrice?: string;
 }
 
 function newLineItem(): LineItem {
@@ -1662,8 +1668,17 @@ function InvoiceCreateForm() {
 
   const utils = trpc.useUtils();
 
+  // "Update saved prices?": what the user accepted for this save. It is written
+  // only after the bill itself saved, and a failure there is a toast, never an
+  // error for the bill.
+  const pricing = usePricePropagation("invoice", invoiceType);
+  const acceptedPricesRef = useRef<PriceUpdateProposal[]>([]);
+
   const createMutation = trpc.invoice.create.useMutation({
     onSuccess: (data) => {
+      const accepted = acceptedPricesRef.current;
+      acceptedPricesRef.current = [];
+      void pricing.apply(data.id, accepted);
       // Invalidate lists and dashboards so the new invoice shows up immediately
       // when the user navigates back. Mirrors web DocumentCreator behavior.
       utils.invoice.list.invalidate();
@@ -1673,6 +1688,8 @@ function InvoiceCreateForm() {
       router.replace(`/(invoices)/${data.id}` as never);
     },
     onError: (err) => {
+      // The bill did not save, so the prices that were to follow it must not either.
+      acceptedPricesRef.current = [];
       Alert.alert("Error", err.message, [
         {
           text: "Retry",
@@ -1750,6 +1767,7 @@ function InvoiceCreateForm() {
           variantId: undefined,
           selectedUnit: undefined,
           conversionFactor: undefined,
+          originalUnitPrice: price,
         };
         return next;
       });
@@ -1777,6 +1795,7 @@ function InvoiceCreateForm() {
           variantId: variant.id,
           itemName: parentItem ? `${parentItem.name} - ${label}` : label,
           unitPrice: variantPrice ?? "0",
+          originalUnitPrice: variantPrice ?? "0",
         };
         return next;
       });
@@ -1802,6 +1821,7 @@ function InvoiceCreateForm() {
             selectedUnit: undefined,
             conversionFactor: undefined,
             unitPrice: basePrice,
+            originalUnitPrice: basePrice,
             itemName: parentItem.name,
           };
           return next;
@@ -1818,6 +1838,7 @@ function InvoiceCreateForm() {
           selectedUnit: uv.unit,
           conversionFactor: String(uv.conversionFactor),
           unitPrice: unitPrice ?? "0",
+          originalUnitPrice: unitPrice ?? "0",
           itemName: `${parentItem.name} (${uv.unit})`,
         };
         return next;
@@ -1840,7 +1861,7 @@ function InvoiceCreateForm() {
     [partiesData, invoiceDate]
   );
 
-  const doCreate = useCallback(() => {
+  const doCreate = useCallback(async () => {
     if (!selectedParty) {
       Alert.alert("Validation", "Please select a party.");
       return;
@@ -1861,6 +1882,22 @@ function InvoiceCreateForm() {
         return;
       }
     }
+
+    // One question before saving: update the items' saved prices too? Skipped
+    // (no lookup, no sheet) unless the user can update items and edited a rate
+    // on a catalog-linked line.
+    const decision = await pricing.decide(
+      validItems.map((li) => ({
+        itemId: li.itemId,
+        variantId: li.variantId,
+        selectedUnit: li.selectedUnit,
+        conversionFactor: li.conversionFactor,
+        unitPrice: li.unitPrice,
+        originalUnitPrice: li.originalUnitPrice,
+      })),
+    );
+    if (decision.kind === "back") return;
+    acceptedPricesRef.current = decision.accepted;
 
     haptic.success();
     createMutation.mutate({
@@ -1890,7 +1927,7 @@ function InvoiceCreateForm() {
         conversionFactor: li.conversionFactor || undefined,
       })),
     });
-  }, [selectedParty, lineItems, invoiceType, invoiceDate, dueDate, notes, createMutation]);
+  }, [selectedParty, lineItems, invoiceType, invoiceDate, dueDate, notes, createMutation, pricing]);
 
   const handleCreate = useCallback(() => {
     const total = parseFloat(totals.total);
@@ -2075,10 +2112,10 @@ function InvoiceCreateForm() {
         {/* Sticky Create Button */}
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.createBtn, (createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && styles.createBtnDisabled]}
+            style={[styles.createBtn, (createMutation.isPending || pricing.checking || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && styles.createBtnDisabled]}
             onPress={handleCreate}
             activeOpacity={0.85}
-            disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
+            disabled={createMutation.isPending || pricing.checking || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.textPrimary} size="small" />
@@ -2107,6 +2144,9 @@ function InvoiceCreateForm() {
         onSelect={handleItemSelected}
         onClose={() => setShowItemPicker(false)}
       />
+
+      {/* "Update saved prices?" */}
+      {pricing.dialog}
     </SafeAreaView>
   );
 }
