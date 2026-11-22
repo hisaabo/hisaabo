@@ -119,3 +119,76 @@ describe("invoice_update update_item_prices", () => {
     expect(res.itemPriceUpdate.status).toBe("not_applicable");
   });
 });
+
+describe("invoice_update update_item_prices: a resent line is compared with the SAVED bill, not the catalog", () => {
+  // The catalog price of Ghee moved on to 620.00 after the bill was made at 600.00. An agent that resends the bill's
+  // lines unchanged must not write the bill's old 600.00 over the catalog.
+  const savedBill = (...rates: string[]) => ({
+    "invoice.getById": { id: "inv-1", lineItems: rates.map((unitPrice) => ({ itemId: ITEM, unitPrice, selectedUnit: null, variantId: null })) },
+  });
+  const run = async (overrides: Record<string, unknown>, lines: Array<typeof line>, errors: Record<string, { code: string; message: string }> = {}) => {
+    const { tools, calls } = setup(overrides, errors);
+    const res = parse(await callTool(tools.get("invoice_update")!, { invoice_id: UUID, line_items: lines, update_item_prices: true, confirm: true }));
+    const priceCall = calls.find((c) => c.url.pathname.endsWith("item.updatePricesFromDocument"));
+    return { res, calls, priceCall };
+  };
+
+  it("a line resent at its saved rate (600.00) proposes nothing, though the catalog says 620.00", async () => {
+    const { res, calls, priceCall } = await run(savedBill("600.00"), [line]);
+    expect(priceCall).toBeUndefined(); // before: updates [{ newPrice: 600.00 }], reverting the catalog price
+    expect(res.itemPriceUpdate.status).toBe("nothing_to_update");
+    const order = paths(calls);
+    expect(order.indexOf("invoice.getById")).toBeLessThan(order.indexOf("invoice.update")); // read BEFORE the lines are replaced
+  });
+
+  it("a rate changed from the saved one (600.00 -> 650.00) is a real edit and is proposed", async () => {
+    const { priceCall } = await run(savedBill("600.00"), [{ ...line, unit_price: "650.00" }]);
+    expect(priceCall!.body).toEqual({ documentId: "inv-1", updates: [{ itemId: ITEM, side: "sale", newPrice: "650.00", priceIncludesTax: false }] });
+  });
+
+  it("a line with no saved counterpart is new: compared with the catalog as on create", async () => {
+    const { priceCall } = await run({ "invoice.getById": { id: "inv-1", lineItems: [] } }, [line]);
+    expect(priceCall!.body).toMatchObject({ updates: [{ itemId: ITEM, newPrice: "600.00" }] });
+  });
+
+  it("the n-th resent line of an item is matched with the n-th saved line: [600, 700] resent as [600, 710] edits only the second", async () => {
+    // the unchanged 600.00 line is not an edit, so the slot has ONE proposal (710.00), not two conflicting ones
+    const { res, priceCall } = await run(savedBill("600.00", "700.00"), [line, { ...line, unit_price: "710.00" }]);
+    expect(priceCall!.body).toEqual({ documentId: "inv-1", updates: [{ itemId: ITEM, side: "sale", newPrice: "710.00", priceIncludesTax: false }] });
+    expect(res.itemPriceUpdate.status).toBe("updated");
+  });
+
+  it("[600, 700] resent unchanged proposes nothing at all", async () => {
+    const { res, priceCall } = await run(savedBill("600.00", "700.00"), [line, { ...line, unit_price: "700.00" }]);
+    expect(priceCall).toBeUndefined();
+    expect(res.itemPriceUpdate.status).toBe("nothing_to_update");
+  });
+
+  it("a saved alternate-unit line is not a base-unit counterpart: the resent line is new", async () => {
+    const overrides = { "invoice.getById": { id: "inv-1", lineItems: [{ itemId: ITEM, unitPrice: "600.00", selectedUnit: "box", variantId: null }] } };
+    const { priceCall } = await run(overrides, [line]);
+    expect(priceCall!.body).toMatchObject({ updates: [{ newPrice: "600.00" }] });
+  });
+
+  it("if the saved bill cannot be read, the invoice is still updated, nothing is compared and the result says so", async () => {
+    const { res, calls, priceCall } = await run({}, [line], { "invoice.getById": { code: "FORBIDDEN", message: "no" } });
+    expect(paths(calls)).toContain("invoice.update");
+    expect(priceCall).toBeUndefined();
+    expect(res.itemPriceUpdate.status).toBe("failed");
+    expect(res.itemPriceUpdate.message).toMatch(/previous lines could not be read/);
+    expect(res.invoiceNumber).toBe("INV-00001");
+  });
+
+  it("without the flag the saved bill is not even read", async () => {
+    const { tools, calls } = setup(savedBill("600.00"));
+    await callTool(tools.get("invoice_update")!, { invoice_id: UUID, line_items: [line], confirm: true });
+    expect(paths(calls)).not.toContain("invoice.getById");
+  });
+
+  it("an inclusive item resent at its derived rate also proposes nothing (the baseline decides, not the catalog)", async () => {
+    const inclusive = { ...ghee, salePrice: "10.00", taxPercent: "18.00", taxInclusive: true };
+    const { priceCall } = await run({ ...savedBill("8.47"), "item.getById": inclusive }, [{ ...line, unit_price: "8.47" }]);
+    expect(priceCall).toBeUndefined();
+  });
+});
+

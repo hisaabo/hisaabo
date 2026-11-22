@@ -17,7 +17,7 @@ import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 import { lineItemSchema, toApiLineItems } from "../lib/lineItems.js";
-import { UPDATE_ITEM_PRICES_DESCRIPTION, propagateFromInvoice } from "../lib/priceUpdate.js";
+import { UPDATE_ITEM_PRICES_DESCRIPTION, loadBillBaseline, propagateFromInvoice } from "../lib/priceUpdate.js";
 import { documentTypes, invoiceStatuses } from "@hisaabo/shared";
 
 const INVOICE_STATUS = invoiceStatuses;
@@ -202,6 +202,9 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
     wrapTool(async (input) => {
       const { invoice_id, ...fields } = input;
       const lineItems = fields.line_items ? await toApiLineItems(client, fields.line_items) : undefined;
+      // The update replaces the lines, so read the saved rates FIRST: a resent line at its saved rate is not an edit
+      // (without this, an agent resending the bill would write the bill's old rates over catalog prices that moved on).
+      const previous = fields.update_item_prices && lineItems ? await loadBillBaseline(client, invoice_id) : undefined;
       const invoice = await client.invoice.update({
         id: invoice_id,
         invoiceDate: fields.invoice_date,
@@ -214,7 +217,7 @@ export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) 
         lineItems,
       });
       const itemPriceUpdate = fields.update_item_prices
-        ? await propagateFromInvoice(client, { id: invoice.id, documentType: invoice.documentType, type: invoice.type }, lineItems)
+        ? await propagateFromInvoice(client, { id: invoice.id, documentType: invoice.documentType, type: invoice.type }, lineItems, previous)
         : undefined;
       return {
         content: [{

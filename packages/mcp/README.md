@@ -98,7 +98,7 @@ An AI agent reads free text from your books (party names, notes, store orders) t
 | `invoice_list` | List invoices with filters (status, party, date range) |
 | `invoice_create` | Create a sale or purchase invoice. `unit_price` is tax-exclusive. Optional `update_item_prices: true` also updates the saved price of every linked item whose `unit_price` differs (invoices only; the invoice is saved either way and the result carries `itemPriceUpdate`) |
 | `invoice_get` | Get a single invoice with all line items and payment history |
-| `invoice_update` | Edit an existing invoice (line items, dates, notes, discount). Optional `update_item_prices: true` (with `line_items`) updates the saved item prices like `invoice_create` |
+| `invoice_update` | Edit an existing invoice (line items, dates, notes, discount). Optional `update_item_prices: true` (with `line_items`) updates the saved item prices like `invoice_create`; a line you resend at the rate it already had on the saved invoice is not counted as a price change (the saved lines are read first) |
 | `invoice_update_status` | Change invoice status (draft → sent → paid → cancelled) |
 | `invoice_pdf_url` | Get URL to download invoice PDF (A4 or thermal) |
 | `invoice_delete` | Soft-delete a draft or unpaid invoice |
