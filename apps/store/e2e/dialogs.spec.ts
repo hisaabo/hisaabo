@@ -112,6 +112,35 @@ test.describe("item, cart and phone dialogs", () => {
     await expect(proceed).toBeFocused();
   });
 
+  test("a cart link opens the drawer, and its notice stays readable and dismissible above the dialog", async ({ page }) => {
+    await mockStoreApi(page);
+    const blackRice = "00000000-0000-4000-8000-000000000006";
+    const link = encodeURIComponent(JSON.stringify({ v: 1, items: [{ id: blackRice, qty: 2 }] }));
+    await page.goto(`/${SLUG}#cart=${link}`);
+
+    const drawer = page.getByRole("dialog", { name: /your cart/i });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText("Black Rice")).toBeVisible();
+
+    // The page behind the drawer is inert, the notice is not.
+    const notice = page.locator(".toast-card");
+    await expect(notice).toBeVisible();
+    await expect(page.locator("[data-inert-exempt]")).not.toHaveAttribute("inert", /.*/);
+    await notice.getByRole("button", { name: "Dismiss" }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(drawer).toBeVisible();
+  });
+
+  test("an item link opens that item as a dialog and Esc closes it", async ({ page }) => {
+    await mockStoreApi(page);
+    await page.goto(`/${SLUG}?item=00000000-0000-4000-8000-000000000006`);
+    const dialog = page.getByRole("dialog", { name: "Black Rice" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    expect(page.url()).not.toContain("item=");
+  });
+
   test("keyboard: Add hands focus to the stepper, and removing the last one hands it back", async ({ page }) => {
     await openStore(page);
     const add = page.getByRole("button", { name: "Add Black Rice", exact: true });
