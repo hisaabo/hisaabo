@@ -176,6 +176,13 @@
       "when": 1795337846617,
       "tag": "0024_idempotency_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795338476522,
+      "tag": "0025_tenant_webmcp_disabled",
+      "breakpoints": true
     }
   ]
 }

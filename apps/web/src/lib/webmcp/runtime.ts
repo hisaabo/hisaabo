@@ -15,6 +15,7 @@
  */
 
 import { defineAbilityFor, stripControlChars } from "@hisaabo/shared";
+import { isDesktop } from "@/lib/isDesktop";
 import {
   describeSummary,
   isConfirmHostMounted,
@@ -128,6 +129,10 @@ function rateLimitedResult(retryAfterMs: number): WebMcpToolResult {
  * SSR / worker contexts where neither global exists.
  */
 export function getModelContext(): WebMCP.ModelContext | undefined {
+  // The Tauri desktop shell never exposes tools to a browser agent: its session
+  // is a Bearer token, not the cookie the WebMCP client uses, and WebMCP is a
+  // web-only feature. A polyfill injected into the webview must not change that.
+  if (isDesktop()) return undefined;
   if (typeof document !== "undefined" && document.modelContext) return document.modelContext;
   if (typeof navigator !== "undefined" && navigator.modelContext) return navigator.modelContext;
   return undefined;

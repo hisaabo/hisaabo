@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { getSessionIdFromRequest } from "../context.js";
 import { cacheBus } from "../lib/cache/bus.js";
-import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
+import { requireTenantRole, ADMIN_ROLES, OWNER_ROLES } from "../lib/tenant-access.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
 import { lockSignup, isOpenSignupEnabled, hasPendingInvitation, SIGNUP_CLOSED_MESSAGE } from "../lib/signup-policy.js";
@@ -716,6 +716,21 @@ export const tenantRouter = router({
       await revokeMemberAccess(ctx.tenantId, input.userId, removedUser?.email ?? null);
 
       return { success: true };
+    }),
+
+  // Owner-only: switch browser AI agent (WebMCP) access off (or back on) for the
+  // whole organization. The web app reads the flag through auth.me and never
+  // registers agent tools while it is set (see lib/webmcp-policy.ts). The column
+  // is not part of any cached entry (the tenants cache triggers watch status and
+  // plan only), so there is nothing to invalidate.
+  setWebMcpDisabled: tenantProcedure
+    .input(z.object({ disabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantRole(ctx, OWNER_ROLES, "Only the organization owner can change this setting");
+      await controlDb.update(tenants)
+        .set({ webmcpDisabled: input.disabled, updatedAt: new Date() })
+        .where(eq(tenants.id, ctx.tenantId));
+      return { success: true, webmcpDisabled: input.disabled };
     }),
 
   // Update member role

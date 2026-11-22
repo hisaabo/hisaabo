@@ -116,6 +116,17 @@ describe("getModelContext", () => {
     expect(getModelContext()).toBeUndefined();
     expect(isWebMcpAvailable()).toBe(false);
   });
+
+  it("is never available inside the Tauri desktop shell, even if a polyfill installed a context", () => {
+    installModelContext(document, { registerTool: vi.fn() });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    try {
+      expect(getModelContext()).toBeUndefined();
+      expect(isWebMcpAvailable()).toBe(false);
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
 });
 
 // ── Result envelope ────────────────────────────────────────────

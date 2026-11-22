@@ -142,10 +142,11 @@ describe("write budget in the runtime", () => {
     for (let i = 0; i < WRITE_BUDGET; i++) consumeWrite();
     expect(isWriteBudgetExhausted()).toBe(true);
 
-    setAgentAccessEnabled(false);
+    const scope = { userId: "user-1", tenantId: "tenant-1" };
+    setAgentAccessEnabled(scope, false);
     expect(isWriteBudgetExhausted()).toBe(true);
 
-    setAgentAccessEnabled(true);
+    setAgentAccessEnabled(scope, true);
     expect(isWriteBudgetExhausted()).toBe(false);
     expect(writesRemaining()).toBe(WRITE_BUDGET);
   });

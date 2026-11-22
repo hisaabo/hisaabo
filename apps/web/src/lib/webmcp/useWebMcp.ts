@@ -20,16 +20,22 @@
  * fixed per registration, on purpose.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createWebMcpClient } from "./client";
-import { isAgentAccessEnabled, subscribeAgentAccess } from "./preferences";
+import { isAgentAccessEnabled, subscribeAgentAccess, type AgentPreferenceScope } from "./preferences";
 import { isWebMcpAvailable, registerHisaaboTools } from "./runtime";
 import { webMcpTools } from "./tools";
 import type { WebMcpToolContext, WebMcpTrpcClient } from "./types";
 
 export interface UseWebMcpInput {
-  /** Caller-side gate: signed in, tenant selected, past onboarding. */
+  /**
+   * Caller-side gate: signed in, tenant selected, past onboarding, and neither the
+   * operator (WEBMCP_DISABLED) nor the organization owner has turned agents off.
+   */
   enabled: boolean;
+  /** Who is signed in and which organization is selected: the user's preference is stored per person per organization. */
+  userId: string | null;
+  tenantId: string | null;
   /** Builds the client one registration uses, pinned to a business. Defaults to the real HTTP client; tests inject a fake. */
   createClient?: (businessId: string) => WebMcpTrpcClient;
   /**
@@ -56,7 +62,7 @@ export interface UseWebMcpResult {
 }
 
 export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
-  const { enabled, role, businessId } = input;
+  const { enabled, role, businessId, userId, tenantId } = input;
 
   // Latest-render values for everything the context reads lazily. Updated in
   // an effect (never during render) so concurrent re-renders cannot tear it.
@@ -65,15 +71,24 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
     latest.current = input;
   });
 
-  const [agentAccess, setAgentAccess] = useState(() => isAgentAccessEnabled());
-  useEffect(() => subscribeAgentAccess(setAgentAccess), []);
+  // The preference is read for THIS user and organization on every render
+  // (useSyncExternalStore), never cached in state: when another person signs in
+  // on the same browser there is no render in which they inherit the previous
+  // person's "on".
+  const scope = useMemo<AgentPreferenceScope | null>(() => (userId ? { userId, tenantId } : null), [userId, tenantId]);
+  const subscribe = useCallback((onChange: () => void) => subscribeAgentAccess(scope, onChange), [scope]);
+  const agentAccess = useSyncExternalStore(
+    subscribe,
+    () => isAgentAccessEnabled(scope),
+    () => false,
+  );
 
   const [registeredCount, setRegisteredCount] = useState(0);
   const available = isWebMcpAvailable();
 
   useEffect(() => {
     if (!enabled || !businessId) return;
-    if (!isWebMcpAvailable() || !isAgentAccessEnabled()) return;
+    if (!isWebMcpAvailable() || !isAgentAccessEnabled(scope)) return;
 
     const controller = new AbortController();
     const client = (latest.current.createClient ?? createWebMcpClient)(businessId);
@@ -111,7 +126,7 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
       controller.abort();
       setRegisteredCount(0);
     };
-  }, [enabled, businessId, role, agentAccess]);
+  }, [enabled, businessId, role, agentAccess, scope]);
 
   return { available, enabled: enabled && agentAccess, registeredCount };
 }

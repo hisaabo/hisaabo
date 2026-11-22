@@ -10,6 +10,7 @@ import { parseUserAgent } from "@/lib/parse-user-agent";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useCan } from "@/hooks/useCan";
 import { BrowserAgentSection } from "./BrowserAgentSection";
+import { OrgBrowserAgentPolicy } from "./OrgBrowserAgentPolicy";
 
 // ── Action label map ──────────────────────────────────────────────────────────
 
@@ -745,6 +746,35 @@ const ACCOUNT_TABS = [
   { value: "activity", label: "Activity Log" },
 ];
 
+function BrowserAgentSettings() {
+  const utils = trpc.useUtils();
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: systemConfig } = trpc.system.config.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const setOrgDisabled = trpc.tenant.setWebMcpDisabled.useMutation({
+    onSuccess: () => utils.auth.me.invalidate(),
+  });
+
+  const scope = session?.user?.id ? { userId: session.user.id, tenantId: session.tenantId ?? null } : null;
+  const operatorDisabled = systemConfig?.webmcpDisabled === true;
+  const orgDisabled = session?.webmcpDisabled === true;
+  // The API accepts the change from the owner only; the control is hidden from everyone else.
+  const isOwner = session?.role === "owner" || session?.role === "superadmin";
+
+  return (
+    <>
+      <BrowserAgentSection scope={scope} operatorDisabled={operatorDisabled} orgDisabled={orgDisabled} />
+      {isOwner && (
+        <OrgBrowserAgentPolicy
+          disabled={orgDisabled}
+          saving={setOrgDisabled.isPending}
+          operatorDisabled={operatorDisabled}
+          onChange={(disabled) => setOrgDisabled.mutate({ disabled })}
+        />
+      )}
+    </>
+  );
+}
+
 export function AccountTab() {
   const [tab, setTab] = useState("sessions");
   const canManageKeys = useCan("manage", "Team");
@@ -753,7 +783,7 @@ export function AccountTab() {
   return (
     <div className="space-y-6">
       <ProfileCard />
-      <BrowserAgentSection />
+      <BrowserAgentSettings />
       <div>
         <PillTabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
         {tab === "sessions" && <SessionsContent />}

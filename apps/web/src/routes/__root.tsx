@@ -516,14 +516,23 @@ function RootLayout() {
   // several early returns, and hooks must run before those.
   const webMcpBusinessId = resolveWebMcpBusinessId(currentBusinessId, businesses);
   const webMcpBusiness = businesses?.find((b) => b.id === webMcpBusinessId) ?? null;
+  // Agent access is governed from three places: the operator (WEBMCP_DISABLED, via
+  // system.config), the organization owner (auth.me) and the person (their own
+  // switch, per person per organization). Fail closed: nothing registers until the
+  // operator's answer has arrived.
+  const { data: systemConfig } = trpc.system.config.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const webMcpAllowedByPolicy = systemConfig !== undefined && !systemConfig.webmcpDisabled && !session?.webmcpDisabled;
   const webMcpScopeKey = session?.user?.id
     ? `${session.user.id}:${session.tenantId ?? ""}:${currentBusinessId ?? ""}`
     : null;
   useWebMcp({
     enabled:
+      webMcpAllowedByPolicy &&
       !!session?.user &&
       !!session?.tenantId &&
       !(Array.isArray(businesses) && businesses.length === 0), // still onboarding
+    userId: session?.user?.id ?? null,
+    tenantId: session?.tenantId ?? null,
     // The module-level business the UI's own requests use; the runtime compares
     // it with the registration's business after every confirmation.
     getActiveBusinessId: getBusinessId,

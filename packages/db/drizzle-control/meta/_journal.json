@@ -64,6 +64,13 @@
       "when": 1795204052022,
       "tag": "0008_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795338477498,
+      "tag": "0009_tenant_webmcp_disabled",
+      "breakpoints": true
     }
   ]
 }

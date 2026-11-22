@@ -1432,17 +1432,20 @@ export const authRouter = router({
 
   // ── Me ───────────────────────────────────────────────────────
   me: publicProcedure.query(async ({ ctx }) => {
-    if (!ctx.user) return { user: null, tenantId: null, tenantName: null, role: null, needsProfile: false };
+    if (!ctx.user) return { user: null, tenantId: null, tenantName: null, role: null, needsProfile: false, webmcpDisabled: false };
 
     let tenantName: string | null = null;
     let role: string | null = null;
+    // The owner's organization-wide switch for browser AI agents (WebMCP). Read live.
+    let webmcpDisabled = false;
     if (ctx.tenantId) {
       const [t] = await controlDb
-        .select({ name: tenants.name })
+        .select({ name: tenants.name, webmcpDisabled: tenants.webmcpDisabled })
         .from(tenants)
         .where(eq(tenants.id, ctx.tenantId))
         .limit(1);
       tenantName = t?.name ?? null;
+      webmcpDisabled = t?.webmcpDisabled ?? false;
 
       const [membership] = await controlDb
         .select({ role: tenantMembers.role })
@@ -1458,7 +1461,7 @@ export const authRouter = router({
     // Build identity is only disclosed to signed-in users (never via the
     // unauthenticated /health or the logged-out branch above).
     const server = { version: buildInfo.version, commit: buildInfo.commit };
-    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, role, needsProfile: !ctx.user.name, server };
+    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, role, needsProfile: !ctx.user.name, webmcpDisabled, server };
   }),
 });
 

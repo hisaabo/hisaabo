@@ -10,8 +10,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
-import { WEBMCP_PREF_KEY } from "../preferences";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { LEGACY_WEBMCP_PREF_KEY, agentPreferenceKey } from "../preferences";
 import type { WebMcpToolContext, WebMcpTrpcClient } from "../types";
 
 // The catalog is the sibling module under test elsewhere; two stubs are enough here.
@@ -43,6 +43,9 @@ vi.mock("../tools", () => ({
 const { useWebMcp } = await import("../useWebMcp");
 type UseWebMcpInput = Parameters<typeof useWebMcp>[0];
 
+const SCOPE = { userId: "user-1", tenantId: "tenant-1" };
+const PREF_KEY = agentPreferenceKey(SCOPE);
+
 let registerTool: Mock<
   (tool: WebMCP.ModelContextTool, options?: WebMCP.ModelContextRegisterToolOptions) => Promise<void>
 >;
@@ -50,6 +53,8 @@ let registerTool: Mock<
 function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
   return {
     enabled: true,
+    userId: SCOPE.userId,
+    tenantId: SCOPE.tenantId,
     createClient: () => ({}) as unknown as WebMcpTrpcClient,
     role: "owner",
     businessId: "biz-1",
@@ -64,7 +69,7 @@ function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
 
 beforeEach(() => {
   seenContexts.length = 0;
-  localStorage.setItem(WEBMCP_PREF_KEY, "on");
+  localStorage.setItem(PREF_KEY, "on");
   registerTool = vi.fn(async () => {});
   Object.defineProperty(document, "modelContext", {
     value: {
@@ -239,7 +244,7 @@ describe("useWebMcp", () => {
   });
 
   it("stays silent by default (opt-in) and for legacy stored values", async () => {
-    localStorage.removeItem(WEBMCP_PREF_KEY);
+    localStorage.removeItem(PREF_KEY);
     const { result } = renderHook(() => useWebMcp(makeInput()));
     await Promise.resolve();
     expect(registerTool).not.toHaveBeenCalled();
@@ -247,11 +252,63 @@ describe("useWebMcp", () => {
   });
 
   it("stays silent when the user turned agent access off", async () => {
-    localStorage.setItem(WEBMCP_PREF_KEY, "off");
+    localStorage.setItem(PREF_KEY, "off");
     const { result } = renderHook(() => useWebMcp(makeInput()));
     await Promise.resolve();
     expect(registerTool).not.toHaveBeenCalled();
     expect(result.current.enabled).toBe(false);
+  });
+
+  it("does not inherit the previous person's 'on' when someone else signs in on the same browser", async () => {
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput(),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    const firstSignal = registerTool.mock.calls[0][1]?.signal as AbortSignal;
+
+    // Ravi signs in on the same browser profile (same organization, same business).
+    rerender(makeInput({ userId: "user-ravi" }));
+
+    await waitFor(() => expect(firstSignal.aborted).toBe(true));
+    await Promise.resolve();
+    expect(registerTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not carry the preference to another organization of the same person", async () => {
+    const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput(),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+
+    rerender(makeInput({ tenantId: "tenant-2" }));
+    await Promise.resolve();
+    expect(registerTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays off when nobody is signed in, whatever is stored", async () => {
+    renderHook(() => useWebMcp(makeInput({ userId: null, tenantId: null })));
+    await Promise.resolve();
+    expect(registerTool).not.toHaveBeenCalled();
+  });
+
+  it("ignores the old browser-wide 'on'", async () => {
+    localStorage.clear();
+    localStorage.setItem(LEGACY_WEBMCP_PREF_KEY, "on");
+    renderHook(() => useWebMcp(makeInput()));
+    await Promise.resolve();
+    expect(registerTool).not.toHaveBeenCalled();
+  });
+
+  it("registers when the person turns it on after the page loaded", async () => {
+    localStorage.clear();
+    const { result } = renderHook(() => useWebMcp(makeInput()));
+    await Promise.resolve();
+    expect(registerTool).not.toHaveBeenCalled();
+
+    const { setAgentAccessEnabled } = await import("../preferences");
+    act(() => setAgentAccessEnabled(SCOPE, true));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
+    expect(result.current.enabled).toBe(true);
   });
 
   it("reports unavailable when the browser exposes no model context", async () => {
