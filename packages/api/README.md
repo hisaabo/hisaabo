@@ -78,7 +78,9 @@ In cloud/SaaS mode (`MULTI_TENANT=true`), each tenant has its own database. The 
 |---|---|---|
 | `auth` | `routers/auth.ts` | `register`, `login`, `logout`, `sendMagicLink`, `verifyMagicLink`, `me` |
 | `business` | `routers/business.ts` | `list`, `create`, `update`, `switchBusiness` |
-| `party` | `routers/party.ts` | `list`, `create`, `update`, `delete`, `ledger`, `merge`, `exportTally` |
+| `party` | `routers/party.ts` | `list`, `create`, `update`, `delete`, `ledger`, `merge` (`tallyExport`, a CSV, is deprecated: use `reports.tallyExport`) |
+| `reports` | `routers/reports.ts` | `trialBalance`, `balanceSheet`, `profitAndLoss`, `generalLedger`, `tallyExport` (Tally Prime XML) |
+| `journal` | `routers/journal.ts` | `list`, `create`, `update`, `void` (`delete` is an alias of `void`: journal entries are never erased) |
 | `item` | `routers/item.ts` | `list`, `create`, `update`, `delete`, `adjustStock`, `stockHistory` |
 | `invoice` | `routers/invoice.ts` | `list`, `create`, `update`, `delete`, `updateStatus`, `pdf` |
 | `payment` | `routers/payment.ts` | `list`, `create`, `update`, `delete`, `allocate` |

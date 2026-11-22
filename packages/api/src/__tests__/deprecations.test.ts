@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { logger } from "../lib/logger.js";
 import {
   warnPasswordSignInDeprecated,
+  warnTallyCsvExportDeprecated,
   resetDeprecationWarnings,
   DEPRECATION_LOG_INTERVAL_MS,
 } from "../lib/deprecations.js";
@@ -39,6 +40,39 @@ describe("warnPasswordSignInDeprecated", () => {
     expect(warn).toHaveBeenCalledTimes(2);
 
     warnPasswordSignInDeprecated("auth.login", DEPRECATION_LOG_INTERVAL_MS + 1);
+    expect(warn).toHaveBeenCalledTimes(3);
+    const [fields] = warn.mock.calls[2] as unknown as [Record<string, unknown>];
+    expect(fields.callsSinceLastWarning).toBe(3);
+  });
+});
+
+describe("warnTallyCsvExportDeprecated", () => {
+  it("names the replacement and carries no removal date or request data", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    warnTallyCsvExportDeprecated(1_000);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = warn.mock.calls[0] as unknown as [Record<string, unknown>, string];
+    expect(message).toContain("party.tallyExport is deprecated");
+    expect(message).toContain("use reports.tallyExport");
+    expect(fields).toEqual({
+      deprecated: true,
+      procedure: "party.tallyExport",
+      replacement: "reports.tallyExport",
+      callsSinceLastWarning: 1,
+    });
+  });
+
+  it("is rate-limited on its own budget, independent of password sign-in", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    warnTallyCsvExportDeprecated(0);
+    warnTallyCsvExportDeprecated(10);
+    warnTallyCsvExportDeprecated(20);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    warnPasswordSignInDeprecated("auth.login", 30);
+    expect(warn).toHaveBeenCalledTimes(2);
+
+    warnTallyCsvExportDeprecated(DEPRECATION_LOG_INTERVAL_MS + 1);
     expect(warn).toHaveBeenCalledTimes(3);
     const [fields] = warn.mock.calls[2] as unknown as [Record<string, unknown>];
     expect(fields.callsSinceLastWarning).toBe(3);

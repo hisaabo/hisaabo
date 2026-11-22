@@ -6,6 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { warnTallyCsvExportDeprecated } from "../lib/deprecations.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
@@ -642,8 +643,16 @@ export const partyRouter = router({
     }),
 
   /**
-   * tallyExport — generates a Tally-compatible CSV of all vouchers
-   * (sales invoices, purchase invoices, payments, expenses) for the period.
+   * tallyExport — generates a CSV of all vouchers (sales invoices, purchase
+   * invoices, payments, expenses) for the period.
+   *
+   * @deprecated Since 0.10.1. Tally does not import this CSV; it imports XML.
+   * Use `reports.tallyExport`, which returns Tally Prime XML (ledger masters plus
+   * every invoice, payment, expense and journal entry, with no row limit). This
+   * procedure is kept unchanged so existing callers keep working; each process
+   * logs a rate-limited WARN while it is still being called. Nothing in this
+   * repository calls it any more (the web Reports > Tally Export tab moved to
+   * `reports.tallyExport`).
    */
   tallyExport: viewerProcedure
     .input(z.object({
@@ -653,6 +662,7 @@ export const partyRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
+      warnTallyCsvExportDeprecated();
 
       function formatTallyDate(d: Date): string {
         const dd = String(d.getDate()).padStart(2, "0");

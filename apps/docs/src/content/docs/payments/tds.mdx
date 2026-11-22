@@ -79,7 +79,7 @@ TDS posts to a system account, **1600 - TDS Receivable**, which is an asset: it 
 - **The account is created for you.** 1600 is part of the default chart of accounts, and businesses that existed before TDS support received it when you upgraded. You can rename it but not deactivate it. If you had already created your own account coded `1600`, receipts that carry TDS are refused with a message until that account is recoded.
 - **The customer's balance clears.** The party ledger and statement count the cash plus the TDS as settled, and show the receipt as *Payment received (incl. TDS ₹1,000.00)*.
 - **Cash figures stay on cash.** Bank balances, cash in hand, the payment-mode breakdown and bank reconciliation count only the ₹9,000 that moved. Invoiced-versus-collected figures count the full ₹10,000 settled.
-- **Tally export.** The TDS is exported as a second receipt leg, debiting TDS Receivable and crediting the party.
+- **Tally export.** The TDS is exported as part of the same receipt voucher: one ledger line debits TDS Receivable, alongside the bank or cash line, against the credit to the party.
 - **Cash flow statement.** TDS Receivable is treated as a current asset (working capital).
 
 Hisaabo tracks the amount you can claim. It does not yet reconcile it with your Form 26AS or AIS, so compare the TDS Receivable balance with the credit shown there when you file.
