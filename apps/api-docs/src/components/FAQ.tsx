@@ -99,7 +99,7 @@ const FAQ_ITEMS: FAQItem[] = [
   },
   {
     question: "How do I reconcile bank statements?",
-    answer: "1) Upload the CSV via `bankRecon.uploadCSV` — Hisaabo auto-detects the bank format (10 Indian banks supported). 2) Confirm column mapping via `bankRecon.confirmMapping` (lines already imported from another statement of the same bank account are skipped and counted in `duplicatesSkipped`). 3) The system runs 4-tier auto-matching: exact (amount + date + ref), strong (amount + 2-day window), narration parse (UPI ID, cheque number), partial (amount only, 7-day window). 4) Review unmatched items and `confirmMatch`, `createExpense`, or `ignoreLine`.",
+    answer: "1) Upload the CSV via `bankRecon.uploadCSV` — Hisaabo auto-detects the bank format (10 Indian banks supported). 2) Confirm column mapping via `bankRecon.confirmMapping` (with `skipDuplicates: true`, lines already imported from another statement of the same bank account are skipped and counted in `duplicatesSkipped`; the default is false). 3) The system runs 4-tier auto-matching: exact (amount + date + ref), strong (amount + 2-day window), narration parse (UPI ID, cheque number), partial (amount only, 7-day window). 4) Review unmatched items and `confirmMatch`, `createExpense`, or `ignoreLine`.",
     relatedGroups: ["bank-recon"],
     personas: ["ca-accountant"],
   },

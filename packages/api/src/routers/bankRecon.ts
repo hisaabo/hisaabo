@@ -192,8 +192,11 @@ export const bankReconRouter = router({
       csvContent: z.string().min(1).max(10_000_000),
       templateId: z.string().uuid().optional(),
       // Skip lines already imported from another statement of this bank account
-      // (same day, debit, credit and reference/narration). On by default.
-      skipDuplicates: z.boolean().default(true),
+      // (same day, debit, credit and reference/narration). Opt-in: clients that
+      // predate this flag (0.10.0 web/desktop) never send it and must keep
+      // importing every line rather than silently losing some. The 0.10.1 web
+      // app sends it explicitly (its checkbox is on by default).
+      skipDuplicates: z.boolean().default(false),
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "BankReconciliation");

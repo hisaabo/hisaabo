@@ -4,9 +4,12 @@
  * A parsed statement line is a duplicate when a line already exists in a
  * DIFFERENT import of the SAME bank account with the same day, debit, credit and
  * reference number (normalized narration when the line has no reference).
- * Duplicates are skipped by default, counted in `duplicatesSkipped`, and never
- * matched against another business or another bank account.
+ * Duplicates are skipped when the client sends `skipDuplicates: true` (the 0.10.1
+ * web app does), counted in `duplicatesSkipped`, and never matched against
+ * another business or another bank account. The server default is OFF, so a
+ * 0.10.0 client that never sends the flag imports every line, as before.
  *
+ *   Default (flag omitted)        nothing is skipped
  *   Overlapping statements        only the new lines are imported
  *   Same file uploaded twice      every line is skipped, nothing inserted
  *   Re-confirming one import      its own old lines are not "duplicates"
@@ -88,8 +91,11 @@ async function importCsv(
   caller: ReturnType<typeof callerForRamesh>,
   bankAccountId: string,
   content: string,
-  extra: { skipDuplicates?: boolean } = {},
+  // The server default is off, so the dedup tests turn it on explicitly, like the
+  // 0.10.1 web app does. "omit" sends no flag at all, like a 0.10.0 client.
+  opts: { skipDuplicates?: boolean | "omit" } = {},
 ) {
+  const skipDuplicates = opts.skipDuplicates ?? true;
   const upload = await caller.bankRecon.uploadCSV({
     bankAccountId,
     fileName: "statement.csv",
@@ -99,7 +105,7 @@ async function importCsv(
     importId: upload.importId,
     csvContent: content,
     columnMapping: MAPPING,
-    ...extra,
+    ...(skipDuplicates === "omit" ? {} : { skipDuplicates }),
   });
   return { importId: upload.importId, result };
 }
@@ -117,6 +123,17 @@ const L3 = "03/04/2026,ATM/WDL/HDFC,ATM333,2000.00,,143000.00";
 const L4 = "04/04/2026,UPI/PAY/GUPTA SUPPLIERS,UPI444,1200.00,,141800.00";
 
 describe("bankRecon.confirmMapping duplicate detection", () => {
+  it("is off by default: a client that sends no skipDuplicates flag imports every line (0.10.0 clients)", async () => {
+    const caller = callerForRamesh();
+    const account = await newAccount(world.business1.id);
+
+    await importCsv(caller, account.id, csv(L1, L2, L3));
+    const second = await importCsv(caller, account.id, csv(L2, L3, L4), { skipDuplicates: "omit" });
+
+    expect(second.result).toMatchObject({ totalLines: 3, duplicatesSkipped: 0 });
+    expect(await linesOf(second.importId)).toHaveLength(3);
+  });
+
   it("imports only the new lines of an overlapping statement", async () => {
     const caller = callerForRamesh();
     const account = await newAccount(world.business1.id);
@@ -184,6 +201,7 @@ describe("bankRecon.confirmMapping duplicate detection", () => {
       importId: first.importId,
       csvContent: csv(L1, L2),
       columnMapping: MAPPING,
+      skipDuplicates: true,
     });
     expect(again).toMatchObject({ totalLines: 2, duplicatesSkipped: 0 });
     expect(await linesOf(first.importId)).toHaveLength(2);

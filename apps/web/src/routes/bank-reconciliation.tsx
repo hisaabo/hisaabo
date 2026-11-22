@@ -18,6 +18,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { Pagination } from "@/components/ui/Pagination";
+import { buildConfirmMappingInput } from "@/lib/bank-recon-confirm";
 import {
   DuplicateLinesNotice,
   SkipDuplicatesToggle,
@@ -474,26 +475,11 @@ function UploadTab({
   function handleConfirm(overrideTemplateId?: string) {
     if (!csvContent) return;
 
-    const mapInt = (v: string) => v !== "" ? parseInt(v, 10) : undefined;
     const tmplId = overrideTemplateId ?? selectedTemplateId ?? undefined;
-    confirmMutation.mutate({
-      importId,
-      csvContent,
-      templateId: tmplId || undefined,
-      skipDuplicates,
-      columnMapping: {
-        date: parseInt(mapping.date, 10),
-        narration: parseInt(mapping.narration, 10),
-        debit: mapInt(mapping.debit),
-        credit: mapInt(mapping.credit),
-        amount: mapInt(mapping.amount),
-        type: mapInt(mapping.type),
-        reference: mapInt(mapping.reference),
-        balance: mapInt(mapping.balance),
-        dateFormat: mapping.dateFormat,
-        skipRows: parseInt(mapping.skipRows, 10),
-      },
-    });
+    // skipDuplicates is always sent: the server default is off.
+    confirmMutation.mutate(
+      buildConfirmMappingInput({ importId, csvContent, templateId: tmplId, skipDuplicates, mapping }),
+    );
   }
 
   function handleSaveTemplate() {
