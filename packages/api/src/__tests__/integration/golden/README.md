@@ -140,7 +140,6 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 | Where | What |
 | --- | --- |
-| `gst-reports.ts:415-429` | GSTR-3B ITC query has no `documentType = 'invoice'` filter: purchase returns and purchase debit notes are *added* to ITC (05B) |
 | `party.ts:164-178` (and `list` at `:70-73`) | Party balance includes quotations / proformas / challans, and adds a purchase-side debit note instead of subtracting it (05B, 13) |
 | `party.ts:450-458`, `:490` | `ledgerReport` applies the opposite sign convention to a supplier's opening balance than `getById` (10) |
 | `itc.ts:389-414`, `:536-579` | Re-recording a period's utilisation upserts the row but posts a second journal; Input GST goes negative (08) |

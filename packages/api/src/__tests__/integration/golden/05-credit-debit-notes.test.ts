@@ -269,11 +269,7 @@ describe("golden 05B: purchase return and purchase-side debit note", () => {
     expect(r.creditNotes).toEqual([]);
   });
 
-  // BUG: generateGSTR3B selects every type = 'purchase' document with no
-  // documentType = 'invoice' filter, so purchase returns / debit notes are ADDED to
-  // ITC instead of reducing it. Ledger input GST is 675 + 675; actual CGST today is
-  // 900 + 180 + 45 = 1125.
-  it.fails("GSTR-3B ITC is net of purchase returns and debit notes: 675 CGST + 675 SGST", async () => {
+  it("GSTR-3B ITC is net of purchase returns and debit notes: 675 CGST + 675 SGST", async () => {
     const r = await w.caller.gst.gstr3b({ year: 2025, month: 9 });
     expect(fixed2(r.itc.cgst)).toBe("675.00");
     expect(fixed2(r.itc.sgst)).toBe("675.00");

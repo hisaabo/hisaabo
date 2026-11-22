@@ -3,6 +3,7 @@ import { invoices, invoiceItems, parties, businesses, items as itemsTable } from
 import type { TenantDatabase } from "@hisaabo/db";
 import { csvCell, csvRow, money } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
+import { classifyLedgerDocument } from "./ledger-documents.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -442,7 +443,13 @@ export async function generateGSTR3B(
 
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
 
-  const purchaseInvoices = await db.select({
+  // Purchase-side documents of the period. The documentType filter matters: without it
+  // purchase returns and purchase-side debit notes were summed like invoices and ADDED to
+  // the input credit. Which documents are purchase-side, and which of them reverse a
+  // purchase, is decided by `classifyLedgerDocument`, the same rule the ledger uses.
+  const purchaseDocs = await db.select({
+    documentType: invoices.documentType,
+    type: invoices.type,
     taxAmount: invoices.taxAmount,
     subtotal: invoices.subtotal,
     partyState: parties.state,
@@ -452,7 +459,7 @@ export async function generateGSTR3B(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      eq(invoices.type, "purchase"),
+      inArray(invoices.documentType, ["invoice", "debit_note", "purchase_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
@@ -463,7 +470,13 @@ export async function generateGSTR3B(
   // RCM accumulators: Table 3.1(d) — inward supplies liable to reverse charge
   let rcmTaxableValue = "0.00", rcmCgst = "0.00", rcmSgst = "0.00", rcmIgst = "0.00";
 
-  for (const inv of purchaseInvoices) {
+  for (const inv of purchaseDocs) {
+    const cls = classifyLedgerDocument(inv.documentType, inv.type);
+    if (cls?.side !== "purchase") continue; // a sale-side document that shares the documentType
+    // A purchase return / purchase-side debit note takes input credit back; an invoice adds it.
+    const apply = (acc: string, amount: string) =>
+      cls.kind === "reversal" ? money.sub(acc, amount) : money.add(acc, amount);
+
     const tax = money.add(inv.taxAmount, "0");
     // Prefer state code comparison; fall back to text
     const sameState = (biz?.stateCode && inv.partyStateCode)
@@ -475,15 +488,15 @@ export async function generateGSTR3B(
 
     if (inv.isReverseCharge) {
       // RCM purchases: tracked in 3.1(d) AND generate ITC for the buyer
-      rcmTaxableValue = money.add(rcmTaxableValue, inv.subtotal);
-      rcmCgst = money.add(rcmCgst, cgst);
-      rcmSgst = money.add(rcmSgst, sgst);
-      rcmIgst = money.add(rcmIgst, igst);
+      rcmTaxableValue = apply(rcmTaxableValue, inv.subtotal);
+      rcmCgst = apply(rcmCgst, cgst);
+      rcmSgst = apply(rcmSgst, sgst);
+      rcmIgst = apply(rcmIgst, igst);
     }
     // Normal and RCM purchases alike carry their GST as input credit
-    itcCgst = money.add(itcCgst, cgst);
-    itcSgst = money.add(itcSgst, sgst);
-    itcIgst = money.add(itcIgst, igst);
+    itcCgst = apply(itcCgst, cgst);
+    itcSgst = apply(itcSgst, sgst);
+    itcIgst = apply(itcIgst, igst);
   }
 
   // Output tax (Table 3.1(a)) is NET of the period's credit notes and sales
