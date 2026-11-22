@@ -308,6 +308,13 @@ export async function generateGSTR1(
   // type = "purchase", reverses that purchase and reduces input credit (GSTR-3B Table 4), so it
   // is not an outward credit note. A purchase-side debit note / purchase return is a document we
   // issue to a supplier, likewise not an outward supply.
+  const noteConditions = [
+    eq(invoices.type, "sale"),
+    inArray(invoices.documentType, ["credit_note", "sales_return", "debit_note"]),
+    sql`${invoices.status} != 'cancelled'`,
+    isNull(invoices.deletedAt),
+    ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
+  ];
   const rawNotes = await db.select({
     id: invoices.id,
     documentType: invoices.documentType,
@@ -324,14 +331,7 @@ export async function generateGSTR1(
     partyStateCode: parties.stateCode,
   }).from(invoices)
     .innerJoin(parties, eq(parties.id, invoices.partyId))
-    .where(and(
-      eq(invoices.businessId, businessId),
-      eq(invoices.type, "sale"),
-      inArray(invoices.documentType, ["credit_note", "sales_return", "debit_note"]),
-      sql`${invoices.status} != 'cancelled'`,
-      isNull(invoices.deletedAt),
-      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
-    ))
+    .where(and(eq(invoices.businessId, businessId), ...noteConditions))
     .orderBy(invoices.invoiceDate);
 
   const rawCreditNotes = rawNotes.filter((n) => {
@@ -356,9 +356,10 @@ export async function generateGSTR1(
     : [];
   const refInvoiceMap = new Map(refInvoiceNumbers.map((r) => [r.id, r.invoiceNumber]));
 
-  // Per-line CGST / SGST sums of the notes (the e-invoice rule, see gst-split.ts).
+  // Per-line CGST / SGST sums of the notes (the e-invoice rule, see gst-split.ts), selected by the
+  // report's own business / period conditions (an id list would not survive a large month).
   const noteLineSplits = rawNotes.length > 0
-    ? await loadLineGstSplits(db, businessId, [inArray(invoices.id, rawNotes.map((n) => n.id))])
+    ? await loadLineGstSplits(db, businessId, noteConditions)
     : new Map();
 
   const toNote = (n: (typeof rawCreditNotes)[number]): GSTR1Note => {
@@ -448,6 +449,12 @@ export async function generateGSTR3B(
   // includes a credit note or sales return raised from a PURCHASE invoice (type = "purchase"),
   // which takes input credit back like a purchase return. Only invoices and these reversals
   // count; quotations, proformas and challans never reach ITC.
+  const purchaseConditions = [
+    inArray(invoices.documentType, ["invoice", "debit_note", "credit_note", "sales_return", "purchase_return"]),
+    sql`${invoices.status} != 'cancelled'`,
+    isNull(invoices.deletedAt),
+    ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
+  ];
   const purchaseDocs = await db.select({
     id: invoices.id,
     documentType: invoices.documentType,
@@ -459,13 +466,7 @@ export async function generateGSTR3B(
     isReverseCharge: invoices.isReverseCharge,
   }).from(invoices)
     .innerJoin(parties, eq(parties.id, invoices.partyId))
-    .where(and(
-      eq(invoices.businessId, businessId),
-      inArray(invoices.documentType, ["invoice", "debit_note", "credit_note", "sales_return", "purchase_return"]),
-      sql`${invoices.status} != 'cancelled'`,
-      isNull(invoices.deletedAt),
-      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
-    ));
+    .where(and(eq(invoices.businessId, businessId), ...purchaseConditions));
 
   let itcIgst = "0.00", itcCgst = "0.00", itcSgst = "0.00";
 
@@ -474,7 +475,7 @@ export async function generateGSTR3B(
 
   // Per-line CGST / SGST sums of the purchase-side documents (the e-invoice rule, see gst-split.ts).
   const purchaseLineSplits = purchaseDocs.length > 0
-    ? await loadLineGstSplits(db, businessId, [inArray(invoices.id, purchaseDocs.map((d) => d.id))])
+    ? await loadLineGstSplits(db, businessId, purchaseConditions)
     : new Map();
 
   for (const inv of purchaseDocs) {

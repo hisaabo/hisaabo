@@ -44,11 +44,26 @@ export interface LineGstSplit {
   cgstPaise: number;
 }
 
+/** Integer paise of a money string ("102.59" -> 10259), by digits, never through a float. */
+function moneyToPaise(value: string): number {
+  const m = money.add(value, "0"); // normalised "-?d+.dd"
+  const negative = m.startsWith("-");
+  const paise = Number(m.replace("-", "").replace(".", ""));
+  return negative ? -paise : paise;
+}
+
+/** A money string from integer paise (10259 -> "102.59"), by digits, never through a float. */
+function paiseToMoney(paise: number): string {
+  const negative = paise < 0;
+  const abs = Math.abs(paise);
+  return `${negative ? "-" : ""}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+}
+
 /** [CGST, SGST] of a document from the grouped line sums, falling back to one split of `taxAmount`. */
 export function documentGstSplit(taxAmount: string, line?: LineGstSplit | null): [string, string] {
   const tax = money.add(taxAmount, "0");
-  if (line && line.taxPaise === Math.round(money.toNumber(tax) * 100)) {
-    const cgst = money.add(line.cgstPaise / 100, "0");
+  if (line && line.taxPaise === moneyToPaise(tax)) {
+    const cgst = paiseToMoney(line.cgstPaise);
     return [cgst, money.sub(tax, cgst)];
   }
   return money.splitHalf(tax);

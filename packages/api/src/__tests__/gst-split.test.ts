@@ -26,6 +26,15 @@ describe("documentGstSplit (grouped line sums from SQL)", () => {
     expect(documentGstSplit("0.02", { taxPaise: 2, cgstPaise: 2 })).toEqual(["0.02", "0.00"]);
   });
 
+  it("works in integer paise end to end, including amounts far above float comfort", () => {
+    // 13 digits of rupees: 9999999999999.99 = 999999999999999 paise; CGST 499999999999999 + 1
+    expect(documentGstSplit("9999999999999.99", { taxPaise: 999999999999999, cgstPaise: 500000000000000 })).toEqual([
+      "5000000000000.00",
+      "4999999999999.99",
+    ]);
+    expect(documentGstSplit("0.07", { taxPaise: 7, cgstPaise: 4 })).toEqual(["0.04", "0.03"]);
+  });
+
   it("falls back to one split when absent or inconsistent", () => {
     expect(documentGstSplit("0.02", undefined)).toEqual(["0.01", "0.01"]);
     expect(documentGstSplit("0.02", { taxPaise: 5, cgstPaise: 3 })).toEqual(["0.01", "0.01"]);
