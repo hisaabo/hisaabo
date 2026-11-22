@@ -124,11 +124,10 @@ describe("golden 10: opening balances are not in the ledger (documented gap)", (
     expect(await outstandingTotal(w, "payable")).toBe("4000.00");
   });
 
-  // BUG: party.getById treats a supplier's opening balance as "we owe them" and ADDS
-  // purchases to it (14000), but party.ledgerReport applies the Dr-positive
-  // convention (purchase invoice = credit) to the same number, so the opening is
-  // netted against the purchase: 10000 - 4000 = 6000. In the ledgerReport's own
-  // convention a 14000 payable would be reported as -14000.00.
+  // party.getById is positive in the party's natural direction (we owe 14000 = opening
+  // 10000 + purchase 4000). party.ledgerReport is debit-minus-credit, in which a payable
+  // is negative; its opening balance used to keep the positive sign and net against the
+  // purchase (10000 - 4000 = 6000).
   it("supplier closing balance agrees between party.getById (14000 owed) and party.ledgerReport (-14000.00)", async () => {
     // getById is positive in the party's natural direction (we owe 14000); the ledger is
     // debit-minus-credit, so a supplier we owe is negative: opening -10000, purchase -4000.

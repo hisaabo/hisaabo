@@ -24,11 +24,10 @@
  *     DN       Dr 2000  590 / Cr 5010  500, Cr 1510  45, Cr 1511  45
  *   Payable = 11800 - 2360 - 590 = 8850.
  *
- * Bugs documented here (it.fails = the CORRECT expectation, currently failing):
- *   - GSTR-3B output tax ignores credit/debit notes; GSTR-3B ITC ADDS purchase
- *     returns / purchase-side debit notes (no documentType filter).
- *   - party balance treats a PURCHASE-side debit note as increasing the payable.
- *   - GSTR-1 lists purchase-side debit notes / purchase returns.
+ * Surfaces checked against these numbers: P&L gross profit (net of returns), party
+ * balances, GSTR-1 (invoices gross, sale-side notes listed, no purchase-side
+ * documents) and GSTR-3B (output tax net of credit notes / returns and including
+ * sale-side debit notes; input credit net of purchase returns / debit notes).
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import {
