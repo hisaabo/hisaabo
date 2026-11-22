@@ -40,9 +40,15 @@ export const TENANT_DB_ACCESS_LOCK_ID = 72919285;
  * its application is connected to a live database. Idempotent.
  *
  * Works from a connection to ANY database in the cluster: privileges on a
- * database live in the shared catalog. Must run as the database owner or a
- * superuser. Both identifiers are re-validated here because they are
- * interpolated into SQL.
+ * database live in the shared catalog. Must run as the database owner (or a
+ * member of the owning role) or a superuser. Both identifiers are re-validated
+ * here because they are interpolated into SQL.
+ *
+ * The result is VERIFIED against the catalog, not assumed: a role that is
+ * neither owner nor superuser gets only a WARNING ("no privileges were
+ * granted/could be revoked") and a successful return, with the ACL unchanged.
+ * So after the statement this throws unless the tenant role can CONNECT and no
+ * PUBLIC entry is left in the ACL.
  */
 export async function restrictTenantDatabaseAccess(
   sql: postgres.Sql,
@@ -56,17 +62,51 @@ export async function restrictTenantDatabaseAccess(
     `GRANT CONNECT, TEMPORARY ON DATABASE "${dbName}" TO "${dbUser}"; ` +
       `REVOKE CONNECT, TEMPORARY ON DATABASE "${dbName}" FROM PUBLIC`,
   );
+  const problem = await verifyDatabaseAccess(sql, dbName, dbUser);
+  if (problem) throw new Error(problem);
+}
+
+/**
+ * Checks the catalog: PUBLIC must hold nothing on the database (a NULL `datacl`
+ * means the default ACL, which includes PUBLIC CONNECT/TEMPORARY) and, when
+ * `dbUser` is given, that role must be able to CONNECT. Returns a reason, or
+ * null when the database is closed as intended.
+ */
+async function verifyDatabaseAccess(
+  sql: postgres.Sql,
+  dbName: string,
+  dbUser: string | null,
+): Promise<string | null> {
+  const [row] = await sql<{ owner: string; public_open: boolean }[]>`
+    SELECT pg_get_userbyid(d.datdba) AS owner,
+           EXISTS (
+             SELECT 1 FROM aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a WHERE a.grantee = 0
+           ) AS public_open
+    FROM pg_database d WHERE d.datname = ${dbName}::name`;
+  if (!row) return `database "${dbName}" not found in pg_database after the privilege change`;
+  if (row.public_open) {
+    return (
+      `PUBLIC can still connect to "${dbName}": the privilege change had no effect. Postgres only warns when the ` +
+      `connected role is neither the database owner ("${row.owner}") nor a superuser; run as the owner or a superuser`
+    );
+  }
+  if (dbUser) {
+    const [r] = await sql<{ ok: boolean }[]>`SELECT has_database_privilege(${dbUser}::name, ${dbName}::name, 'CONNECT') AS ok`;
+    if (!r?.ok) return `role "${dbUser}" cannot CONNECT to "${dbName}" after the privilege change`;
+  }
+  return null;
 }
 
 export interface TenantDbAccessReport {
   /** Tenants that have a database (`db_name` set). */
   total: number;
-  /** Databases now closed to PUBLIC (including ones that already were). */
+  /** Databases verified closed to PUBLIC with the tenant role able to connect (including ones that already were). */
   restricted: number;
   /** Rows skipped: no `db_user`, so there is no role to keep access for. */
   skipped: number;
   /** Rows whose database no longer exists: nothing to restrict. */
   missing: number;
+  /** Databases that could not be restricted, or where the change had no effect (see `failures`). */
   failed: number;
   failures: { tenantId: string; slug: string; error: string }[];
 }
@@ -187,8 +227,13 @@ export async function restrictExistingTenantDatabases(opts: {
           // needs the PUBLIC door; close it anyway.
           try {
             await server.unsafe(`REVOKE CONNECT, TEMPORARY ON DATABASE "${t.db_name}" FROM PUBLIC`);
-            report.restricted++;
-            log("warn", "tenant database access: tenant role does not exist, closed to PUBLIC only", { tenantId: t.id, slug: t.slug });
+            const problem = await verifyDatabaseAccess(server, t.db_name!, null);
+            if (problem) {
+              fail(problem);
+            } else {
+              report.restricted++;
+              log("warn", "tenant database access: tenant role does not exist, closed to PUBLIC only", { tenantId: t.id, slug: t.slug });
+            }
           } catch (err2) {
             fail(err2 instanceof Error ? err2.message : String(err2));
           }

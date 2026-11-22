@@ -14,7 +14,7 @@ A patch release. It is a drop-in image bump (no new environment variables, no sc
   Tenant database access: closed to PUBLIC  {"total":228,"restricted":228,"missing":0,"skipped":0,"failed":0}
   ```
 
-  `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed (the log has one `could not restrict database` error per tenant with the reason, usually the control role not owning that database). To run the pass on its own, without migrations, and get exit code 1 if any database failed:
+  `restricted` counts only databases **verified in the catalog** afterwards: the tenant role can connect and `PUBLIC` holds nothing. `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed or where the change had no effect (the log has one `could not restrict database` error per tenant with the reason). The usual cause is a control role that neither owns the database nor is a superuser: Postgres then only prints a warning ("no privileges could be revoked") and reports success while leaving the database open, which the pass detects and reports as `failed` ("PUBLIC can still connect ..."). Run the preflight query below before upgrading to find those databases. To run the pass on its own, without migrations, and get exit code 1 if any database failed:
 
   ```bash
   docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
@@ -44,7 +44,17 @@ After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLL
 ### Before you start
 
 1. **Back up the control database and every tenant database** (`backup.sh`, see the 0.10.0 section below).
-2. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+2. **Multi-tenant only: preflight the control role.** The pass can only change databases that the `CONTROL_DATABASE_URL` role owns (or acts as the owner of through role membership), or that it can change as a superuser. Connected as that role to the **control database**, this catalog-only query must return no rows:
+
+   ```sql
+   SELECT t.slug, t.db_name, pg_get_userbyid(d.datdba) AS owner
+   FROM tenants t
+   JOIN pg_database d ON d.datname = t.db_name
+   WHERE NOT pg_has_role(current_user, d.datdba, 'USAGE');
+   ```
+
+   Every row is a tenant database the pass will report as `failed`. Fix it with `ALTER DATABASE "<db_name>" OWNER TO <control role>;` (as the current owner or a superuser) or run the control role as a superuser. It only sees databases on the control database's server; tenants with another `db_host` need the same check there.
+3. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
 
 ### Upgrade
 
