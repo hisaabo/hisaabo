@@ -84,16 +84,32 @@ const MAX_POOLS = Math.max(1, parseInt(process.env.TENANT_POOL_MAX || "50", 10) 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Pools dropped from the cache but possibly still draining. Tracked only so
- * `closeAllTenantPools` (shutdown, test teardown) can end them too; each is
- * forgotten after RETIRED_TRACK_MS, by which point its connections have idled
- * out unless a holder is still using it (which then simply idles out later).
+ * Pools dropped from the cache whose connections may still be open ("draining"),
+ * oldest first. Two jobs: it bounds how many connections eviction can leave
+ * behind (see retirePool), and it lets `closeAllTenantPools` (shutdown, test
+ * teardown) end them too. A pool is forgotten RETIRED_TRACK_MS after eviction,
+ * by which point its connections have idled out unless a holder is still using
+ * it (which then simply idles out later).
  */
 const retiredClients = new Set<PgClient>();
 const RETIRED_TRACK_MS = 2 * CONNECTION_IDLE_TIMEOUT_S * 1000;
 
 /**
- * Drops a pool from the cache WITHOUT ending its client.
+ * Most evicted pools allowed to drain at once; past it the oldest is ended
+ * (retirePool). Defaults to TENANT_POOL_MAX; 0 ends every evicted pool at once.
+ */
+function parseDrainingMax(): number {
+  const n = parseInt(process.env.TENANT_POOL_DRAINING_MAX ?? "", 10);
+  return Number.isInteger(n) && n >= 0 ? n : MAX_POOLS;
+}
+const MAX_DRAINING = parseDrainingMax();
+/** How long ending the oldest draining pool waits for its in-flight queries (seconds). */
+const DRAIN_END_TIMEOUT_S = 30;
+const DRAIN_WARN_EVERY_MS = 60_000;
+let lastDrainWarn = 0;
+
+/**
+ * Drops a pool from the cache. Its client is normally NOT ended.
  *
  * A request takes its `db` once (tRPC `hasTenantAccess`) and keeps using it for
  * the rest of the request, and a few background tasks hold one for longer, so
@@ -109,29 +125,54 @@ const RETIRED_TRACK_MS = 2 * CONNECTION_IDLE_TIMEOUT_S * 1000;
  *    all of them are stranded a later query waits forever instead of failing.
  *    Idle pools, the ones eviction normally picks, are exactly that case.
  *
- * So the client is simply left alone. Nothing new reaches it through the
- * cache; holders keep a fully working client (queries, transactions and
- * in-flight work, with lazy reconnect); and its connections close by
- * themselves once idle (`idle_timeout`, CONNECTION_IDLE_TIMEOUT_S), after which
- * it is garbage.
+ * So the client is left alone. Nothing new reaches it through the cache;
+ * holders keep a fully working client (queries, transactions and in-flight
+ * work, with lazy reconnect); and its connections close by themselves once
+ * idle (`idle_timeout`, CONNECTION_IDLE_TIMEOUT_S), after which it is garbage.
  *
- * Connection math. Per process the budget is
+ * Connection math. Per process, tenant connections never exceed
  *
- *   live pools        <= TENANT_POOL_MAX x TENANT_POOL_PER_DB_MAX
- *   + retired pools   <= (pools evicted in the last ~20 s) x TENANT_POOL_PER_DB_MAX
- *   + control, queue and cache connections (about 15 to 25 per process)
+ *   (TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX
  *
- * and the sum over all API and worker processes must stay below the server's
- * `max_connections` minus its reserved superuser slots. Idle pools hold no
- * connections at all, so the live term is a ceiling, not the typical load, but
- * the retired term grows with cache churn: a cache much smaller than the set of
- * tenants being served makes every miss leave an evicted pool behind. Size
- * TENANT_POOL_MAX to the tenants active at once, and lower
- * TENANT_POOL_PER_DB_MAX when raising it (docs/DEPLOYMENT.md).
+ * (plus one per `withDedicatedTenantDb` visit in progress, and pools that were
+ * evicted more than ~40 s ago but are still in active use by a long-running
+ * holder). Without a cap that would not hold: a pool that is dropped keeps its
+ * connections for 20 s, so a burst across many tenants would leave a pool's
+ * worth of connections behind for every tenant touched in that window. The cap
+ * is what makes the bound real: when more than MAX_DRAINING evicted pools are
+ * draining, the OLDEST is ended with `end({ timeout: 30 })`, which closes its
+ * connections as soon as their queries finish (up to 30 s, then they are cut).
+ *
+ * Trade-off: that `end()` is the CONNECTION_ENDED hazard above, confined to a
+ * storm (more than MAX_DRAINING evictions inside the idle window). A holder of
+ * that oldest pool keeps any query or transaction already running on it, but a
+ * NEW query or transaction it starts afterwards fails with CONNECTION_ENDED.
+ * Size TENANT_POOL_MAX to the tenants that are active at once so this stays
+ * rare, and watch for the warning below.
+ *
+ * The sum over all API and worker processes must stay below the server's
+ * `max_connections` minus its reserved superuser slots; docs/DEPLOYMENT.md has
+ * the budget and recommended values.
  */
 function retirePool(entry: PoolEntry): void {
-  retiredClients.add(entry.client);
-  setTimeout(() => retiredClients.delete(entry.client), RETIRED_TRACK_MS).unref();
+  const client = entry.client;
+  retiredClients.add(client);
+  setTimeout(() => retiredClients.delete(client), RETIRED_TRACK_MS).unref();
+
+  while (retiredClients.size > MAX_DRAINING) {
+    const oldest = retiredClients.values().next().value as PgClient;
+    retiredClients.delete(oldest);
+    oldest.end({ timeout: DRAIN_END_TIMEOUT_S }).catch(() => {});
+    const now = Date.now();
+    if (now - lastDrainWarn > DRAIN_WARN_EVERY_MS) {
+      lastDrainWarn = now;
+      console.warn(
+        `[tenant-pool] more than ${MAX_DRAINING} evicted pools were still draining; ended the oldest. ` +
+          "The tenant pool cache is smaller than the set of tenants being served at once: raise " +
+          "TENANT_POOL_MAX (and Postgres max_connections) or lower TENANT_POOL_PER_DB_MAX; see docs/DEPLOYMENT.md.",
+      );
+    }
+  }
 }
 
 // Evict idle pools periodically (FINDING 19). Evicted pools are retired, not

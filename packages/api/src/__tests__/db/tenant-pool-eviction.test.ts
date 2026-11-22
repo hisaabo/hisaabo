@@ -19,8 +19,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import postgres from "postgres";
-import { randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { createTenantTestDbs, type TenantTestDbs } from "../helpers/tenant-test-dbs.js";
 
 const FUZZ_TENANTS = 12;
 // One more tenant that only the withDedicatedTenantDb test touches, so its connection counts are exact.
@@ -32,13 +32,15 @@ const SEED = 0x5eed;
 
 type DbModule = typeof import("@hisaabo/db");
 let mod: DbModule;
+let dbs: TenantTestDbs;
 let admin: postgres.Sql;
-let control: postgres.Sql;
-let baseUrl: URL;
-const dbNames: string[] = [];
-const tenantIds: string[] = [];
+let dbNames: string[];
+let tenantIds: string[];
 
-const ENV_KEYS = ["MULTI_TENANT", "TENANT_POOL_MAX", "TENANT_POOL_PER_DB_MAX"] as const;
+// TENANT_POOL_DRAINING_MAX is set high so the draining cap (tested in
+// tenant-pool-bound.test.ts) never ends a pool here: these tests are about
+// handles surviving plain eviction.
+const ENV_KEYS = ["MULTI_TENANT", "TENANT_POOL_MAX", "TENANT_POOL_PER_DB_MAX", "TENANT_POOL_DRAINING_MAX"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -55,11 +57,7 @@ function mulberry32(seed: number) {
   };
 }
 
-function urlFor(database: string): string {
-  const u = new URL(baseUrl.toString());
-  u.pathname = `/${database}`;
-  return u.toString();
-}
+const urlFor = (database: string) => dbs.urlFor(database);
 
 /** Touch `ids` in order so earlier handles fall out of a 3-entry LRU. */
 async function churn(ids: string[]) {
@@ -72,30 +70,16 @@ async function churn(ids: string[]) {
 const others = (except: number) => tenantIds.filter((_, i) => i !== except);
 
 beforeAll(async () => {
-  baseUrl = new URL(process.env.CONTROL_DATABASE_URL!);
-  admin = postgres(urlFor("postgres"), { max: 1, onnotice: quiet });
-  control = postgres(process.env.CONTROL_DATABASE_URL!, { max: 1, onnotice: quiet });
-
-  const suffix = randomBytes(4).toString("hex");
-  for (let i = 0; i < TENANTS; i++) {
-    const name = `tp_${suffix}_${i}`;
-    await admin.unsafe(`CREATE DATABASE "${name}"`);
-    dbNames.push(name);
-    const t = postgres(urlFor(name), { max: 1, onnotice: quiet });
-    await t.unsafe(`CREATE TABLE kv (id serial PRIMARY KEY, v text NOT NULL)`);
-    await t.end();
-    const id = crypto.randomUUID();
-    tenantIds.push(id);
-    await control`
-      INSERT INTO tenants (id, name, slug, db_name, db_host, db_port, db_user, db_password, status)
-      VALUES (${id}, ${name}, ${name}, ${name}, ${baseUrl.hostname}, ${baseUrl.port || "5432"},
-              ${decodeURIComponent(baseUrl.username)}, ${decodeURIComponent(baseUrl.password)}, 'active')`;
-  }
+  dbs = await createTenantTestDbs(TENANTS);
+  admin = dbs.admin;
+  dbNames = dbs.names;
+  tenantIds = dbs.ids;
 
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   process.env.MULTI_TENANT = "true";
   process.env.TENANT_POOL_MAX = String(POOL_MAX);
   process.env.TENANT_POOL_PER_DB_MAX = String(PER_DB_MAX);
+  process.env.TENANT_POOL_DRAINING_MAX = "1000";
   vi.resetModules();
   mod = await import("@hisaabo/db");
 }, 60_000);
@@ -103,10 +87,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await mod?.closeAllTenantPools();
   await mod?.closeControlClient();
-  if (tenantIds.length) await control`DELETE FROM tenants WHERE id IN ${control(tenantIds)}`;
-  for (const name of dbNames) await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-  await control.end({ timeout: 2 });
-  await admin.end({ timeout: 2 });
+  await dbs?.cleanup();
   for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
@@ -157,7 +138,8 @@ describe("tenant pool eviction", () => {
     const held = await mod.getTenantDb(tenantIds[3]);
     await held.execute(sql`select 1`);
 
-    const inFlight = held.execute(sql`select pg_sleep(0.6), 'done' as r`);
+    // Drizzle queries are lazy until awaited; start it for real before the eviction.
+    const inFlight = (async () => held.execute(sql`select pg_sleep(0.6), 'done' as r`))();
     const tx = held.transaction(async (t) => {
       await t.execute(sql`insert into kv (v) values ('before')`);
       await sleep(400);
