@@ -40,6 +40,7 @@ import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { emitNotificationEventSafe } from "../lib/notifications/index.js";
 import { logAudit } from "../lib/audit.js";
+import type { AuditSource } from "../lib/audit-source.js";
 import { assertCancellable, cancelInvoiceInTx } from "../lib/invoice-cancel.js";
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
@@ -281,7 +282,7 @@ function localCancelFailed(cause: unknown): TRPCError {
  */
 async function recordLocalCancelFailure(
   db: TenantDatabase,
-  ctx: { businessId: string; user: { id: string }; ipAddress?: string | null },
+  ctx: { businessId: string; user: { id: string }; ipAddress?: string | null; source?: AuditSource | null },
   invoice: { id: string; invoiceNumber: string; irn: string | null },
   cancelReason: string,
   cause: unknown,
@@ -316,6 +317,7 @@ async function recordLocalCancelFailure(
       localCancelError: reason,
     },
     ipAddress: ctx.ipAddress,
+    source: ctx.source,
   });
 }
 

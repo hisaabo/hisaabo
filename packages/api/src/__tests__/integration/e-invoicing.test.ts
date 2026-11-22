@@ -69,7 +69,13 @@ vi.mock("../../lib/irp-client.js", () => {
   // Does the IRP itself say the IRN is cancelled? Default: no (the IRN is active).
   const mockIsIRNCancelled = vi.fn().mockResolvedValue(false);
 
+  // The config each IRPClient was constructed with, so a test can check which credentials it was given.
+  const constructedConfigs: Array<Record<string, unknown>> = [];
+
   class MockIRPClient {
+    constructor(config: Record<string, unknown>) {
+      constructedConfigs.push(config);
+    }
     authenticate = mockAuthenticate;
     generateIRN = mockGenerateIRN;
     cancelIRN = mockCancelIRN;
@@ -97,6 +103,7 @@ vi.mock("../../lib/irp-client.js", () => {
     __mockCancelIRN: mockCancelIRN,
     __mockIsIRNCancelled: mockIsIRNCancelled,
     __mockAuthenticate: mockAuthenticate,
+    __constructedConfigs: constructedConfigs,
   };
 });
 
@@ -716,7 +723,14 @@ describe("eInvoice.cancel also cancels the invoice", () => {
         conversionFactor: "1",
       }],
     });
-    await caller.eInvoice.generate({ invoiceId: invoice.id });
+    // invoice.create already submits a B2B sale of an e-invoicing business to the (mocked) IRP in a
+    // background task that runs after the response. Calling eInvoice.generate here used to race it
+    // (whichever lost either threw "IRN already generated" or overwrote what the test had just set,
+    // e.g. irnAckDate), which made the cancel tests flaky. Wait for that task to finish instead:
+    // from "generated" on it writes nothing more.
+    await vi.waitFor(async () => {
+      expect((await row(invoice.id)).eInvoiceStatus).toBe("generated");
+    }, { timeout: 5000, interval: 20 });
     return { caller, item, invoice };
   }
 
@@ -1212,6 +1226,42 @@ describe("e-invoicing without a usable NIC public key", () => {
     expect(after.eInvoiceRetryCount).toBe(0);
   });
 
+  describe("the auto-submit that follows invoice.create", () => {
+    const createB2bInvoice = () =>
+      callerForRamesh().invoice.create({
+        partyId: b2bParty.id,
+        type: "sale",
+        lineItems: [{ itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
+      });
+
+    it("with no key it returns silently: the invoice is not pending, not failed, and no retry is counted", async () => {
+      await setupEInvoiceConfig();
+      const created = await createB2bInvoice();
+
+      // The submit runs in a background task after the response; give it ample time to
+      // run (it takes a few queries when it does), then check that nothing happened.
+      await new Promise((r) => setTimeout(r, 600));
+
+      expect(irp.__mockGenerateIRN).not.toHaveBeenCalled();
+      const after = await row(created.id);
+      expect(after.eInvoiceStatus).toBeNull();
+      expect(after.eInvoiceError).toBeNull();
+      expect(after.eInvoiceRetryCount).toBe(0);
+      expect(after.irn).toBeNull();
+    });
+
+    it("control: with a key the same invoice is submitted (so the silence above is the key check, not a dead task)", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = testPublicKeyPem;
+      await setupEInvoiceConfig();
+      const created = await createB2bInvoice();
+
+      await vi.waitFor(async () => {
+        expect((await row(created.id)).eInvoiceStatus).toBe("generated");
+      }, { timeout: 5000, interval: 50 });
+      expect(irp.__mockGenerateIRN).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("an invalid key is reported as such, with the variable to fix", async () => {
     process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nnot a key\n-----END PUBLIC KEY-----";
     const invoice = await newInvoice();
@@ -1312,6 +1362,59 @@ describe("e-invoicing without a usable NIC public key", () => {
       const result = await callerForRamesh().eInvoice.testConnection();
       expect(result).toMatchObject({ success: false, failedStep: "network" });
       expect(result.message).toContain("Could not reach the IRP");
+    });
+  });
+});
+
+// ── 4d. The auto-submit hands the IRP client decrypted credentials ──────────────
+
+describe("the auto-submit after invoice.create uses decrypted IRP credentials", () => {
+  const ENCRYPTION_KEY = "ab".repeat(32); // 64 hex characters
+  let irp: { __constructedConfigs: Array<Record<string, unknown>>; __mockGenerateIRN: ReturnType<typeof vi.fn> };
+  let savedKey: string | undefined;
+
+  beforeAll(async () => {
+    irp = (await import("../../lib/irp-client.js")) as unknown as typeof irp;
+  });
+  beforeEach(() => {
+    savedKey = process.env.ENCRYPTION_KEY;
+    irp.__constructedConfigs.length = 0;
+    irp.__mockGenerateIRN.mockClear();
+  });
+  afterEach(async () => {
+    if (savedKey === undefined) delete process.env.ENCRYPTION_KEY;
+    else process.env.ENCRYPTION_KEY = savedKey;
+    // Leave the plaintext config the other suites expect.
+    await setupEInvoiceConfig();
+  });
+
+  it("an encrypted config row reaches IRPClient as plaintext", async () => {
+    process.env.ENCRYPTION_KEY = ENCRYPTION_KEY;
+    await setupEInvoiceConfig();
+
+    // The premise: with a key set the credentials are stored encrypted (eInvoice.configure encrypts them).
+    const [stored] = await getTenantTestDb().select().from(eInvoiceConfigs).where(eq(eInvoiceConfigs.businessId, world.business1.id));
+    expect(stored!.password).not.toBe("testpass123");
+    expect(stored!.password).toMatch(/^v\d+:/);
+    expect(stored!.clientSecret).toMatch(/^v\d+:/);
+
+    const created = await callerForRamesh().invoice.create({
+      partyId: b2bParty.id,
+      type: "sale",
+      lineItems: [{ itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
+    });
+    await vi.waitFor(async () => {
+      const [r] = await getTenantTestDb().select().from(invoices).where(eq(invoices.id, created.id));
+      expect(r!.eInvoiceStatus).toBe("generated");
+    }, { timeout: 5000, interval: 20 });
+
+    expect(irp.__mockGenerateIRN).toHaveBeenCalledTimes(1);
+    expect(irp.__constructedConfigs).toHaveLength(1);
+    expect(irp.__constructedConfigs[0]).toMatchObject({
+      clientId: "test-client-id",
+      clientSecret: "test-client-secret",
+      username: "testuser",
+      password: "testpass123",
     });
   });
 });

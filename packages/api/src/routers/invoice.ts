@@ -7,13 +7,16 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
-import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { applyDocumentCancel, applyInvoiceCancel, reverseDocumentEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { DOCUMENT_STOCK_EFFECT } from "../lib/document-stock-reversal.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 import { isIntraStateSupply } from "../lib/gst-split.js";
 
@@ -530,13 +533,34 @@ export const invoiceRouter = router({
         }
 
         try {
-          const [config] = await db
+          const [rawConfig] = await db
             .select()
             .from(eInvoiceConfigs)
             .where(and(eq(eInvoiceConfigs.businessId, businessId), eq(eInvoiceConfigs.isEnabled, true)))
             .limit(1);
 
-          if (!config) return; // E-invoicing not configured/enabled
+          if (!rawConfig) return; // E-invoicing not configured/enabled
+
+          // The IRP credentials are stored encrypted (field-encryption.ts); eInvoice.generate,
+          // retryFailed and cancel decrypt them before handing them to IRPClient, and so must this.
+          const config = decryptEInvoiceConfig(rawConfig);
+
+          // Same rule as eInvoice.generate / retryFailed / cancel: without the NIC public
+          // key (lib/irp-public-key.ts) this server cannot sign in to the IRP, so do not
+          // touch the invoice. A `failed` e-invoice must mean the IRP rejected it, not that
+          // the server was never set up; once the key is configured the invoice can be
+          // generated from the E-Invoicing page like any other. Nothing is written first.
+          try {
+            loadIrpPublicKey(config.isSandbox);
+          } catch (keyErr) {
+            if (keyErr instanceof IRPNotConfiguredError) {
+              if (process.env.NODE_ENV !== "test") {
+                console.debug("[e-invoice auto-submit] skipped, NIC public key not configured:", keyErr.message);
+              }
+              return;
+            }
+            throw keyErr;
+          }
 
           // Fetch the full invoice with party
           const [inv] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
@@ -646,6 +670,21 @@ export const invoiceRouter = router({
             })
             .where(eq(invoices.id, invoiceId));
         } catch (err) {
+          if (err instanceof IRPNotConfiguredError) {
+            // The key went away after the check above (a file removed mid-flight, or a key
+            // that cannot encrypt the sign-in): a configuration problem, not an IRP
+            // rejection. Leave the invoice pending, with no error and no retry counted,
+            // as eInvoice.generate does.
+            if (process.env.NODE_ENV !== "test") {
+              console.error("[e-invoice auto-submit] not configured:", err.message);
+            }
+            await db
+              .update(invoices)
+              .set({ eInvoiceStatus: "pending", eInvoiceError: null, updatedAt: new Date() })
+              .where(eq(invoices.id, invoiceId))
+              .catch(() => {/* swallow DB errors in background task */});
+            return;
+          }
           // IRP errors must not bubble up — just log and mark as failed
           const isRetryable = err instanceof IRPError && err.isRetryable;
           const errorMsg = err instanceof Error ? err.message : "Unknown IRP error";
@@ -722,8 +761,18 @@ export const invoiceRouter = router({
 
         const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
         if (isCancelling) {
-          // Same rules and effects as cancelling through eInvoice.cancel (lib/invoice-cancel.ts).
-          await applyInvoiceCancel(tx, ctx, before);
+          // Same rules and effects as cancelling through eInvoice.cancel and the document
+          // routers (lib/invoice-cancel.ts), by document type: applyInvoiceCancel undoes an
+          // invoice's stock by its sale / purchase side, which is wrong for every other
+          // type (a credit note moves no stock, a sales return added stock, a purchase return
+          // removed it). They get applyDocumentCancel with their own DOCUMENT_STOCK_EFFECT.
+          // This route stays open to them because it is the one the 0.10.1 upgrade notes
+          // give for finishing a document whose IRN was already cancelled.
+          if (before.documentType === "invoice") {
+            await applyInvoiceCancel(tx, ctx, before);
+          } else {
+            await applyDocumentCancel(tx, ctx.businessId, before, DOCUMENT_STOCK_EFFECT[before.documentType] ?? "none");
+          }
         }
 
         const [invoice] = await tx.update(invoices)
@@ -1013,8 +1062,11 @@ export const invoiceRouter = router({
         await assertNoPaymentsOrActiveIrn(tx, "delete", inv);
 
         // A cancelled invoice already had its stock/ITC reversed when it was cancelled.
+        // This route accepts any document id, so undo what that document type did (an
+        // invoice's stock by its sale / purchase side; a credit note, quotation, sales
+        // return, ... by its own DOCUMENT_STOCK_EFFECT).
         if (inv.status !== "cancelled") {
-          await reverseInvoiceEffects(tx, ctx.businessId, inv);
+          await reverseDocumentEffects(tx, ctx.businessId, inv);
         }
 
         // Soft delete
