@@ -348,6 +348,51 @@ describe("proposePriceUpdates: items whose sale price includes GST", () => {
   });
 });
 
+describe("proposePriceUpdates: inclusive items and duplicate lines", () => {
+  it("two lines of one inclusive item at the SAME edited rate propose ONE price, not a conflict", () => {
+    // rate 105.00 at 18% -> candidate 10500 x 118 / 100 = 12390 = 123.90 on both lines
+    const { proposals, skipped } = proposePriceUpdates({
+      side: "sale", items,
+      lines: [
+        { itemId: atta.id, unitPrice: "105", taxPercent: "18", originalUnitPrice: "100.00" },
+        { itemId: atta.id, unitPrice: "105.00", taxPercent: "18", originalUnitPrice: "100.00" },
+      ],
+    });
+    expect(skipped).toEqual([]); // before: "billed at different prices on this bill" (inclusive 123.90 compared with exclusive 105.00)
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({ oldPrice: "118.00", newPrice: "123.90", priceIncludesTax: true });
+  });
+
+  it("two lines of one inclusive item at DIFFERENT rates are still ambiguous: skipped with the reason", () => {
+    const { proposals, skipped } = proposePriceUpdates({
+      side: "sale", items,
+      lines: [
+        { itemId: atta.id, unitPrice: "105", taxPercent: "18", originalUnitPrice: "100.00" },
+        { itemId: atta.id, unitPrice: "106", taxPercent: "18", originalUnitPrice: "100.00" },
+      ],
+    });
+    expect(proposals).toEqual([]);
+    expect(skipped).toEqual([{ itemName: "Atta 5kg", reason: "it is billed at different prices on this bill" }]);
+  });
+
+  it("three lines, the third differs: still one conflict, and a later equal line does not resurrect the proposal", () => {
+    const line = (unitPrice: string) => ({ itemId: atta.id, unitPrice, taxPercent: "18", originalUnitPrice: "100.00" });
+    const { proposals, skipped } = proposePriceUpdates({ side: "sale", items, lines: [line("105"), line("106"), line("105")] });
+    expect(proposals).toEqual([]);
+    expect(skipped).toHaveLength(1);
+  });
+
+  it("the same two-lines case on the exclusive side (an ordinary item) is unchanged", () => {
+    const line = { itemId: ghee.id, unitPrice: "600", taxPercent: "12", originalUnitPrice: "620.00" };
+    const same = proposePriceUpdates({ side: "sale", items, lines: [line, { ...line }] });
+    expect(same.skipped).toEqual([]);
+    expect(same.proposals).toHaveLength(1);
+    const differ = proposePriceUpdates({ side: "sale", items, lines: [line, { ...line, unitPrice: "590" }] });
+    expect(differ.proposals).toEqual([]);
+    expect(differ.skipped).toHaveLength(1);
+  });
+});
+
 describe("propagateBillPrices (CLI / MCP)", () => {
   const applied = { updated: [{ label: "Ghee 1L", side: "sale" as const, oldPrice: "620.00", newPrice: "600.00" }], unchanged: [] };
 

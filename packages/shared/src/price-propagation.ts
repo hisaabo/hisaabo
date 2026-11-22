@@ -259,8 +259,10 @@ export function proposePriceUpdates(input: {
     proposal.key = priceUpdateKey(proposal);
 
     // 7. the same slot at two different rates is ambiguous
+    // (compared as PRICES in the saved basis: for an inclusive item `rate` is the exclusive rate, the proposal holds the
+    // inclusive price, and two lines at the same rate propose the same price, which is not a conflict)
     const earlier = proposals.get(proposal.key);
-    if (earlier && !sameNumber(earlier.newPrice, rate)) {
+    if (earlier && !sameNumber(earlier.newPrice, candidate)) {
       proposals.delete(proposal.key);
       conflicted.set(proposal.key, { itemName: label, reason: "it is billed at different prices on this bill" });
     } else if (!conflicted.has(proposal.key)) {
