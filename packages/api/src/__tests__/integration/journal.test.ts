@@ -385,3 +385,96 @@ describe("journal.delete (voids instead of erasing)", () => {
     expect((await entryRow(created.id))!.isVoided).toBe(false);
   });
 });
+
+// journal.update used to check isVoided OUTSIDE its transaction with no row lock, so an
+// update could replace the lines of an entry a concurrent void had just reversed.
+describe("journal.update vs journal.void concurrency", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function linesOf(entryId: string) {
+    return getTenantTestDb().select().from(journalEntryLines).where(eq(journalEntryLines.journalEntryId, entryId));
+  }
+
+  async function postEntry(narration: string, amount = "500.00") {
+    return callerForRamesh().journal.create({
+      entryDate: new Date("2026-06-10T00:00:00.000Z").toISOString(),
+      narration,
+      lines: [
+        { accountId: cashAccountId, debit: amount, credit: "0" },
+        { accountId: capitalAccountId, debit: "0", credit: amount },
+      ],
+    });
+  }
+
+  it("an update that starts while the entry is locked waits for it and is then refused if it was voided", async () => {
+    const created = await postEntry("Locked, then voided");
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    let update!: Promise<unknown>;
+    let settledWhileLocked = true;
+    await db.transaction(async (tx) => {
+      // Stand in for a void that is mid-flight: it holds the entry's row lock.
+      await tx.select().from(journalEntries).where(eq(journalEntries.id, created.id)).for("update");
+
+      update = caller.journal.update({ id: created.id, narration: "late edit" }).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+
+      // The update must be waiting on the lock, not already decided from a stale read.
+      await sleep(300);
+      settledWhileLocked = await Promise.race([update.then(() => true), sleep(100).then(() => false)]);
+
+      // The "void" commits.
+      await tx.update(journalEntries).set({ isVoided: true }).where(eq(journalEntries.id, created.id));
+    });
+
+    expect(settledWhileLocked).toBe(false);
+    const outcome = (await update) as { ok: boolean; error?: { code?: string; message?: string } };
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toMatchObject({ code: "BAD_REQUEST", message: "Cannot update a voided journal entry" });
+
+    const [row] = await db.select().from(journalEntries).where(eq(journalEntries.id, created.id));
+    expect(row!.narration).toBe("Locked, then voided"); // the late edit was not applied
+  });
+
+  it("an update and a void racing on one entry leave the original and its reversal in agreement", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    for (let i = 0; i < 8; i++) {
+      const created = await postEntry(`Race ${i}`, "500.00");
+
+      const [updateResult] = await Promise.allSettled([
+        caller.journal.update({
+          id: created.id,
+          lines: [
+            { accountId: cashAccountId, debit: "900.00", credit: "0" },
+            { accountId: capitalAccountId, debit: "0", credit: "900.00" },
+          ],
+        }),
+        caller.journal.void({ id: created.id }),
+      ]);
+
+      const original = (await db.select().from(journalEntries).where(eq(journalEntries.id, created.id)))[0]!;
+      expect(original.isVoided).toBe(true);
+
+      // Whatever order they ran in, the reversal mirrors the original's FINAL lines,
+      // so the pair nets to zero in every account.
+      const [reversal] = await db.select().from(journalEntries).where(eq(journalEntries.reversesEntryId, created.id));
+      const lines = [...(await linesOf(created.id)), ...(await linesOf(reversal!.id))];
+      for (const accountId of [cashAccountId, capitalAccountId]) {
+        const mine = lines.filter((l) => l.accountId === accountId);
+        const debit = mine.reduce((s, l) => s + Number(l.debit), 0);
+        const credit = mine.reduce((s, l) => s + Number(l.credit), 0);
+        expect(debit).toBeCloseTo(credit, 2);
+      }
+
+      // And an update that lost the race says why.
+      if (updateResult.status === "rejected") {
+        expect(String(updateResult.reason.message)).toBe("Cannot update a voided journal entry");
+      }
+    }
+  });
+});

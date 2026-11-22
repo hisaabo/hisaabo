@@ -326,55 +326,62 @@ export const journalRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Account");
 
-      const [existing] = await ctx.db
-        .select()
-        .from(journalEntries)
-        .where(
-          and(
-            eq(journalEntries.id, input.id),
-            eq(journalEntries.businessId, ctx.businessId),
-          ),
-        )
-        .limit(1);
+      const updated = await ctx.db.transaction(async (tx) => {
+        // Lock the entry row and check its state INSIDE the transaction. `void`
+        // takes the same lock, so an update and a void of one entry are
+        // serialized: either the update commits first and the void then reverses
+        // the updated lines, or the void commits first and this update is refused.
+        // (Checking outside the transaction let an update replace the lines of an
+        // entry that a concurrent void had just reversed.)
+        const [existing] = await tx
+          .select()
+          .from(journalEntries)
+          .where(
+            and(
+              eq(journalEntries.id, input.id),
+              eq(journalEntries.businessId, ctx.businessId),
+            ),
+          )
+          .for("update")
+          .limit(1);
 
-      if (!existing) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
-      }
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Journal entry not found" });
+        }
 
-      if (existing.source !== "manual") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Only manually created journal entries can be updated",
-        });
-      }
+        if (existing.source !== "manual") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Only manually created journal entries can be updated",
+          });
+        }
 
-      if (existing.isVoided) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Cannot update a voided journal entry",
-        });
-      }
+        if (existing.isVoided) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Cannot update a voided journal entry",
+          });
+        }
 
-      // If lines are provided, verify all account IDs belong to this business
-      if (input.lines) {
-        const accountIds = input.lines.map(l => l.accountId);
-        const foundAccounts = await ctx.db
-          .select({ id: chartOfAccounts.id })
-          .from(chartOfAccounts)
-          .where(eq(chartOfAccounts.businessId, ctx.businessId));
+        // If lines are provided, verify all account IDs belong to this business
+        if (input.lines) {
+          const accountIds = input.lines.map(l => l.accountId);
+          const foundAccounts = await tx
+            .select({ id: chartOfAccounts.id })
+            .from(chartOfAccounts)
+            .where(eq(chartOfAccounts.businessId, ctx.businessId));
 
-        const ownedAccountIds = new Set(foundAccounts.map(a => a.id));
-        for (const accountId of accountIds) {
-          if (!ownedAccountIds.has(accountId)) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Account ${accountId} not found in this business`,
-            });
+          const ownedAccountIds = new Set(foundAccounts.map(a => a.id));
+          for (const accountId of accountIds) {
+            if (!ownedAccountIds.has(accountId)) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Account ${accountId} not found in this business`,
+              });
+            }
           }
         }
-      }
 
-      const updated = await ctx.db.transaction(async (tx) => {
         // Update lines if provided: delete old, insert new
         if (input.lines) {
           await tx
