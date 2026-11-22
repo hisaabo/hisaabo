@@ -1,5 +1,58 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to v0.10.1 (Docker Compose and ONCE)
+
+A bug-fix release. It is a drop-in image bump (pull, restart); the migration step applies one small migration on first boot. Multi-tenant operators should read the connection-pool notes below, because this release is aimed at them.
+
+### What is fixed
+
+- **Multi-tenant: intermittent `CONNECTION_ENDED` errors.** The API keeps a cache of tenant database pools (`TENANT_POOL_MAX`, default 50). When the cache was full, serving another tenant evicted the least recently used pool and **closed** it, even while a request that had already taken that pool was still working. That request's next query, or its next transaction, failed with `write CONNECTION_ENDED`. With more tenants than pool slots (for example 229 tenants), and the recurring-invoice scheduler walking every tenant each minute, this was easy to hit. An evicted pool is now just dropped from the cache: requests holding it finish normally, and its connections close by themselves after 20 idle seconds.
+- **Multi-tenant: the recurring-invoice scheduler no longer uses the shared pool cache.** It visits each tenant with its own single-connection client and closes it afterwards, so its minute-by-minute sweep no longer evicts the pools live requests are using. Self-hosted (single-tenant) installs behave as before.
+- **Recurring invoices could be generated twice when more than one API replica was running.** The row lock that was meant to prevent it was released before the invoice was generated. Each occurrence is now claimed and generated in one transaction under the template's row lock, and a unique index on the occurrence rejects a second run as a backstop. "Run now" clicked twice quickly now creates two successive invoices (two occurrences) instead of racing for the same one.
+- **E-invoice submission after invoice creation** takes its own tenant database handle when it runs, instead of reusing the request's, which could already be gone.
+
+### Migration
+
+One additive migration, applied automatically by the migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted). It adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+
+- **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
+- It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
+- Old code ignores the column and the index, so rolling the image back to 0.10.0 needs no reverse SQL (see [ROLLBACK.md](ROLLBACK.md)).
+
+To look for double-generated invoices from before the fix, run this read-only query in each database (each tenant database when multi-tenant). A template that was behind by several periods also shows up, because catch-up legitimately creates one invoice per missed period in a single tick, so compare the invoices and the template's frequency before acting. Nothing needs doing unless one period was billed twice; if it was, cancel the extra invoice the normal way.
+
+```sql
+SELECT r.template_id, t.name, r.business_id, count(*) AS runs,
+       min(r.executed_at) AS first_at, array_agg(r.invoice_id) AS invoices
+FROM recurring_invoice_runs r
+JOIN recurring_invoice_templates t ON t.id = r.template_id
+WHERE r.status = 'success'
+GROUP BY r.template_id, t.name, r.business_id, date_trunc('minute', r.executed_at)
+HAVING count(*) > 1
+ORDER BY first_at DESC;
+```
+
+### Multi-tenant: size the tenant connection pools
+
+The defaults (`TENANT_POOL_MAX=50`, `TENANT_POOL_PER_DB_MAX=5`) allow one API process up to 250 tenant connections, more than Postgres' default `max_connections` of 100. Idle pools hold no connections, so a quiet system never gets near that, but a busy period can. The ceiling is the **product** of the two settings, so never raise `TENANT_POOL_MAX` alone.
+
+For about 230 tenants on `max_connections = 100`, set:
+
+```
+TENANT_POOL_MAX=20
+TENANT_POOL_PER_DB_MAX=2
+```
+
+That caps live tenant pools at 40 connections and leaves room for the control and queue connections (about 15 per API process, about 25 for a worker), pools that were evicted and are still draining, and operators. On a server with `max_connections = 300`, `TENANT_POOL_MAX=100` with `TENANT_POOL_PER_DB_MAX=2` (ceiling 200) keeps most active tenants cached. Keep `TENANT_POOL_PER_DB_MAX` at 2 or more, and add the connections of every API replica and worker when you add them up. The full budget is in [DEPLOYMENT.md](DEPLOYMENT.md#tenant-connection-budget-multi-tenant).
+
+Because eviction no longer closes a pool, a cache miss now leaves the evicted pool's connections open for up to 20 seconds instead of closing them at once. With a cache that is large enough for the tenants active together this is invisible; with a very small cache and many active tenants it can briefly add up, which is one more reason to size both settings as above. To check, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;` during a busy period.
+
+### Upgrade
+
+Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No environment variable is required or changed; the two pool settings above are optional but recommended for multi-tenant installs with more tenants than pool slots.
+
+---
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.
