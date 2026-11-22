@@ -264,11 +264,10 @@ describe("golden 05B: purchase return and purchase-side debit note", () => {
     expect((await w.caller.party.getById({ id: supplierId }))?.balance).toBe("8850.00");
   });
 
-  // BUG: generateGSTR1 pulls documentType IN (debit_note, purchase_return) with no
-  // type filter, so purchase-side documents leak into the outward-supply return.
-  it.fails("GSTR-1 (outward supplies) lists no purchase-side debit notes or returns", async () => {
+  it("GSTR-1 (outward supplies) lists no purchase-side debit notes or returns", async () => {
     const r = await w.caller.gst.gstr1({ year: 2025, month: 9 });
     expect(r.debitNotes).toEqual([]);
+    expect(r.creditNotes).toEqual([]);
   });
 
   // BUG: generateGSTR3B selects every type = 'purchase' document with no

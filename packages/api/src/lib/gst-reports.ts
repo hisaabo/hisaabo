@@ -337,7 +337,11 @@ export async function generateGSTR1(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      inArray(invoices.documentType, ["debit_note", "purchase_return"]),
+      // GSTR-1 reports OUTWARD supplies, so only sale-side debit notes. A purchase-side
+      // debit note / purchase return is a document we issue to a supplier: it reduces
+      // input credit (GSTR-3B Table 4), it is not an outward supply.
+      eq(invoices.documentType, "debit_note"),
+      eq(invoices.type, "sale"),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
