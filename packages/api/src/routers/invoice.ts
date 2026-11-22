@@ -12,6 +12,7 @@ import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
@@ -538,6 +539,23 @@ export const invoiceRouter = router({
 
           if (!config) return; // E-invoicing not configured/enabled
 
+          // Same rule as eInvoice.generate / retryFailed / cancel: without the NIC public
+          // key (lib/irp-public-key.ts) this server cannot sign in to the IRP, so do not
+          // touch the invoice. A `failed` e-invoice must mean the IRP rejected it, not that
+          // the server was never set up; once the key is configured the invoice can be
+          // generated from the E-Invoicing page like any other. Nothing is written first.
+          try {
+            loadIrpPublicKey(config.isSandbox);
+          } catch (keyErr) {
+            if (keyErr instanceof IRPNotConfiguredError) {
+              if (process.env.NODE_ENV !== "test") {
+                console.debug("[e-invoice auto-submit] skipped, NIC public key not configured:", keyErr.message);
+              }
+              return;
+            }
+            throw keyErr;
+          }
+
           // Fetch the full invoice with party
           const [inv] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
           if (!inv) return;
@@ -646,6 +664,21 @@ export const invoiceRouter = router({
             })
             .where(eq(invoices.id, invoiceId));
         } catch (err) {
+          if (err instanceof IRPNotConfiguredError) {
+            // The key went away after the check above (a file removed mid-flight, or a key
+            // that cannot encrypt the sign-in): a configuration problem, not an IRP
+            // rejection. Leave the invoice pending, with no error and no retry counted,
+            // as eInvoice.generate does.
+            if (process.env.NODE_ENV !== "test") {
+              console.error("[e-invoice auto-submit] not configured:", err.message);
+            }
+            await db
+              .update(invoices)
+              .set({ eInvoiceStatus: "pending", eInvoiceError: null, updatedAt: new Date() })
+              .where(eq(invoices.id, invoiceId))
+              .catch(() => {/* swallow DB errors in background task */});
+            return;
+          }
           // IRP errors must not bubble up — just log and mark as failed
           const isRetryable = err instanceof IRPError && err.isRetryable;
           const errorMsg = err instanceof Error ? err.message : "Unknown IRP error";

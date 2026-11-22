@@ -1212,6 +1212,42 @@ describe("e-invoicing without a usable NIC public key", () => {
     expect(after.eInvoiceRetryCount).toBe(0);
   });
 
+  describe("the auto-submit that follows invoice.create", () => {
+    const createB2bInvoice = () =>
+      callerForRamesh().invoice.create({
+        partyId: b2bParty.id,
+        type: "sale",
+        lineItems: [{ itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
+      });
+
+    it("with no key it returns silently: the invoice is not pending, not failed, and no retry is counted", async () => {
+      await setupEInvoiceConfig();
+      const created = await createB2bInvoice();
+
+      // The submit runs in a background task after the response; give it ample time to
+      // run (it takes a few queries when it does), then check that nothing happened.
+      await new Promise((r) => setTimeout(r, 600));
+
+      expect(irp.__mockGenerateIRN).not.toHaveBeenCalled();
+      const after = await row(created.id);
+      expect(after.eInvoiceStatus).toBeNull();
+      expect(after.eInvoiceError).toBeNull();
+      expect(after.eInvoiceRetryCount).toBe(0);
+      expect(after.irn).toBeNull();
+    });
+
+    it("control: with a key the same invoice is submitted (so the silence above is the key check, not a dead task)", async () => {
+      process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = testPublicKeyPem;
+      await setupEInvoiceConfig();
+      const created = await createB2bInvoice();
+
+      await vi.waitFor(async () => {
+        expect((await row(created.id)).eInvoiceStatus).toBe("generated");
+      }, { timeout: 5000, interval: 50 });
+      expect(irp.__mockGenerateIRN).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("an invalid key is reported as such, with the variable to fix", async () => {
     process.env.IRP_SANDBOX_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nnot a key\n-----END PUBLIC KEY-----";
     const invoice = await newInvoice();
