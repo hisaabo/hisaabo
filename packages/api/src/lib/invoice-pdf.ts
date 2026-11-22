@@ -310,8 +310,28 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const sameState = isSameState(data);
   const titleLabel = getInvoiceTitle(data);
 
+  // ── Pagination ────────────────────────────────────────────
+  // Sections are placed by hand from the running `y`, and PDFKit's own auto-break is off for A4
+  // (see generateInvoicePDF), so page breaks are decided here: before a block is drawn, from
+  // the block's height. Heights below are each block's full `y` advance, so an invoice that fits
+  // on one page never breaks.
+  const bottomY = pageH - margin;
+  const drawPageBorder = () =>
+    borderedRect(doc, margin - 4, margin - 4, contentW + 8, pageH - margin * 2 + 8, cBorder, 0.75);
+  /** Start a new page unless `h` more points fit above the bottom margin. Returns true on a break. */
+  const ensureSpace = (h: number): boolean => {
+    if (y + h <= bottomY) return false;
+    doc.addPage();
+    drawPageBorder();
+    y = margin;
+    return true;
+  };
+  // The footer (disclaimer and, on the free plan, the branding line) is kept with the last block
+  // above it, so it never ends up alone on a page of its own.
+  const footerH = data.isPaidPlan ? 13 : 23;
+
   // ── Page outer border ──────────────────────────────────────
-  borderedRect(doc, margin - 4, margin - 4, contentW + 8, pageH - margin * 2 + 8, cBorder, 0.75);
+  drawPageBorder();
 
   // ── Title banner ──────────────────────────────────────────
   filledRect(doc, margin - 4, y - 4, contentW + 8, 28, cAccent);
@@ -526,22 +546,28 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const COL_QTY  = COL_RATE - 38;
   const DESCW = COL_QTY - COL_DESC - 8;
 
-  // Table header row
+  // Table header row — redrawn at the top of every page the table continues onto
   const tableHeaderH = 20;
-  filledRect(doc, margin - 4, y, contentW + 8, tableHeaderH, cHeaderBg);
+  const drawTableHeader = () => {
+    filledRect(doc, margin - 4, y, contentW + 8, tableHeaderH, cHeaderBg);
 
-  doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold");
-  doc.text("#", COL_IDX, y + 6, { width: 16 });
-  if (showHsn) doc.text("HSN/SAC", COL_HSN, y + 6, { width: 44 });
-  doc.text("DESCRIPTION", COL_DESC, y + 6, { width: DESCW });
-  doc.text("QTY", COL_QTY, y + 6, { width: 36, align: "right" });
-  doc.text("RATE", COL_RATE, y + 6, { width: 62, align: "right" });
-  doc.text("TAX%", COL_TAXPCT, y + 6, { width: 28, align: "right" });
-  doc.text("TAX AMT", COL_TAXAMT, y + 6, { width: 54, align: "right" });
-  doc.text("AMOUNT", COL_AMT, y + 6, { width: 60, align: "right" });
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold");
+    doc.text("#", COL_IDX, y + 6, { width: 16 });
+    if (showHsn) doc.text("HSN/SAC", COL_HSN, y + 6, { width: 44 });
+    doc.text("DESCRIPTION", COL_DESC, y + 6, { width: DESCW });
+    doc.text("QTY", COL_QTY, y + 6, { width: 36, align: "right" });
+    doc.text("RATE", COL_RATE, y + 6, { width: 62, align: "right" });
+    doc.text("TAX%", COL_TAXPCT, y + 6, { width: 28, align: "right" });
+    doc.text("TAX AMT", COL_TAXAMT, y + 6, { width: 54, align: "right" });
+    doc.text("AMOUNT", COL_AMT, y + 6, { width: 60, align: "right" });
 
-  y += tableHeaderH;
-  hLine(doc, margin - 4, y, contentW + 8, cBorder);
+    y += tableHeaderH;
+    hLine(doc, margin - 4, y, contentW + 8, cBorder);
+  };
+
+  // A header is never left at the foot of a page without its first row.
+  ensureSpace(tableHeaderH + 18);
+  drawTableHeader();
 
   // Table rows
   //
@@ -554,6 +580,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     const hasNote = !!(item.description && item.description.trim().length > 0);
     const noteH = hasNote ? 9 : 0;
     const rowH = 18 + noteH;
+    if (ensureSpace(rowH)) drawTableHeader();
     if (i % 2 === 1) {
       filledRect(doc, margin - 4, y, contentW + 8, rowH, "#f9fafb");
     }
@@ -591,6 +618,8 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   if (gstMode && parseFloat(data.taxAmount) > 0) {
     const breakdown = buildGstBreakdown(data);
 
+    // header 16, one 14pt row per rate (the closing rule and 4pt below are not counted)
+    ensureSpace(16 + breakdown.length * 14);
     filledRect(doc, margin - 4, y, contentW * 0.62 + 8, 16, cHeaderBg);
     doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
       .text("TAX SUMMARY", margin, y + 4);
@@ -655,15 +684,31 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     y += bold ? 16 : 13;
   }
 
+  const hasDiscount = parseFloat(data.discountAmount) > 0;
+  const hasTax = parseFloat(data.taxAmount) > 0;
+  const roundOff = Math.round(parseFloat(data.totalAmount)) - parseFloat(data.totalAmount);
+  const hasRoundOff = Math.abs(roundOff) > 0.005;
+  const hasPaid = parseFloat(data.amountPaid) > 0;
+  const hasBalanceDue = hasPaid && parseFloat(data.totalAmount) - parseFloat(data.amountPaid) > 0.005;
+  // Rows: Taxable Value, Discount, tax (CGST + SGST, or IGST, or Tax), Round Off, rule + TOTAL,
+  // Amount Paid, Balance Due. The rule and gap below the block (4 + 8) are not counted, so they
+  // may fall into the bottom margin.
+  const taxRows = hasTax ? (gstMode && sameState ? 2 : 1) : 0;
+  const totalsH =
+    13 * (1 + (hasDiscount ? 1 : 0) + taxRows + (hasRoundOff ? 1 : 0)) +
+    5 + 16 +
+    (hasPaid ? 13 : 0) + (hasBalanceDue ? 16 : 0);
+  ensureSpace(totalsH);
+
   // Subtotal = taxable value
   const taxableTotal = parseFloat(data.subtotal) - parseFloat(data.discountAmount);
   totalRow("Taxable Value", taxableTotal.toFixed(2));
 
-  if (parseFloat(data.discountAmount) > 0) {
+  if (hasDiscount) {
     totalRow("Discount", data.discountAmount);
   }
 
-  if (gstMode && parseFloat(data.taxAmount) > 0) {
+  if (gstMode && hasTax) {
     if (sameState) {
       // Per line, odd paisa to CGST: the same split as the GST returns and the e-invoice.
       const [cgst, sgst] = splitDocumentGst(data.taxAmount, data.lineItems.map((li) => li.taxAmount));
@@ -672,13 +717,12 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     } else {
       totalRow("IGST", data.taxAmount);
     }
-  } else if (parseFloat(data.taxAmount) > 0) {
+  } else if (hasTax) {
     totalRow("Tax", data.taxAmount);
   }
 
   // Round off
-  const roundOff = Math.round(parseFloat(data.totalAmount)) - parseFloat(data.totalAmount);
-  if (Math.abs(roundOff) > 0.005) {
+  if (hasRoundOff) {
     totalRow("Round Off", roundOff.toFixed(2));
   }
 
@@ -687,10 +731,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   totalRow("TOTAL", data.totalAmount, true, true);
 
-  if (parseFloat(data.amountPaid) > 0) {
+  if (hasPaid) {
     totalRow("Amount Paid", data.amountPaid);
     const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
-    if (balance > 0.005) totalRow("Balance Due", balance.toFixed(2), true);
+    if (hasBalanceDue) totalRow("Balance Due", balance.toFixed(2), true);
   }
 
   y += 4;
@@ -698,6 +742,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 8;
 
   // ── Amount in words ───────────────────────────────────────
+  ensureSpace(18 + 1);
   filledRect(doc, margin - 4, y, contentW + 8, 14, cBg);
   doc.fontSize(7.5).fillColor(cMuted).font("NotoSans-Bold")
     .text("Amount in words: ", margin, y + 3);
@@ -716,6 +761,14 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     const payLeft = margin;
     const _payRight = margin + contentW * 0.5 + 10;
     const payColW  = contentW * 0.5 - 10;
+
+    // header 20, then the bank / UPI rows (11pt each) or the QR slot (68 + 8), whichever is
+    // taller, then 4pt and a rule + 1pt. Kept together on one page.
+    const payRows =
+      (data.bankAccountNumber
+        ? (data.bankName ? 1 : 0) + 1 + (data.bankIfsc ? 1 : 0) + (data.bankAccountName ? 1 : 0)
+        : 0) + (data.upiId ? 1 : 0);
+    ensureSpace(20 + Math.max(payRows * 11, 68 + 8) + 4 + 1);
 
     filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
     doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
@@ -782,6 +835,20 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const bottomRight = margin + contentW * 0.6 + 4;
   const bottomLeftW = contentW * 0.6;
   const bottomRightW = contentW - contentW * 0.6 - 4;
+
+  // Block height: the header bar (14) plus the taller of the terms / notes column and the
+  // signatory (82, down to the "Authorized Signatory" label), then 6pt and a rule + 1pt. Kept
+  // together on one page, with the footer. The notes' own text height is not part of the
+  // advance, exactly as it was before pagination: long notes are drawn over the rule and footer
+  // below them. That overlap is left alone here so that an A4 invoice that fits on one page
+  // renders exactly as it always has.
+  doc.fontSize(7).font("NotoSans");
+  const termsColH =
+    (data.termsAndConditions
+      ? 11 + doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8
+      : 0) +
+    (data.notes ? 11 : 0);
+  ensureSpace(Math.max(14 + termsColH, 82) + 6 + 1 + footerH);
   const bottomStartY = y;
 
   filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
@@ -862,8 +929,36 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const gstMode  = isGstRegistered(data);
   const titleLabel = getInvoiceTitle(data);
 
+  // ── Pagination ────────────────────────────────────────────
+  // Sections are placed by hand from the running `y`, and PDFKit's own auto-break is off for A5
+  // (see generateInvoicePDF), so page breaks are decided here: before a block is drawn, from
+  // the block's height. Heights below are each block's full `y` advance, so an invoice that fits
+  // on one page never breaks.
+  const bottomY = pageH - margin;
+  const drawStripe = () => filledRect(doc, 0, 0, pageW, 3, cAccent);
+  let pageNo = 1;
+  // The footer (hairline, disclaimer and, on the free plan, the branding line) is kept with the
+  // last block above it, so it never ends up alone on a page of its own. A one-page invoice has
+  // no "Page X of N" stamp, so there its footer may also use the bottom margin (down to 12pt
+  // from the edge); that stops a footer line alone from pushing the invoice onto a second page.
+  const footerH = data.isPaidPlan ? 16 : 25;
+  const onePageBottomY = pageH - 12;
+  /**
+   * Start a new page unless `h` more points fit above the bottom margin. `withFooter` is for the
+   * last block, which has to leave room for the footer as well. Returns true on a break.
+   */
+  const ensureSpace = (h: number, withFooter = false): boolean => {
+    const limit = withFooter && pageNo === 1 ? onePageBottomY : bottomY;
+    if (y + h + (withFooter ? footerH : 0) <= limit) return false;
+    doc.addPage();
+    pageNo++;
+    drawStripe();
+    y = margin;
+    return true;
+  };
+
   // ── Thin accent stripe at the very top ───────────────────
-  filledRect(doc, 0, 0, pageW, 3, cAccent);
+  drawStripe();
 
   // ── SECTION 1: Two-column header ─────────────────────────
   // Left column: business info  |  Right column: invoice metadata
@@ -1019,26 +1114,33 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const C_QTY   = C_RATE - 36;
   const C_DESCW = C_QTY - C_DESC - 6;
 
-  // Table header
+  // Table header — redrawn at the top of every page the table continues onto
   const tableHdrH = 18;
-  filledRect(doc, margin, y, contentW, tableHdrH, cBg);
+  const drawTableHeader = () => {
+    filledRect(doc, margin, y, contentW, tableHdrH, cBg);
 
-  doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold");
-  doc.text("#", C_IDX, y + 5, { width: 14 });
-  if (showHsn) doc.text("HSN/SAC", C_HSN, y + 5, { width: 40 });
-  doc.text("DESCRIPTION", C_DESC, y + 5, { width: C_DESCW });
-  doc.text("QTY", C_QTY, y + 5, { width: 34, align: "right" });
-  doc.text("RATE", C_RATE, y + 5, { width: 62, align: "right" });
-  doc.text("TAX", C_TAX, y + 5, { width: 34, align: "right" });
-  doc.text("AMOUNT", C_AMT, y + 5, { width: 60, align: "right" });
+    doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold");
+    doc.text("#", C_IDX, y + 5, { width: 14 });
+    if (showHsn) doc.text("HSN/SAC", C_HSN, y + 5, { width: 40 });
+    doc.text("DESCRIPTION", C_DESC, y + 5, { width: C_DESCW });
+    doc.text("QTY", C_QTY, y + 5, { width: 34, align: "right" });
+    doc.text("RATE", C_RATE, y + 5, { width: 62, align: "right" });
+    doc.text("TAX", C_TAX, y + 5, { width: 34, align: "right" });
+    doc.text("AMOUNT", C_AMT, y + 5, { width: 60, align: "right" });
 
-  y += tableHdrH;
-  hLine(doc, margin, y, contentW, cBorder);
+    y += tableHdrH;
+    hLine(doc, margin, y, contentW, cBorder);
+  };
+
+  // A header is never left at the foot of a page without its first row.
+  ensureSpace(tableHdrH + 17);
+  drawTableHeader();
 
   data.lineItems.forEach((item, i) => {
     const hasNote = !!(item.description && item.description.trim().length > 0);
     const noteH = hasNote ? 9 : 0;
     const rowH = 17 + noteH;
+    if (ensureSpace(rowH)) drawTableHeader();
     if (i % 2 === 1) {
       filledRect(doc, margin, y, contentW, rowH, "#fafafc");
     }
@@ -1072,6 +1174,17 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // ── SECTION 4: Totals (right column) + Amount in words (left column) ──
   // Both sit side-by-side so they never overlap
+  const hasDiscount = parseFloat(data.discountAmount) > 0;
+  const hasTax = parseFloat(data.taxAmount) > 0;
+  const hasPaid = parseFloat(data.amountPaid) > 0;
+  const hasBalanceDue = hasPaid && parseFloat(data.totalAmount) - parseFloat(data.amountPaid) > 0.005;
+  const totalsH =
+    11 + (hasDiscount ? 11 : 0) + (hasTax ? 11 : 0) + // Subtotal, Discount, Tax
+    4 + 13 +                                          // rule, TOTAL
+    (hasPaid ? 11 : 0) + (hasBalanceDue ? 13 : 0);    // Amount Paid, Balance Due
+  // The words column is a heading plus two lines (30). Only the text counts: the rule and gap
+  // below the block (6 + 8) are not, so they may fall into the bottom margin.
+  ensureSpace(Math.max(totalsH, 30));
   const totBlockStartY = y;
 
   // Right column: totals
@@ -1095,17 +1208,17 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   }
 
   totRow("Subtotal", data.subtotal);
-  if (parseFloat(data.discountAmount) > 0) totRow("Discount", `-${data.discountAmount}`);
-  if (parseFloat(data.taxAmount) > 0) totRow("Tax", data.taxAmount);
+  if (hasDiscount) totRow("Discount", `-${data.discountAmount}`);
+  if (hasTax) totRow("Tax", data.taxAmount);
 
   hLine(doc, totLabelX, totY, totLabelW + totValW + 8, cBorder);
   totY += 4;
   totRow("TOTAL", data.totalAmount, true, true);
 
-  if (parseFloat(data.amountPaid) > 0) {
+  if (hasPaid) {
     totRow("Amount Paid", data.amountPaid);
     const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
-    if (balance > 0.005) totRow("Balance Due", balance.toFixed(2), true);
+    if (hasBalanceDue) totRow("Balance Due", balance.toFixed(2), true);
   }
 
   // Left column: amount in words — uses the same vertical band, never overlaps
@@ -1138,6 +1251,17 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   // QR (if present) sits just left of signatory
   const qrColX   = hasQr ? sigColX - qrSize - 8 : sigColX;
   const payTextW = hasQr ? qrColX - margin - 4 : sigColX - margin - 8;
+
+  // This block is the payment column (label + rows, or the QR code when that is taller) beside
+  // the signatory (50pt), then 4pt. It stays together on one page, and with the footer when it
+  // is the last block.
+  const payRows = hasPaymentInfo
+    ? (data.upiId ? 1 : 0) +
+      (data.bankAccountNumber ? (data.bankName ? 1 : 0) + 1 + (data.bankIfsc ? 1 : 0) : 0)
+    : 0;
+  const payColH = hasPaymentInfo ? Math.max(10 + payRows * 11, hasQr ? qrSize + 10 : 0) + 2 : 0;
+  const hasNotesBlock = !!(data.notes || data.termsAndConditions);
+  ensureSpace(Math.max(payColH, 50) + 4, !hasNotesBlock);
 
   // Capture y at the start of section 5 so the signatory can anchor here
   const sec5StartY = y;
@@ -1219,10 +1343,20 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y = Math.max(y, sigLineY + 14) + 4;
 
   // ── SECTION 6: Notes / Terms ─────────────────────────────
-  if (data.notes || data.termsAndConditions) {
-    hLine(doc, margin, y, contentW, cBorder);
-    y += 6;
+  if (hasNotesBlock) {
     const notesW = contentW * 0.7;
+    // Measured up front (same font and width as drawn below) so the block moves to the next page
+    // as a whole, with the footer, instead of being cut.
+    doc.fontSize(7).font("NotoSans");
+    const termsH = data.termsAndConditions
+      ? 9 + doc.heightOfString(data.termsAndConditions, { width: notesW }) + 4
+      : 0;
+    const notesH = data.notes ? 9 + doc.heightOfString(data.notes, { width: notesW }) + 4 : 0;
+    // On a fresh page the block starts at the margin, without the divider or the 6pt gap.
+    if (!ensureSpace(6 + termsH + notesH, true)) {
+      hLine(doc, margin, y, contentW, cBorder);
+      y += 6;
+    }
     if (data.termsAndConditions) {
       doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
         .text("Terms & Conditions", margin, y, { width: notesW });
@@ -1564,9 +1698,19 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
     docMargin = 8;
   }
 
+  // A4 and A5 place everything by hand and decide their own page breaks (see `ensureSpace` in the
+  // generators), so PDFKit's bottom-margin auto-break is switched off for them (bottom margin 0).
+  // Left on, every text call that lands below the margin silently starts a new page, and so does
+  // the "Page X of N" stamp below, which doubled the page count of every multi-page invoice.
+  // Thermal is one tall page and keeps the plain margin.
   const doc = new PDFDocument({
     size: docSize,
-    margin: docMargin,
+    margins: {
+      top: docMargin,
+      left: docMargin,
+      right: docMargin,
+      bottom: format === "thermal" ? docMargin : 0,
+    },
     bufferPages: true,
     info: {
       Title: `Invoice ${data.invoiceNumber}`,
