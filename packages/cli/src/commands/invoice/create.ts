@@ -1,4 +1,4 @@
-import { defaultSaleRate } from "../../default-rate.js";
+import { defaultBillRate, savedPriceFor, priceWord } from "../../default-rate.js";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError, type InvoiceLineItemInput } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -84,7 +84,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
     // ── Build line items ────────────────────────────────────────────
     const lineItems: InvoiceLineItemInput[] = [];
     // Lines whose rate the user TYPED. A rate defaulted from the catalog changed nothing, so it must
-    // never propose a price (a purchase bill defaults to the sale price, which is not a purchase price).
+    // never propose a price.
     const typedRateLines: PriceLineInput[] = [];
 
     if (opts.items && opts.items.length > 0) {
@@ -97,8 +97,8 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         if (!unitPrice) {
           // Try to find the item and use its sale price
           const items = await client.item.list({ search: itemName, limit: 3 });
-          if (items.data.length > 0 && items.data[0]?.salePrice) {
-            unitPrice = defaultSaleRate(items.data[0]);
+          if (items.data.length > 0 && savedPriceFor(items.data[0]!, invoiceType)) {
+            unitPrice = defaultBillRate(items.data[0]!, invoiceType);
             lineItems.push({
               itemId: items.data[0].id,
               itemName: items.data[0].name,
@@ -107,7 +107,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
               taxPercent: items.data[0].taxPercent,
             });
           } else {
-            fatalError(`Item not found or has no price: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
+            fatalError(`Item not found or has no ${priceWord(invoiceType)}: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
           }
         } else {
           // Try to find item by name for linking
@@ -148,7 +148,8 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         if (items.data.length > 0) {
           items.data.forEach((it, i) => {
             const stock = it.itemType === "service" ? "-" : String(it.stockQuantity);
-            const price = it.salePrice ? formatINR(it.salePrice) : "no price";
+            const shown = savedPriceFor(it, invoiceType);
+            const price = shown ? formatINR(shown) : `no ${priceWord(invoiceType)}`;
             console.log(`      ${i + 1}  ${it.name.padEnd(20)} ${price.padEnd(12)}  Stock: ${stock}`);
           });
           const choice = await prompt(rl, "    Item [1] (or 0 to use as description): ");
@@ -158,7 +159,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
             if (selected) {
               itemId = selected.id;
               description = selected.name;
-              defaultPrice = defaultSaleRate(selected);
+              defaultPrice = defaultBillRate(selected, invoiceType);
               defaultTax = selected.taxPercent;
             }
           }
