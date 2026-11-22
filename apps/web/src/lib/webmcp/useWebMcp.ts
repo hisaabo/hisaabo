@@ -12,6 +12,12 @@
  * business A can never be sent to business B, even if the user switched while a
  * dialog was open.
  *
+ * The tool catalog (about 20 tools with long, hand-written descriptions and schemas)
+ * is loaded with a dynamic import() only once the browser really exposes a model
+ * context AND this person has switched agent access on. Everyone else (most
+ * people, today: WebMCP is an origin trial) never downloads it, and it is not part
+ * of the app's main bundle.
+ *
  * Route changes deliberately do NOT re-register. Tearing down and rebuilding
  * a dozen tools on every navigation would make the agent's tool list flicker
  * mid-conversation, so `pathname`, `navigate`, `invalidate` and the user's
@@ -24,7 +30,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createWebMcpClient } from "./client";
 import { isAgentAccessEnabled, subscribeAgentAccess, type AgentPreferenceScope } from "./preferences";
 import { isWebMcpAvailable, registerHisaaboTools } from "./runtime";
-import { webMcpTools } from "./tools";
 import type { WebMcpToolContext, WebMcpTrpcClient } from "./types";
 
 export interface UseWebMcpInput {
@@ -113,9 +118,14 @@ export function useWebMcp(input: UseWebMcpInput): UseWebMcpResult {
     };
 
     let live = true;
-    void registerHisaaboTools(webMcpTools, ctx, { signal: controller.signal })
+    void import("./tools")
+      .then(({ webMcpTools }) => {
+        // The registration may have been torn down while the chunk was loading.
+        if (controller.signal.aborted) return undefined;
+        return registerHisaaboTools(webMcpTools, ctx, { signal: controller.signal });
+      })
       .then((result) => {
-        if (live) setRegisteredCount(result.registered.length);
+        if (live && result) setRegisteredCount(result.registered.length);
       })
       .catch(() => {
         if (live) setRegisteredCount(0);
