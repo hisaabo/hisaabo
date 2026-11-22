@@ -46,6 +46,7 @@ The Hono app handles:
 - CORS with origin allowlist from `CORS_ORIGINS` env var
 - Rate limiting: 120 requests/minute per IP
 - Health check: `GET /health`
+- Release version: `GET /api/version` returns `{ "version": "0.10.1" }` (public; polled by the release workflow before it deploys the frontends)
 - tRPC endpoint: `POST /trpc/*` and `GET /trpc/*`
 - Public store REST endpoints: `GET /store/:slug/catalog.json` (query: `page`, `limit`, `category`, `search` truncated to 100 characters, and `ids`, up to 50 comma-separated item UUIDs that narrow the result to those items; anything else is a 400), `POST /store/:slug/order`
 - Invoice PDF endpoint: `GET /invoice/:id/pdf`

@@ -37,6 +37,7 @@ import { createSmsService, isSmsConfigured } from "./lib/sms.js";
 import { sendStoreOtp, verifyStoreOtp, verifyOtpToken } from "./lib/store-otp.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
+import { registerVersionRoute } from "./http/version.js";
 import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
@@ -2112,6 +2113,9 @@ app.post("/store/:slug/order", async (c) => {
 // ── Operator dashboard (/ops) ─────────────────────────────────
 // Off unless QUEUE_DASHBOARD_ENABLED=true; see docs/architecture/queue.md §7.2.
 registerOpsRoutes(app, { notFound: notFoundResponse, clientIp: getClientIp });
+
+// ── Release version (public; polled by release.yml's wait-for-api) ──
+registerVersionRoute(app);
 
 // ── Self-export download endpoint ─────────────────────────────
 registerExportRoute(app);
