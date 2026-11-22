@@ -12,11 +12,11 @@
  * Token caching: stored in eInvoiceConfigs to survive process restarts.
  */
 
-import { createHash, createCipheriv, createDecipheriv, publicEncrypt, constants, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, publicEncrypt, constants, randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { eInvoiceConfigs, encryptField } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
-import { loadIrpPublicKey } from "./irp-public-key.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "./irp-public-key.js";
 
 // ── NIC IRP endpoints ─────────────────────────────────────────────────────────
 
@@ -33,8 +33,10 @@ export const IRP_REQUEST_TIMEOUT_MS = 30_000;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+// NIC documents Status as 1 (success) / 0 (failure); some error samples use the strings
+// "1" / "0". Always compare with irpSucceeded().
 export interface IRPAuthResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     AuthToken: string;
     TokenExpiry: string; // "02/04/2026 15:30:00"
@@ -44,7 +46,7 @@ export interface IRPAuthResponse {
 }
 
 export interface IRPGenerateIRNResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     Irn: string;
     AckNo: string;
@@ -58,7 +60,7 @@ export interface IRPGenerateIRNResponse {
 }
 
 export interface IRPCancelIRNResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     Irn: string;
     CancelDate: string;
@@ -234,6 +236,11 @@ function aesDecrypt(encryptedBase64: string, keyBytes: Buffer): string {
   return decrypted.toString("utf8");
 }
 
+/** Did the IRP report success? Accepts the numeric 1 NIC documents as well as the string "1". */
+function irpSucceeded(status: number | string | undefined): boolean {
+  return String(status) === "1";
+}
+
 /** fetch with a hard timeout; timeouts and network failures surface as retryable IRPErrors. */
 async function irpFetch(url: string, init: RequestInit): Promise<Response> {
   try {
@@ -294,23 +301,33 @@ export class IRPClient {
     // Generate fresh 32-byte AppKey
     this.appKey = randomBytes(32);
 
-    // RSA-encrypt AppKey with NIC public key (PKCS1 v1.5)
-    const encryptedAppKey = publicEncrypt(
-      {
-        key: publicKey,
-        padding: constants.RSA_PKCS1_PADDING,
-      },
-      this.appKey,
+    // NIC's authentication API (v1.04, "Payloads"): the credentials JSON (UserName, the
+    // password in plain text, AppKey = base64 of the random key, ForceRefreshAccessToken)
+    // is Base64-encoded, then RSA-encrypted with the e-invoice public key (PKCS#1 v1.5,
+    // as in NIC's sample code: "RSA/ECB/PKCS1PADDING"), and the Base64 of that goes
+    // out as the single field "Data". The password is NOT hashed.
+    const credentials = Buffer.from(
+      JSON.stringify({
+        UserName: this.config.username,
+        Password: this.config.password,
+        AppKey: this.appKey.toString("base64"),
+        ForceRefreshAccessToken: false,
+      }),
+      "utf8",
     ).toString("base64");
 
-    const body = {
-      Data: {
-        UserName: this.config.username,
-        Password: createHash("sha256").update(this.config.password).digest("base64"),
-        AppKey: encryptedAppKey,
-        ForceRefreshAccessToken: false,
-      },
-    };
+    let encryptedCredentials: string;
+    try {
+      encryptedCredentials = publicEncrypt(
+        { key: publicKey, padding: constants.RSA_PKCS1_PADDING },
+        Buffer.from(credentials, "utf8"),
+      ).toString("base64");
+    } catch {
+      // Too much data for the key size means this is not the 2048-bit RSA key NIC issues.
+      throw new IRPNotConfiguredError("the key cannot encrypt the sign-in request; an RSA key of 2048 bits or more is needed");
+    }
+
+    const body = { Data: encryptedCredentials };
 
     await globalRateLimiter.throttle();
 
@@ -331,7 +348,7 @@ export class IRPClient {
 
     const result = await response.json() as IRPAuthResponse;
 
-    if (result.Status !== "1" || !result.Data) {
+    if (!irpSucceeded(result.Status) || !result.Data) {
       const errMsg = result.ErrorDetails?.[0]?.ErrorMessage ?? "Authentication failed";
       throw new IRPError(errMsg, "AUTH_FAILED");
     }
@@ -400,9 +417,9 @@ export class IRPClient {
       );
     }
 
-    const result = await response.json() as { Status: string; Data?: string; ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }> };
+    const result = await response.json() as { Status: number | string; Data?: string; ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }> };
 
-    if (result.Status !== "1" || !result.Data) {
+    if (!irpSucceeded(result.Status) || !result.Data) {
       const errCode = result.ErrorDetails?.[0]?.ErrorCode ?? "UNKNOWN";
       const errMsg = result.ErrorDetails?.[0]?.ErrorMessage ?? "IRP API error";
       throw new IRPError(errMsg, errCode);
