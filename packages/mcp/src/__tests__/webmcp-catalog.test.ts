@@ -122,6 +122,35 @@ describe("WebMCP exposure catalog", () => {
       }
     });
 
+    it("keeps the curated surface near 60 tools: 18 exposed plus a trimmed planned set", () => {
+      const total = webmcpToolsWithStatus("exposed").length + webmcpToolsWithStatus("planned").length;
+      // + the two browser-only helpers = the whole surface. Keep it curated, not a mirror of the 194 MCP tools.
+      expect(total + WEBMCP_BROWSER_ONLY_TOOLS.length).toBeLessThanOrEqual(68);
+      expect(total + WEBMCP_BROWSER_ONLY_TOOLS.length).toBeGreaterThanOrEqual(55);
+    });
+
+    it("plans only a handful of reports, GST/ITC reads and reconciliation reads", () => {
+      const planned = webmcpToolsWithStatus("planned");
+      expect(planned.filter((n) => n.startsWith("report_")).sort()).toEqual([
+        "report_balance_sheet",
+        "report_daybook",
+        "report_item_sales",
+        "report_outstanding",
+        "report_party_statement",
+        "report_profit_and_loss",
+      ]);
+      expect(planned.filter((n) => /^(gstr2b_|itc_)/.test(n)).sort()).toEqual(["gstr2b_summary", "itc_dashboard", "itc_ledger"]);
+      expect(planned.filter((n) => n.startsWith("bank_recon_")).sort()).toEqual(["bank_recon_lines", "bank_recon_summary"]);
+    });
+
+    it("plans document_convert with the document creates", () => {
+      expect(WEBMCP_CATALOG.document_convert.webmcp).toBe("planned");
+      expect(WEBMCP_CATALOG.quotation_create.webmcp).toBe("planned");
+      // Returns and debit notes move stock and ledger balances against earlier documents: list/get only for now.
+      expect(WEBMCP_CATALOG.sales_return_list.webmcp).toBe("planned");
+      expect(WEBMCP_CATALOG.sales_return_create.webmcp).toMatch(/^excluded:/);
+    });
+
     it("plans the reports, GST and ITC reads, document list/get/create, party analytics, inventory reads and updates", () => {
       const planned = new Set(webmcpToolsWithStatus("planned"));
       for (const name of [

@@ -58,12 +58,15 @@ function excluded(reason: string): WebMcpCatalogEntry {
 
 const DOCUMENT_PREFIXES = ["quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] as const;
 
-/** list/get and create are planned for every document type; status changes and deletes never are. */
+/** Returns and debit notes move stock and ledger balances against an earlier document: not offered to an agent yet. */
+const CREATES_WITH_SIDE_EFFECTS: ReadonlySet<string> = new Set(["debit_note", "sales_return", "purchase_return"]);
+
+/** list/get are planned for every document type, create for the others; status changes and deletes never are. */
 const documentTools: Record<string, WebMcpCatalogEntry> = Object.fromEntries(
   DOCUMENT_PREFIXES.flatMap((p) => [
     [`${p}_list`, PLANNED],
     [`${p}_get`, PLANNED],
-    [`${p}_create`, PLANNED],
+    [`${p}_create`, CREATES_WITH_SIDE_EFFECTS.has(p) ? excluded("not-curated") : PLANNED],
     [`${p}_update_status`, excluded("status-change-can-void")],
     [`${p}_delete`, excluded("destructive")],
   ]),
@@ -109,9 +112,9 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   bank_account_update_gateway: excluded("gateway-config"),
 
   // bank reconciliation
-  bank_recon_imports: PLANNED,
+  bank_recon_imports: excluded("not-curated"),
   bank_recon_summary: PLANNED,
-  bank_recon_rules: PLANNED,
+  bank_recon_rules: excluded("not-curated"),
   bank_recon_lines: PLANNED,
 
   // dashboard / audit / system
@@ -120,27 +123,27 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   system_maintenance_status: excluded("not-curated"),
 
   // documents
-  document_convert: excluded("not-curated"),
+  document_convert: PLANNED,
 
   // GST compliance
-  einvoice_dashboard: PLANNED,
+  einvoice_dashboard: excluded("not-curated"),
   einvoice_generate: excluded("external-filing"),
   einvoice_cancel: excluded("external-filing"),
   einvoice_retry: excluded("external-filing"),
   einvoice_status: PLANNED,
-  eway_bill_dashboard: PLANNED,
+  eway_bill_dashboard: excluded("not-curated"),
   eway_bill_generate: excluded("external-filing"),
   eway_bill_cancel: excluded("external-filing"),
   eway_bill_update_vehicle: excluded("external-filing"),
   eway_bill_expiring: PLANNED,
   gst_report_csv: excluded("file-download"),
   gst_report: PLANNED,
-  gst_gstr9: PLANNED,
-  gstr2b_uploads: PLANNED,
-  gstr2b_records: PLANNED,
+  gst_gstr9: excluded("not-curated"),
+  gstr2b_uploads: excluded("not-curated"),
+  gstr2b_records: excluded("not-curated"),
   gstr2b_summary: PLANNED,
-  gstr2b_missing_in_books: PLANNED,
-  gstr2b_missing_in_2b: PLANNED,
+  gstr2b_missing_in_books: excluded("not-curated"),
+  gstr2b_missing_in_2b: excluded("not-curated"),
 
   // expenses
   expense_create: EXPOSED,
@@ -170,10 +173,10 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   // input tax credit
   itc_dashboard: PLANNED,
   itc_ledger: PLANNED,
-  itc_aging_alerts: PLANNED,
+  itc_aging_alerts: excluded("not-curated"),
   itc_mark_blocked: excluded("tax-classification"),
   itc_mark_eligible: excluded("tax-classification"),
-  itc_gstr3b_table4: PLANNED,
+  itc_gstr3b_table4: excluded("not-curated"),
 
   // items
   item_list: EXPOSED,
@@ -182,18 +185,18 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   item_update: PLANNED,
   item_delete: excluded("destructive"),
   item_adjust_stock: PLANNED,
-  item_list_variants: PLANNED,
+  item_list_variants: excluded("not-curated"),
   item_create_variant: excluded("not-curated"),
   item_update_variant: excluded("not-curated"),
   item_delete_variant: excluded("destructive"),
   item_merge: excluded("merge"),
   item_switch_base_unit: excluded("rewrites-quantities"),
   item_rename_unit: excluded("not-curated"),
-  item_stock_adjustment_history: PLANNED,
+  item_stock_adjustment_history: excluded("not-curated"),
   item_low_stock_count: PLANNED,
-  item_price_history: PLANNED,
-  item_price_summary: PLANNED,
-  item_stock_movements: PLANNED,
+  item_price_history: excluded("not-curated"),
+  item_price_summary: excluded("not-curated"),
+  item_stock_movements: excluded("not-curated"),
   item_stock_summary: PLANNED,
 
   // journal
@@ -210,7 +213,7 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   party_update: PLANNED,
   party_delete: excluded("destructive"),
   party_ledger: PLANNED,
-  party_ledger_report: PLANNED,
+  party_ledger_report: excluded("not-curated"),
   party_get_stats: PLANNED,
   party_top_items: PLANNED,
   party_merge: excluded("merge"),
@@ -222,26 +225,26 @@ export const WEBMCP_CATALOG: Readonly<Record<string, WebMcpCatalogEntry>> = {
   payment_delete: excluded("destructive"),
   payment_list: EXPOSED,
   payment_unpaid_invoices: EXPOSED,
-  payment_untracked: PLANNED,
-  payment_default_account: PLANNED,
+  payment_untracked: excluded("not-curated"),
+  payment_default_account: excluded("not-curated"),
   tds_section_list: EXPOSED,
 
   // reports
   report_daybook: PLANNED,
   report_outstanding: PLANNED,
-  report_tax_summary: PLANNED,
+  report_tax_summary: excluded("not-curated"),
   report_item_sales: PLANNED,
-  report_stock_summary: PLANNED,
+  report_stock_summary: excluded("not-curated"),
   report_party_statement: PLANNED,
-  report_payment_summary: PLANNED,
-  report_trial_balance: PLANNED,
+  report_payment_summary: excluded("not-curated"),
+  report_trial_balance: excluded("not-curated"),
   report_balance_sheet: PLANNED,
   report_profit_and_loss: PLANNED,
-  report_cash_flow_statement: PLANNED,
-  report_general_ledger: PLANNED,
-  report_comparative_trial_balance: PLANNED,
-  report_comparative_balance_sheet: PLANNED,
-  report_comparative_profit_and_loss: PLANNED,
+  report_cash_flow_statement: excluded("not-curated"),
+  report_general_ledger: excluded("not-curated"),
+  report_comparative_trial_balance: excluded("not-curated"),
+  report_comparative_balance_sheet: excluded("not-curated"),
+  report_comparative_profit_and_loss: excluded("not-curated"),
 
   // shipments
   shipment_list: excluded("not-curated"),
