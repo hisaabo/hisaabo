@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { auditSources } from "../audit-source.js";
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
 
@@ -716,8 +717,8 @@ export const auditLogRowSchema = z.object({
   metadata: z.string().nullable(),
   ipAddress: z.string().nullable(),
   // "webmcp" | "mcp" | null (see packages/api/src/lib/audit-source.ts). Optional so
-  // exports written before the column existed still validate.
-  source: z.string().nullable().optional(),
+  // exports written before the column existed still validate; any other value is rejected.
+  source: z.enum(auditSources).nullable().optional(),
   createdAt: isoDatetime,
 });
 

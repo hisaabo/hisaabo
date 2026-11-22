@@ -18,7 +18,9 @@
 
 export const AGENT_HEADER = "x-hisaabo-agent";
 
-export type AuditSource = "webmcp" | "mcp";
+import type { AuditSource } from "@hisaabo/shared";
+
+export type { AuditSource };
 
 /** The headers we read, in the case-insensitive form `Headers#get` accepts. */
 type HeaderReader = { get(name: string): string | null };

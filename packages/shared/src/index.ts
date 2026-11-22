@@ -1,4 +1,6 @@
 export * from "./validators.js";
+export { auditSources } from "./audit-source.js";
+export type { AuditSource } from "./audit-source.js";
 export * from "./money.js";
 export { formatQuantity } from "./quantity.js";
 export { calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF } from "./calc.js";

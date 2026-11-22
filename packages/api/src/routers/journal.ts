@@ -1,5 +1,6 @@
 import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod";
+import type { AuditSource } from "@hisaabo/shared";
 import { TRPCError } from "@trpc/server";
 import { journalEntries, journalEntryLines, chartOfAccounts, journalEntryTemplates } from "@hisaabo/db";
 import { escapeLike } from "../lib/escape-like.js";
@@ -26,7 +27,7 @@ interface VoidCtx {
   user: { id: string; name?: string | null };
   ipAddress?: string | null;
   /** Where the call came from (webmcp / mcp / null), copied onto the audit row. */
-  source?: string | null;
+  source?: AuditSource | null;
 }
 
 /**

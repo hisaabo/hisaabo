@@ -1,6 +1,7 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { createHash } from "crypto";
 import { logger } from "./lib/logger.js";
+import type { AuditSource } from "@hisaabo/shared";
 import { getTrustedClientIp } from "./lib/client-ip.js";
 import { auditSourceFromHeaders } from "./lib/audit-source.js";
 import { controlDb } from "@hisaabo/db";
@@ -313,7 +314,7 @@ export type Context = Omit<RawContext, "authTokenKind" | "viaApiKey" | "source">
   authTokenKind?: "access" | "refresh" | "cookie" | null;
   viaApiKey?: boolean;
   /** Where the call came from, for the audit log (see lib/audit-source.ts). Optional so hand-built test contexts need not set it. */
-  source?: "webmcp" | "mcp" | null;
+  source?: AuditSource | null;
 };
 
 function getCookie(req: Request, name: string): string | null {
