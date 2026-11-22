@@ -461,6 +461,9 @@ jobs:
     uses: ./.github/workflows/deploy-web.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   deploy-store:
@@ -473,6 +476,9 @@ jobs:
     uses: ./.github/workflows/deploy-store.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   deploy-api-docs:
@@ -485,6 +491,9 @@ jobs:
     uses: ./.github/workflows/deploy-api-docs.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   # ── Desktop (Tauri — Windows, macOS, Linux) ────────────────────

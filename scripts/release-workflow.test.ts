@@ -156,3 +156,35 @@ test("a timed-out API wait cannot publish the release", () => {
   const script = readFileSync(new URL("./publish-release.sh", import.meta.url), "utf8");
   assert.match(script, /success \| skipped\)\n\s+args\+=\(-F draft=false/);
 });
+
+test("every production deploy re-checks the API version after approval, with a loud override", () => {
+  for (const name of ["deploy-web.yml", "deploy-store.yml", "deploy-api-docs.yml"]) {
+    const wf = read(name);
+    const deploy = job(wf, "deploy");
+    const check = step(deploy, "Check the production API runs this release");
+    // One-shot check mode, production runs only, override wired to the input.
+    assert.match(check, /if: inputs\.ref/);
+    assert.match(check, /MODE: check/);
+    assert.match(check, /EXPECTED_VERSION: \$\{\{ inputs\.ref \}\}/);
+    assert.match(check, /SKIP_API_WAIT: \$\{\{ inputs\.allow_api_mismatch && 'true' \|\| 'false' \}\}/);
+    // It runs before anything is built or deployed, and after the ref is validated as a tag.
+    const order = ["Check the ref is a release tag", "Fetch the API version check", "Check the production API runs this release"]
+      .map((n) => deploy.indexOf(`- name: ${n}`));
+    assert.ok(order.every((i) => i !== -1), `${name}: steps present`);
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), `${name}: check order`);
+    assert.ok(deploy.indexOf("- uses: actions/checkout@3d3c42e5", order[2]! + 1) > order[2]!, `${name}: tag checkout comes after the check`);
+    assert.ok(deploy.indexOf("pages deploy") > order[2]!, `${name}: deploy comes after the check`);
+    // The override defaults to off on both triggers.
+    assert.equal(
+      (wf.match(/allow_api_mismatch:\n\s+description:.*\n\s+required: false\n\s+type: boolean\n\s+default: false/g) ?? []).length,
+      2,
+      `${name}: allow_api_mismatch input on workflow_call and workflow_dispatch`,
+    );
+  }
+});
+
+test("release.yml's emergency bypass is passed to the deploy-level check", () => {
+  for (const name of ["deploy-web", "deploy-store", "deploy-api-docs"]) {
+    assert.match(job(release, name), /allow_api_mismatch: \$\{\{ inputs\.skip_api_wait == true \}\}/);
+  }
+});

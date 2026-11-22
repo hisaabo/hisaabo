@@ -169,3 +169,97 @@ test("rejects missing or malformed configuration (exit 2)", async () => {
   const bad = await run({ API_URL: "http://127.0.0.1:1", EXPECTED_VERSION: "v0.10.1", TIMEOUT_MINUTES: "soon" });
   assert.equal(bad.code, 2, bad.log);
 });
+
+// ── MODE=check: the one-shot decision at the start of every production deploy ──
+
+const check = (api: string, expected: string, extra: Record<string, string> = {}) =>
+  run({ MODE: "check", API_URL: api, EXPECTED_VERSION: expected, OVERRIDE_NAME: "allow_api_mismatch", ...extra });
+
+test("check: passes with one request when production reports exactly the tagged version", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.10.1"}' }], async (url, hits) => {
+    const r = await check(url, "v0.10.1");
+    assert.equal(r.code, 0, r.log);
+    assert.match(r.log, /production reports 0\.10\.1, deploying 0\.10\.1: MATCH/);
+    assert.equal(r.outputs.result, "ready");
+    assert.equal(hits(), 1);
+  });
+});
+
+test("check: refuses when production is OLDER (the frontend would run ahead of its API), without waiting", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.10.0"}' }], async (url, hits) => {
+    const r = await check(url, "v0.10.1");
+    assert.equal(r.code, 1, r.log);
+    assert.match(r.log, /::error title=Production API is older than this release::/);
+    assert.match(r.log, /set allow_api_mismatch to deploy anyway/);
+    assert.equal(r.outputs.result, "older");
+    assert.equal(hits(), 1);
+  });
+});
+
+test("check: refuses when production is NEWER (an older tag would downgrade the frontend)", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.10.2"}' }], async (url) => {
+    const r = await check(url, "v0.10.1");
+    assert.equal(r.code, 1, r.log);
+    assert.match(r.log, /::error title=Production API is newer than this release::/);
+    assert.match(r.log, /stale approval|rollback/);
+    assert.equal(r.outputs.result, "newer");
+  });
+});
+
+test("check: orders versions numerically and ranks a pre-release below its release", async () => {
+  // 0.10.10 is newer than 0.10.9 (not a string comparison) ...
+  await withApi([{ status: 200, body: '{"version":"0.10.10"}' }], async (url) => {
+    assert.equal((await check(url, "v0.10.9")).outputs.result, "newer");
+  });
+  // ... and production on a release candidate is older than the final it is deploying.
+  await withApi([{ status: 200, body: '{"version":"0.10.1-rc.1"}' }], async (url) => {
+    assert.equal((await check(url, "v0.10.1")).outputs.result, "older");
+  });
+  await withApi([{ status: 200, body: '{"version":"0.10.1"}' }], async (url) => {
+    assert.equal((await check(url, "v0.10.1-rc.1")).outputs.result, "newer");
+  });
+});
+
+test("check: retries a network blip, then decides", async () => {
+  await withApi(
+    [
+      { status: 502, body: "bad gateway" },
+      { status: 200, body: '{"version":"0.10.1"}' },
+    ],
+    async (url, hits) => {
+      const r = await check(url, "v0.10.1", { CHECK_RETRY_SECONDS: "1" });
+      assert.equal(r.code, 0, r.log);
+      assert.match(r.log, /#1: HTTP 502/);
+      assert.equal(hits(), 2);
+    },
+  );
+});
+
+test("check: fails closed when the version cannot be read (404, unreachable)", async () => {
+  await withApi([{ status: 404, body: '{"error":"Not found"}' }], async (url, hits) => {
+    const r = await check(url, "v0.10.1", { CHECK_ATTEMPTS: "2", CHECK_RETRY_SECONDS: "1" });
+    assert.equal(r.code, 1, r.log);
+    assert.match(r.log, /::error title=Cannot verify the production API::/);
+    assert.equal(r.outputs.result, "unknown");
+    assert.equal(hits(), 2);
+  });
+  const down = await check("http://127.0.0.1:1", "v0.10.1", { CHECK_ATTEMPTS: "1" });
+  assert.equal(down.code, 1, down.log);
+  assert.equal(down.outputs.result, "unknown");
+});
+
+test("check: the override bypasses it loudly under the caller's input name, without calling the API", async () => {
+  await withApi([{ status: 200, body: '{"version":"0.10.2"}' }], async (url, hits) => {
+    const r = await check(url, "v0.10.1", { SKIP_API_WAIT: "true" });
+    assert.equal(r.code, 0, r.log);
+    assert.match(r.log, /::warning title=API check SKIPPED::allow_api_mismatch=true/);
+    assert.match(r.log, /API CHECK BYPASSED \(allow_api_mismatch=true\)/);
+    assert.equal(r.outputs.result, "skipped");
+    assert.equal(hits(), 0);
+  });
+});
+
+test("rejects an unknown MODE (exit 2)", async () => {
+  const r = await run({ MODE: "poll", API_URL: "http://127.0.0.1:1", EXPECTED_VERSION: "v0.10.1" });
+  assert.equal(r.code, 2, r.log);
+});
