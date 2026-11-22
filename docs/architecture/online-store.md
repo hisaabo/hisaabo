@@ -463,7 +463,9 @@ Response:
       id, name, description, category,
       price: "250.00",          // storePrice ?? salePrice
       unit, taxPercent, taxInclusive,
-      inStock: true,            // stockQuantity > 0
+      inStock: true,            // stockQuantity > 0 (or the store allows negative stock)
+      lowStock: false,          // allowNegativeStock && !inStock: "none on hand, orders accepted"; NOT "running low"
+      runningLow: false,        // tracked, 0 < stockQuantity <= lowStockAlert (items and variants)
     },
     ...
   ],
@@ -477,7 +479,7 @@ Headers:
   Cache-Control: public, s-maxage=60, stale-while-revalidate=300
 ```
 
-**Important**: This endpoint NEVER returns `salePrice`, `purchasePrice`, `stockQuantity` (exact number), `hsn`, `sku`, cost data, or any internal business fields. Only the derived `price` and boolean `inStock`.
+**Important**: This endpoint NEVER returns `salePrice`, `purchasePrice`, `stockQuantity` (exact number), `hsn`, `sku`, cost data, or any internal business fields. Only the derived `price` and the booleans `inStock`, `lowStock` and `runningLow`.
 
 **POST `/store/:slug/api/orders`**
 
@@ -835,6 +837,27 @@ MOBILE (375px)                          DESKTOP (1280px)
 |  [Contact on WhatsApp]        |
 +-------------------------------+
 ```
+
+### 6.4 The storefront as built (UI lift, November 2026)
+
+The wireframes above are the original proposal. Where the shipped storefront differs, this section is what applies.
+
+**One container.** The masthead (logo or initial tile, name, tagline, minimum order), the sticky toolbar (search, cart button, category chips), the product grid, the footer and checkout all sit in the same `.wrap` (max 1536px, so a 2000px display is not mostly margin), so they line up at any width. Text cards are an auto-fill grid (17rem minimum), which reaches 5 columns at about 1450px; photo cards step to 5 at 1400px. Checkout reuses the masthead; it no longer has a header of its own.
+
+**The cart is a drawer at every width, never a panel beside the page.**
+A docked panel takes its width from the grid: the first item added makes the panel appear, the cards re-flow and the header, search and footer shift (measured on the old UI: layout shift 0.12 at 1440px and 0.19 at 1024px on the first add). A drawer is a fixed layer, so nothing under it moves. The toolbar's cart button always shows the count, so the cart is one tap away; on phones a "View cart" bar sits at the foot of the screen. Opening a drawer hides the page's scrollbar to lock scrolling, which would also shift the page, so `Dialog` pads the root by exactly the width the layout gains (`html` also has `scrollbar-gutter: stable`, which Chromium honours). `e2e/layout-shift.spec.ts` asserts a layout shift of 0 and unchanged landmark boxes for the first add, further adds, opening and closing, at 2000, 1920, 1440, 1024 and 390px, scrolled and not.
+
+**Checkout** is two columns from 960px (and from 1280px the form's fields pair up, name with phone and city with pincode, so no input runs across a thousand pixels): your details on the left; on the right one sticky column with the order (lines with dotted leaders, total, the store's delivery note), the Turnstile widget and the place-order button. On a phone it is one column in the order summary, form, place-order sequence, with the summary collapsed to one line. Phone verification is a dialog over the cart drawer, not a page of its own.
+
+**Dialogs.** `components/Dialog.tsx` is the only dialog primitive (policy pages, item view, cart drawer, phone step): Esc, focus trap, focus return, `aria-modal` with a label, everything else `inert`, scroll lock without a page jump, and stacking. New overlays must use it.
+
+**Cards.** A catalog with photos on at least half of its items gets photo cards (square picture, a tinted initial for an item without one). Otherwise it gets compact text cards, with a small thumbnail beside the name for an item that has a photo, so one photographed item cannot stretch the row of image-less cards beside it. The mode is judged on the unfiltered catalog so searching never re-flows the store. The card's name is a link whose hit area covers the card.
+
+**Money** is formatted in one place (`src/money.ts`): decimal strings are read as integer paise (no floating point), grouped the Indian way, and paise are shown only when non-zero ("₹1,500", "₹640.50").
+
+**Stock labels and the API.** The catalog's `lowStock` flag does not mean "running low": the server sets `lowStock: allowNegativeStock && !inStock`, so a store that holds no inventory (stock 0, orders accepted) reports it on every item. The storefront therefore never shows a "Low stock" badge from `lowStock`; such items read "Available to order" in the item view. The API now sends a separate, additive `runningLow` boolean on every catalog item and variant (`packages/api/src/lib/store-stock.ts`, assembled in `lib/store-catalog-items.ts`): true only when `itemType` is `product`, `stockQuantity > 0`, `lowStockAlert` is set and `stockQuantity <= lowStockAlert`. For an item sold in variants it is true when every variant still buyable is low. `lowStock` is unchanged for compatibility. Neither the quantity nor the alert level is sent. The storefront shows the "Low stock" badge from `StoreItem.runningLow` (and the chosen variant's own flag); a catalog from a server that predates the field omits it, so no badge shows. Deploy order: API first, then the store.
+
+**Not covered.** The storefront has no dark theme. Accent colours are kept legible by deriving the text colour on the accent and a dark enough accent for text on white (`src/color.ts`).
 
 ---
 

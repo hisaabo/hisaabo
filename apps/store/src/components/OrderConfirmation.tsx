@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OrderResult, StoreConfig } from "../types";
+import { formatMoney } from "../money";
+import { Masthead } from "./Header";
 
 interface OrderConfirmationProps {
   result: OrderResult;
@@ -13,8 +15,7 @@ export function OrderConfirmation({
   onContinueShopping,
 }: OrderConfirmationProps) {
   const { business } = config;
-  const symbol = business.currency === "INR" ? "\u20B9" : business.currency;
-  const accent = business.accentColor || "var(--store-accent)";
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   const whatsappUrl = business.whatsappNumber
     ? buildWhatsAppUrl(
@@ -24,167 +25,129 @@ export function OrderConfirmation({
       )
     : null;
 
+  // A new screen: start at its heading, for screen readers and keyboard users.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+
   return (
-    <div
-      className="min-h-dvh flex items-center justify-center px-4 py-8"
-      style={{ background: "var(--store-bg-secondary)" }}
-    >
-      <ConfettiEffect accent={accent} />
+    <div className="min-h-dvh">
+      <ConfettiEffect />
+      <div className="accent-rule" />
+      <div className="wrap">
+        <Masthead business={business} heading={false} />
+      </div>
 
-      <div
-        className="w-full max-w-sm rounded-2xl p-8 text-center animate-scale-in relative z-10"
-        style={{
-          background: "var(--store-bg)",
-          boxShadow: "var(--store-shadow-lg)",
-        }}
-      >
-        {/* Success animation */}
-        <div className="relative mx-auto mb-6 w-24 h-24">
-          {/* Pulse ring */}
-          <div
-            className="absolute inset-0 rounded-full"
-            style={{
-              background: "var(--store-success-bg)",
-              animation: "pulse-ring 1.5s ease-out",
-            }}
-          />
-          {/* Circle */}
-          <div
-            className="relative w-24 h-24 rounded-full flex items-center justify-center animate-bounce-in"
-            style={{ background: "var(--store-success-bg)" }}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              width="44"
-              height="44"
-              style={{
-                color: "var(--store-success)",
-                strokeDasharray: 40,
-                animation: "check-draw 0.5s ease-out 0.3s both",
-              }}
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          </div>
-        </div>
-
-        <h2
-          className="text-2xl font-bold mb-1"
-          style={{ color: "var(--store-text)", letterSpacing: "-0.03em" }}
-        >
-          Order Placed!
-        </h2>
-        <p
-          className="text-sm mb-6"
-          style={{ color: "var(--store-muted)" }}
-        >
-          Your order has been received successfully
-        </p>
-
-        {/* Order details */}
+      <main className="wrap flex justify-center pb-16 pt-4">
         <div
-          className="rounded-xl p-4 mb-6 text-left space-y-3"
+          className="animate-scale-in relative z-10 w-full max-w-md rounded-2xl p-8 text-center"
           style={{
-            background: "var(--store-bg-secondary)",
+            background: "var(--store-bg)",
+            border: "1px solid var(--store-border)",
           }}
         >
-          <div className="flex justify-between items-center">
-            <span
-              className="text-xs font-medium uppercase tracking-wider"
-              style={{ color: "var(--store-muted)" }}
+          {/* Success animation */}
+          <div className="relative mx-auto mb-6 h-24 w-24" aria-hidden="true">
+            <div
+              className="absolute inset-0 rounded-full"
+              style={{
+                background: "var(--store-success-bg)",
+                animation: "pulse-ring 1.5s ease-out",
+              }}
+            />
+            <div
+              className="animate-bounce-in relative flex h-24 w-24 items-center justify-center rounded-full"
+              style={{ background: "var(--store-success-bg)" }}
             >
-              Order No.
-            </span>
-            <span
-              className="text-sm font-bold tabular-nums"
-              style={{ color: accent }}
-            >
-              {result.orderNumber}
-            </span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                width="44"
+                height="44"
+                style={{
+                  color: "var(--store-success)",
+                  strokeDasharray: 40,
+                  animation: "check-draw 0.5s ease-out 0.3s both",
+                }}
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
           </div>
-          <div
-            className="h-px"
-            style={{ background: "var(--store-border-light)" }}
-          />
-          <div className="flex justify-between items-center">
-            <span
-              className="text-xs font-medium uppercase tracking-wider"
-              style={{ color: "var(--store-muted)" }}
-            >
-              Total Amount
-            </span>
-            <span
-              className="text-sm font-bold tabular-nums"
-              style={{ color: "var(--store-text)" }}
-            >
-              {symbol}
-              {parseFloat(result.totalAmount).toFixed(2)}
-            </span>
-          </div>
-        </div>
 
-        {/* Message */}
-        <p
-          className="text-sm leading-relaxed mb-6"
-          style={{ color: "var(--store-text-secondary)" }}
-        >
-          <span className="font-semibold" style={{ color: "var(--store-text)" }}>
-            {business.name}
-          </span>{" "}
-          will confirm your order shortly.{" "}
-          {business.whatsappNumber
-            ? "You can reach out on WhatsApp for updates."
-            : "They will be in touch soon."}
-        </p>
-
-        {/* Actions */}
-        <div className="space-y-3">
-          {whatsappUrl && (
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2.5 w-full py-3 rounded-xl font-semibold text-sm text-white transition-transform active:scale-98"
-              style={{ background: "#25D366" }}
-            >
-              <WhatsAppIcon />
-              Chat on WhatsApp
-            </a>
-          )}
-          <button
-            onClick={onContinueShopping}
-            className="btn-ghost w-full py-3"
-            style={
-              business.accentColor
-                ? {
-                    color: business.accentColor,
-                    borderColor: business.accentColor,
-                  }
-                : undefined
-            }
+          <h1
+            ref={headingRef}
+            tabIndex={-1}
+            className="mb-1 text-2xl font-bold outline-none"
+            style={{ letterSpacing: "-0.03em" }}
           >
-            Continue Shopping
-          </button>
+            Order placed
+          </h1>
+          <p className="mb-6 text-sm" style={{ color: "var(--store-muted)" }}>
+            Your order has been received.
+          </p>
+
+          <div className="mb-6 space-y-3 rounded-xl p-4 text-left" style={{ background: "var(--store-bg-page)" }}>
+            <div className="bill-row text-sm">
+              <span>Order number</span>
+              <span className="bill-leader" />
+              <span className="bill-amount" style={{ color: "var(--store-accent-ink)" }}>
+                {result.orderNumber}
+              </span>
+            </div>
+            <div className="bill-row text-sm">
+              <span>Total</span>
+              <span className="bill-leader" />
+              <span className="bill-amount">{formatMoney(result.totalAmount, business.currency)}</span>
+            </div>
+          </div>
+
+          <p className="mb-6 text-sm leading-relaxed" style={{ color: "var(--store-text-secondary)" }}>
+            <span className="font-semibold" style={{ color: "var(--store-text)" }}>
+              {business.name}
+            </span>{" "}
+            will confirm your order shortly.{" "}
+            {business.whatsappNumber
+              ? "You can reach out on WhatsApp for updates."
+              : "They will be in touch soon."}
+          </p>
+
+          <div className="space-y-3">
+            {whatsappUrl && (
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-block"
+                style={{ background: "#128c4a", color: "#fff" }}
+              >
+                <WhatsAppIcon />
+                Chat on WhatsApp
+              </a>
+            )}
+            <button type="button" onClick={onContinueShopping} className="btn btn-outline btn-block">
+              Continue shopping
+            </button>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
 
 /** Lightweight confetti effect using CSS-only particles */
-function ConfettiEffect({ accent }: { accent: string }) {
+function ConfettiEffect() {
   const [particles, setParticles] = useState<
     Array<{ id: number; left: string; color: string; delay: string; size: number }>
   >([]);
 
   useEffect(() => {
-    const colors = [accent, "#f59e0b", "#10b981", "#ec4899", "#6366f1", "#f97316"];
+    const colors = ["var(--store-accent)", "#f59e0b", "#10b981", "#ec4899", "#6366f1", "#f97316"];
     const items = Array.from({ length: 24 }, (_, i) => ({
       id: i,
       left: `${Math.random() * 100}%`,
@@ -193,7 +156,7 @@ function ConfettiEffect({ accent }: { accent: string }) {
       size: 6 + Math.random() * 6,
     }));
     setParticles(items);
-  }, [accent]);
+  }, []);
 
   return (
     <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
