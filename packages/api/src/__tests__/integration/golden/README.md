@@ -40,6 +40,7 @@ test itself.
 | `14-purchase-side-reversals` | Credit note / sales return raised from a purchase invoice (`type = purchase`) | pass |
 | `15-einvoice-supply-type` | IRP payload for domestic B2B sales: SupTyp `B2B` intra- and inter-state, place of supply, exports refused | pass |
 | `16-gst-return-periods` | GSTR-1 JSON, GSTR-9 and CMP-08 periods are April-March for businesses whose books start in April, January or July; only the trial balance follows the books year | pass |
+| `17-einvoice-hsn` | IRP payload HSN: missing HSN refused per line, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

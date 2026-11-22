@@ -333,6 +333,14 @@ The GST financial year is 1 April to 31 March for every taxpayer. A business's o
 
 Nothing in your data changes. If you use CMP-08 and a quarter you looked at before 0.10.1 was January-March, look at it again under the new numbering.
 
+### E-invoice lines need a real HSN code
+
+A line whose item had no HSN code was sent to the IRP as HSN `9999`, a code that does not exist. From 0.10.1 generating an e-invoice (from the E-Invoicing page, a retry, or the automatic submission after you create an invoice) is **refused before anything is sent to the IRP**, naming each offending line: `line 2 'Copper Wire' has no HSN code; add it on the item`. The invoice is left exactly as it was; add the HSN on the item (Items, edit) and generate again. After the automatic submission refuses an invoice, the invoice shows the e-invoice as failed with that message (no notification is sent for an automatic submission); fix the item and use Retry.
+
+The code must be 4 to 8 digits (spaces, dots and hyphens are ignored: `7306.90` is sent as `730690`), and the minimum follows the business's annual turnover: **4 digits up to and including ₹5,00,00,000, 6 digits above** (compared in exact paise: ₹50,000,000.00 is still the 4-digit band, ₹50,000,000.01 is not). The turnover is the business's `annual_turnover`, which the app has no field for yet (it is empty for almost every business), so until 0.11.0 captures it only the 4-digit minimum is enforced; a business above ₹5 Cr must keep 6-digit codes on its items itself. HSN is read from the live item, because invoice lines carry no HSN snapshot until 0.11.0: changing an item's HSN changes the code on every e-invoice generated afterwards, and a line without an item (typed in free) has no HSN and cannot be e-invoiced.
+
+No action is needed if every item you e-invoice already has an HSN. Nothing was ever sent to the IRP with a made-up code, since no e-invoice could be generated before 0.10.1 (see above).
+
 ### E-invoice cancellation now cancels the invoice
 
 Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.

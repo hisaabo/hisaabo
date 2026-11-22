@@ -653,6 +653,7 @@ export const invoiceRouter = router({
               pincode: biz.pincode,
               phone: biz.phone,
               email: biz.email,
+              annualTurnover: biz.annualTurnover,
             },
           );
 

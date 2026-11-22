@@ -197,6 +197,7 @@ async function generateIRNForInvoice(
       pincode: business.pincode,
       phone: business.phone,
       email: business.email,
+      annualTurnover: business.annualTurnover,
     },
   );
 

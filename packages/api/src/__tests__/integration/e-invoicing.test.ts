@@ -35,6 +35,7 @@ import {
   createInvoiceWithItems,
   type TestWorld,
   type TestParty,
+  type TestItem,
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import {
@@ -116,6 +117,7 @@ const testPublicKeyPem = generateKeyPairSync("rsa", { modulusLength: 2048 })
 let world: TestWorld;
 let b2bParty: TestParty;    // Customer with GSTIN (B2B)
 let b2cParty: TestParty;    // Customer without GSTIN (B2C)
+let hsnItem: TestItem;      // Catalogue item with a 6-digit HSN: e-invoice lines need a real HSN
 
 beforeAll(async () => {
   world = await createTestWorld();
@@ -130,6 +132,8 @@ beforeAll(async () => {
     stateCode: "29",
     openingBalance: "0.00",
   });
+
+  hsnItem = await createItem(db, world.business1.id, { name: "Steel Rods", hsn: "730890" });
 
   b2cParty = await createParty(db, world.business1.id, {
     name: "Walk-in Customer",
@@ -435,7 +439,7 @@ describe("mapInvoiceToIRP", () => {
           totalAmount: "1180.00",
           selectedUnit: null,
           itemType: null,
-          itemHsn: null,
+          itemHsn: "730890",
         },
       ],
       {
@@ -504,6 +508,7 @@ describe("eInvoice.generate", () => {
       b2bParty.id,
       [
         {
+          itemId: hsnItem.id,
           description: "Steel Rods",
           quantity: "10",
           unitPrice: "1000.00",
@@ -530,7 +535,7 @@ describe("eInvoice.generate", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Product", quantity: "1", unitPrice: "5000.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "1", unitPrice: "5000.00", taxPercent: "18" }],
     );
 
     await caller.eInvoice.generate({ invoiceId: invoice.id });
@@ -550,7 +555,7 @@ describe("eInvoice.generate", () => {
       db,
       world.business1.id,
       b2cParty.id, // No GSTIN
-      [{ description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
     );
 
     await expect(
@@ -578,7 +583,7 @@ describe("eInvoice.generate", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Product", quantity: "1", unitPrice: "1000.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "1", unitPrice: "1000.00", taxPercent: "18" }],
     );
 
     await expect(
@@ -606,7 +611,7 @@ describe("eInvoice.cancel", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Product", quantity: "5", unitPrice: "2000.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "5", unitPrice: "2000.00", taxPercent: "18" }],
     );
 
     // Generate first
@@ -632,7 +637,7 @@ describe("eInvoice.cancel", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Old Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Old Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
     );
 
     // Insert IRN directly with old ack date (>24h ago)
@@ -663,7 +668,7 @@ describe("eInvoice.cancel", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
     );
 
     await expect(
@@ -1106,7 +1111,7 @@ describe("eInvoice.cancel also cancels the invoice", () => {
       type: "sale",
       partyId: b2bParty.id,
       invoiceDate: SALE_DATE,
-      lineItems: [{ itemName: "Return", quantity: "1", unitPrice: "1000.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" }],
+      lineItems: [{ itemId: hsnItem.id, itemName: "Return", quantity: "1", unitPrice: "1000.00", taxPercent: "18", discountPercent: "0", conversionFactor: "1" }],
     });
     await caller.eInvoice.generate({ invoiceId: note.id });
 
@@ -1206,7 +1211,7 @@ describe("e-invoicing without a usable NIC public key", () => {
     await setupEInvoiceConfig();
     const { invoice } = await createInvoiceWithItems(
       getTenantTestDb(), world.business1.id, b2bParty.id,
-      [{ description: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18" }],
     );
     return invoice;
   }
@@ -1234,7 +1239,7 @@ describe("e-invoicing without a usable NIC public key", () => {
       callerForRamesh().invoice.create({
         partyId: b2bParty.id,
         type: "sale",
-        lineItems: [{ itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
+        lineItems: [{ itemId: hsnItem.id, itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
       });
 
     it("with no key it returns silently: the invoice is not pending, not failed, and no retry is counted", async () => {
@@ -1404,7 +1409,7 @@ describe("the auto-submit after invoice.create uses decrypted IRP credentials", 
     const created = await callerForRamesh().invoice.create({
       partyId: b2bParty.id,
       type: "sale",
-      lineItems: [{ itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
+      lineItems: [{ itemId: hsnItem.id, itemName: "Widget", quantity: "1", unitPrice: "1000.00", taxPercent: "18.00" }],
     });
     await vi.waitFor(async () => {
       const [r] = await getTenantTestDb().select().from(invoices).where(eq(invoices.id, created.id));
@@ -1462,7 +1467,7 @@ describe("eInvoice.getStatus", () => {
       db,
       world.business1.id,
       b2bParty.id,
-      [{ description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
+      [{ itemId: hsnItem.id, description: "Product", quantity: "1", unitPrice: "500.00", taxPercent: "18" }],
     );
 
     await caller.eInvoice.generate({ invoiceId: invoice.id });
