@@ -681,7 +681,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // ── Totals (right-aligned block) ─────────────────────────
   // We go back up to align totals with the right side of the table
-  const _totalsTop = y;
+  const totalsTop = y;
   // Re-position y for the bottom of totals after they are drawn
 
   const totalLabelX = margin + contentW * 0.6;
@@ -714,6 +714,55 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     13 * (1 + (hasDiscount ? 1 : 0) + taxRows + (hasRoundOff ? 1 : 0)) +
     5 + 16 +
     (hasPaid ? 13 : 0) + (hasBalanceDue ? 16 : 0);
+
+  // Closing block geometry (the bank block and the terms | signatory block are drawn further down).
+  const hasPaymentInfo = data.type === "sale" && (data.bankAccountNumber || data.upiId);
+  const payRows =
+    (data.bankAccountNumber
+      ? (data.bankName ? 1 : 0) + 1 + (data.bankIfsc ? 1 : 0) + (data.bankAccountName ? 1 : 0)
+      : 0) + (data.upiId ? 1 : 0);
+  // header 20, then the bank / UPI rows (11pt each) or the QR slot (68 + 8), whichever is taller,
+  // then 4pt and a rule + 1pt. Kept together on one page.
+  const payBlockH = hasPaymentInfo ? 20 + Math.max(payRows * 11, 68 + 8) + 4 + 1 : 0;
+  const bottomLeftW = contentW * 0.6;
+  const bottomRightW = contentW - contentW * 0.6 - 4;
+
+  // Signatory: "For", the business name, the signature rule and its label, 63pt in all.
+  const sigW = bottomRightW - 8;
+  const sigH = 63;
+  const drawSignatory = (x: number, top: number): number => {
+    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
+      .text("For", x, top, { width: sigW });
+    doc.fontSize(8.5).fillColor(cPrimary).font("NotoSans-Bold")
+      .text(data.businessName, x, top + 11, { width: sigW });
+
+    const lineY = top + 50;
+    hLine(doc, x, lineY, sigW - 4, cBorder);
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+      .text("Authorized Signatory", x, lineY + 3, { width: sigW });
+    return lineY;
+  };
+
+  // Where the signatory goes. With terms or notes it sits in the closing block next to them. With
+  // neither, that block is the signatory alone (88pt plus the footer), and on a lean invoice it
+  // can be the one thing that does not fit: it would then be drawn on a page of its own, with the
+  // footer. So when it does not fit below, it stands in the empty space to the left of the totals
+  // instead (its rule level with the last totals row) and the closing block is dropped. If it fits
+  // neither way, the totals move to a new page and take it with them. With a bank block the
+  // closing page already has something on it, so that case is left to the usual page breaks (the
+  // bank block and the signatory go to the next page together) unless only the signatory misses.
+  const sigAlone = !data.termsAndConditions && !data.notes;
+  let sigBeside = false;
+  if (sigAlone) {
+    const aboveClosing = totalsH + 12 + 19 + payBlockH; // totals + rule, amount in words, bank block
+    const stackedFits = y + aboveClosing + 88 + 1 + footerH <= bottomY;
+    const onlyClosingMisses = y + aboveClosing <= bottomY && !stackedFits;
+    if (hasPaymentInfo ? onlyClosingMisses : !stackedFits) {
+      if (y + Math.max(totalsH, sigH) + 12 + 19 + payBlockH + footerH <= bottomY) sigBeside = true;
+      else if (y > margin) ensureSpace(Number.POSITIVE_INFINITY);
+    }
+  }
+
   ensureSpace(totalsH);
 
   // Subtotal = taxable value
@@ -753,6 +802,11 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     if (hasBalanceDue) totalRow("Balance Due", balance.toFixed(2), true);
   }
 
+  if (sigBeside) {
+    drawSignatory(margin + 4, totalsTop + Math.max(0, totalsH - sigH));
+    y = Math.max(y, totalsTop + sigH);
+  }
+
   y += 4;
   hLine(doc, margin - 4, y, contentW + 8, cBorder);
   y += 8;
@@ -771,20 +825,12 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 1;
 
   // ── Payment Info & Bank Details ───────────────────────────
-  const hasPaymentInfo = data.type === "sale" && (data.bankAccountNumber || data.upiId);
-
   if (hasPaymentInfo) {
     const payLeft = margin;
     const _payRight = margin + contentW * 0.5 + 10;
     const payColW  = contentW * 0.5 - 10;
 
-    // header 20, then the bank / UPI rows (11pt each) or the QR slot (68 + 8), whichever is
-    // taller, then 4pt and a rule + 1pt. Kept together on one page.
-    const payRows =
-      (data.bankAccountNumber
-        ? (data.bankName ? 1 : 0) + 1 + (data.bankIfsc ? 1 : 0) + (data.bankAccountName ? 1 : 0)
-        : 0) + (data.upiId ? 1 : 0);
-    ensureSpace(20 + Math.max(payRows * 11, 68 + 8) + 4 + 1);
+    ensureSpace(payBlockH);
 
     filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
     doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
@@ -847,72 +893,64 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   }
 
   // ── Terms & Notes | Signatory (two-column bottom) ─────────
-  const bottomLeft  = margin;
-  const bottomRight = margin + contentW * 0.6 + 4;
-  const bottomLeftW = contentW * 0.6;
-  const bottomRightW = contentW - contentW * 0.6 - 4;
+  // (Dropped when the signatory already stands beside the totals: there are no terms or notes.)
+  if (!sigBeside) {
+    const bottomLeft  = margin;
+    const bottomRight = margin + contentW * 0.6 + 4;
 
-  // Block height: the header bar (14) plus the taller of the terms / notes column and the
-  // signatory (82, down to the "Authorized Signatory" label), then 6pt and a rule + 1pt. Kept
-  // together on one page, with the footer. The notes come last in the left column; their own text
-  // height is only part of the advance when they run past that (long notes), in which case the
-  // rule and the footer move below them. They used to be drawn over the rule and the footer.
-  // Notes that end above the rule leave the block exactly as it always was.
-  doc.fontSize(7).font("NotoSans");
-  const termsColH =
-    (data.termsAndConditions
-      ? 11 + doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8
-      : 0) +
-    (data.notes ? 11 : 0);
-  const notesTextH = data.notes ? doc.heightOfString(data.notes, { width: bottomLeftW }) : 0;
-  const ruleOffset = Math.max(14 + termsColH, 82) + 6;
-  const notesOverrun = !!data.notes && 14 + termsColH + notesTextH > ruleOffset;
-  const blockH = notesOverrun ? 14 + termsColH + notesTextH + 6 : ruleOffset;
-  ensureSpace(blockH + 1 + footerH);
-  const bottomStartY = y;
+    // Block height: the header bar (14) plus the taller of the terms / notes column and the
+    // signatory (82, down to the "Authorized Signatory" label), then 6pt and a rule + 1pt. Kept
+    // together on one page, with the footer. The notes come last in the left column; their own text
+    // height is only part of the advance when they run past that (long notes), in which case the
+    // rule and the footer move below them. They used to be drawn over the rule and the footer.
+    // Notes that end above the rule leave the block exactly as it always was.
+    doc.fontSize(7).font("NotoSans");
+    const termsColH =
+      (data.termsAndConditions
+        ? 11 + doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8
+        : 0) +
+      (data.notes ? 11 : 0);
+    const notesTextH = data.notes ? doc.heightOfString(data.notes, { width: bottomLeftW }) : 0;
+    const ruleOffset = Math.max(14 + termsColH, 82) + 6;
+    const notesOverrun = !!data.notes && 14 + termsColH + notesTextH > ruleOffset;
+    const blockH = notesOverrun ? 14 + termsColH + notesTextH + 6 : ruleOffset;
+    ensureSpace(blockH + 1 + footerH);
+    const bottomStartY = y;
 
-  filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
-  hLine(doc, bottomRight, y, bottomRightW + 4, cBorder);
-  doc.save();
-  doc.strokeColor(cBorder).lineWidth(0.5)
-    .moveTo(bottomRight, y).lineTo(bottomRight, y + (notesOverrun ? blockH - 8 : 80)).stroke();
-  doc.restore();
-  y += 14;
-  hLine(doc, margin - 4, bottomStartY + 14, contentW + 8, cBorder);
+    filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
+    hLine(doc, bottomRight, y, bottomRightW + 4, cBorder);
+    doc.save();
+    doc.strokeColor(cBorder).lineWidth(0.5)
+      .moveTo(bottomRight, y).lineTo(bottomRight, y + (notesOverrun ? blockH - 8 : 80)).stroke();
+    doc.restore();
+    y += 14;
+    hLine(doc, margin - 4, bottomStartY + 14, contentW + 8, cBorder);
 
-  let termsY = y;
-  if (data.termsAndConditions) {
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
-      .text("Terms & Conditions", bottomLeft, termsY, { width: bottomLeftW });
-    termsY += 11;
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text(data.termsAndConditions, bottomLeft, termsY, { width: bottomLeftW });
-    termsY += doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8;
+    let termsY = y;
+    if (data.termsAndConditions) {
+      doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+        .text("Terms & Conditions", bottomLeft, termsY, { width: bottomLeftW });
+      termsY += 11;
+      doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+        .text(data.termsAndConditions, bottomLeft, termsY, { width: bottomLeftW });
+      termsY += doc.heightOfString(data.termsAndConditions, { width: bottomLeftW }) + 8;
+    }
+
+    if (data.notes) {
+      doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+        .text("Notes", bottomLeft, termsY, { width: bottomLeftW });
+      termsY += 11;
+      doc.fontSize(7).fillColor(cSecondary).font("NotoSans")
+        .text(data.notes, bottomLeft, termsY, { width: bottomLeftW });
+    }
+
+    // Signatory (right)
+    const sigLineY = drawSignatory(bottomRight + 4, bottomStartY + 14 + 4);
+
+    y = notesOverrun ? termsY + notesTextH + 6 : Math.max(termsY, sigLineY + 14) + 6;
+    hLine(doc, margin - 4, y, contentW + 8, cBorder);
+    y += 1;
   }
-
-  if (data.notes) {
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
-      .text("Notes", bottomLeft, termsY, { width: bottomLeftW });
-    termsY += 11;
-    doc.fontSize(7).fillColor(cSecondary).font("NotoSans")
-      .text(data.notes, bottomLeft, termsY, { width: bottomLeftW });
-  }
-
-  // Signatory (right)
-  const sigY = bottomStartY + 14 + 4;
-  doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-    .text("For", bottomRight + 4, sigY, { width: bottomRightW - 8 });
-  doc.fontSize(8.5).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.businessName, bottomRight + 4, sigY + 11, { width: bottomRightW - 8 });
-
-  const sigLineY = sigY + 50;
-  hLine(doc, bottomRight + 4, sigLineY, bottomRightW - 12, cBorder);
-  doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-    .text("Authorized Signatory", bottomRight + 4, sigLineY + 3, { width: bottomRightW - 8 });
-
-  y = notesOverrun ? termsY + notesTextH + 6 : Math.max(termsY, sigLineY + 14) + 6;
-  hLine(doc, margin - 4, y, contentW + 8, cBorder);
-  y += 1;
 
   // ── Footer ────────────────────────────────────────────────
   const footerY = Math.min(y, pageH - margin);
@@ -1232,17 +1270,62 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     11 + (hasDiscount ? 11 : 0) + (hasTax ? 11 : 0) + // Subtotal, Discount, Tax
     4 + 13 +                                          // rule, TOTAL
     (hasPaid ? 11 : 0) + (hasBalanceDue ? 13 : 0);    // Amount Paid, Balance Due
+
+  // Column geometry shared by the totals, the amount in words and the signatory
+  const totLabelX = margin + contentW * 0.58;
+  const totValW   = 62;
+  const totValX   = margin + contentW - totValW;
+  const totLabelW = totValX - totLabelX - 8;
+  const wordsText = numberToWords(parseFloat(data.totalAmount));
+
+  const hasPaymentInfo = data.type === "sale" && (data.bankAccountNumber || data.upiId);
+  const hasNotesBlock = !!(data.notes || data.termsAndConditions);
+
+  // Signatory: "For", the name (two lines), the signature rule and its label, 50pt in all. It
+  // always occupies ~110pt: at the right of section 5 (under the totals), or, when it would not
+  // fit there, beside the totals (see below).
+  const sigColW = 110;
+  const sigH = 50;
+  const drawSignatory = (x: number, top: number): number => {
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+      .text("For", x, top, { width: sigColW });
+    doc.fontSize(8.5).fillColor(cPrimary).font("NotoSans-Bold")
+      .text(data.businessName, x, top + 10, { width: sigColW });
+
+    const lineY = top + 36;
+    hLine(doc, x, lineY, sigColW - 4, cBorder);
+    doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
+      .text("Authorized Signatory", x, lineY + 3, { width: sigColW });
+    return lineY;
+  };
+
+  // Where the signatory goes when section 5 holds nothing else. Under the totals needs another
+  // 54pt (and the footer), which a lean invoice often lacks by a few points, and the signatory
+  // would then sit on a page of its own with the footer. In that case it goes beside the totals
+  // instead: the amount in words narrows to make room, and the signatory stands between it and
+  // the totals, its rule level with the last totals row. If it fits neither way, the totals move
+  // to a new page and take the signatory with them.
+  const sigBesideX = totLabelX - 12 - sigColW;
+  const wordsBesideW = sigBesideX - 10 - margin;
+  let sigBeside = false;
+  if (!hasPaymentInfo) {
+    doc.fontSize(7.5).font("NotoSans");
+    const wordsBesideH = 10 + doc.heightOfString(wordsText, { width: wordsBesideW });
+    const fits = (h: number) =>
+      y + h + (hasNotesBlock ? 0 : footerH) <= (!hasNotesBlock && pageNo === 1 ? onePageBottomY : bottomY);
+    // totals + their rule and gap (14), then the signatory and 4pt
+    if (!fits(Math.max(totalsH, 30) + 14 + sigH + 4)) {
+      if (fits(Math.max(totalsH, sigH, wordsBesideH) + 4)) sigBeside = true;
+      else if (y > margin) ensureSpace(Number.POSITIVE_INFINITY);
+    }
+  }
+
   // The words column is a heading plus two lines (30). Only the text counts: the rule and gap
   // below the block (6 + 8) are not, so they may fall into the bottom margin.
   ensureSpace(Math.max(totalsH, 30));
   const totBlockStartY = y;
 
   // Right column: totals
-  const totLabelX = margin + contentW * 0.58;
-  const totValW   = 62;
-  const totValX   = margin + contentW - totValW;
-  const totLabelW = totValX - totLabelX - 8;
-
   let totY = totBlockStartY;
 
   function totRow(label: string, value: string, bold = false, accent = false) {
@@ -1272,30 +1355,37 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   }
 
   // Left column: amount in words — uses the same vertical band, never overlaps
-  const wordsColW = totLabelX - margin - 10;
+  const wordsColW = sigBeside ? wordsBesideW : totLabelX - margin - 10;
   let wordsY = totBlockStartY;
 
   doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
     .text("AMOUNT IN WORDS", margin, wordsY, { width: wordsColW });
   wordsY += 10;
   doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
-    .text(numberToWords(parseFloat(data.totalAmount)), margin, wordsY,
-      { width: wordsColW });
+    .text(wordsText, margin, wordsY, { width: wordsColW });
 
-  // Advance past the taller of the two columns
-  y = Math.max(totY, wordsY + 20) + 6;
-  hLine(doc, margin, y, contentW, cBorder);
-  y += 8;
+  if (sigBeside) {
+    // Beside the totals: no divider (the footer, or the notes block, draws its own rule below)
+    drawSignatory(sigBesideX, totBlockStartY + Math.max(0, totalsH - sigH));
+    y = Math.max(
+      totY,
+      totBlockStartY + sigH,
+      wordsY + doc.heightOfString(wordsText, { width: wordsColW }),
+    ) + 4;
+  } else {
+    // Advance past the taller of the two columns
+    y = Math.max(totY, wordsY + 20) + 6;
+    hLine(doc, margin, y, contentW, cBorder);
+    y += 8;
+  }
 
   // ── SECTION 5: Payment details + Signatory ───────────────
-  const hasPaymentInfo = data.type === "sale" && (data.bankAccountNumber || data.upiId);
 
   // Three sub-columns: payment text | QR code | signatory
   const hasQr  = hasPaymentInfo && !!data.upiQrDataUrl;
   const qrSize = 54;
 
-  // Signatory always occupies the rightmost ~110pt
-  const sigColW  = 110;
+  // Signatory at the rightmost ~110pt
   const sigColX  = margin + contentW - sigColW;
 
   // QR (if present) sits just left of signatory
@@ -1310,8 +1400,8 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       (data.bankAccountNumber ? (data.bankName ? 1 : 0) + 1 + (data.bankIfsc ? 1 : 0) : 0)
     : 0;
   const payColH = hasPaymentInfo ? Math.max(10 + payRows * 11, hasQr ? qrSize + 10 : 0) + 2 : 0;
-  const hasNotesBlock = !!(data.notes || data.termsAndConditions);
-  ensureSpace(Math.max(payColH, 50) + 4, !hasNotesBlock);
+  // (Skipped when the signatory already stands beside the totals: there is nothing else here.)
+  if (!sigBeside) ensureSpace(Math.max(payColH, 50) + 4, !hasNotesBlock);
 
   // Capture y at the start of section 5 so the signatory can anchor here
   const sec5StartY = y;
@@ -1378,19 +1468,11 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     y = Math.max(payY, hasQr ? sec5StartY + qrSize + 10 : sec5StartY) + 2;
   }
 
-  // Signatory block — anchored at the start of section 5
-  const sigTopY = sec5StartY;
-  doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-    .text("For", sigColX, sigTopY, { width: sigColW });
-  doc.fontSize(8.5).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.businessName, sigColX, sigTopY + 10, { width: sigColW });
-
-  const sigLineY = sigTopY + 36;
-  hLine(doc, sigColX, sigLineY, sigColW - 4, cBorder);
-  doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
-    .text("Authorized Signatory", sigColX, sigLineY + 3, { width: sigColW });
-
-  y = Math.max(y, sigLineY + 14) + 4;
+  // Signatory block — anchored at the start of section 5 (unless it stands beside the totals)
+  if (!sigBeside) {
+    const sigLineY = drawSignatory(sigColX, sec5StartY);
+    y = Math.max(y, sigLineY + 14) + 4;
+  }
 
   // ── SECTION 6: Notes / Terms ─────────────────────────────
   if (hasNotesBlock) {

@@ -252,6 +252,75 @@ describe("thermal receipt: the page is as tall as the receipt", () => {
   });
 });
 
+describe("closing block: the signatory beside the totals", () => {
+  // Lean invoices (no notes, terms or bank block) that miss the stacked closing block (totals,
+  // then the signatory below them, then the footer) by a few points put the signatory beside the
+  // totals instead of on a page of its own. A5: between the amount in words and the totals. A4:
+  // left of the totals.
+  const lean = async (lines: number, format: "a4" | "a5", patch: (d: Awaited<ReturnType<typeof buildNormalInvoice>>) => void = () => {}) => {
+    const data = await buildNormalInvoice(lines, LEAN);
+    if (format === "a5") data.businessLegalName = undefined;
+    patch(data);
+    return traceInvoiceLayout(data, format);
+  };
+
+  it.each([
+    ["a5", 3, "tidy 3 lines"],
+    ["a5", 6, "the most that fits beside the totals"],
+    ["a4", 12, "12 lines"],
+    ["a4", 15, "the most that fits beside the totals"],
+  ] as const)("%s, %i lines (%s): one clean page, signatory level with the totals", async (format, lines, _label) => {
+    const trace = await lean(lines, format);
+    expect(trace.pageCount).toBe(1);
+    expect(problems(trace)).toEqual([]);
+
+    const total = boxOf(trace, (b) => b.text === "TOTAL");
+    const sign = boxOf(trace, (b) => b.text === "Authorized Signatory");
+    const balance = boxOf(trace, (b) => b.text === "Balance Due");
+    // to the left of the totals column, its last line level with the last totals row
+    expect(sign.x1).toBeLessThanOrEqual(total.x0);
+    expect(sign.y1).toBeGreaterThan(balance.y0);
+    expect(sign.y1).toBeLessThanOrEqual(balance.y1 + 8);
+  });
+
+  it.each(["a4", "a5"] as const)("%s: a short totals block (nothing paid, no tax) still leaves room for the signatory", async (format) => {
+    const trace = await lean(format === "a5" ? 6 : 15, format, (d) => {
+      d.amountPaid = "0.00";
+      d.gstRegistrationType = "unregistered";
+      d.taxAmount = "0.00";
+      d.lineItemHsn = [];
+    });
+    expect(trace.pageCount).toBe(1);
+    expect(problems(trace)).toEqual([]);
+  });
+
+  it("A5: an amount in words of several lines wraps in its narrower column without touching the signatory", async () => {
+    const trace = await lean(5, "a5", (d) => {
+      d.subtotal = d.totalAmount = "9876543.21";
+      d.taxAmount = "0.00";
+      d.amountPaid = "1.00";
+    });
+    expect(trace.pageCount).toBe(1);
+    expect(problems(trace)).toEqual([]);
+    const words = boxOf(trace, (b) => b.text.endsWith("Paise Only"));
+    expect(words.y1 - words.y0).toBeGreaterThan(25); // wraps onto three or more lines
+  });
+
+  it("stays below the signatory-only page: totals, signatory and footer share the last page", async () => {
+    for (const [format, lines] of [["a5", 7], ["a4", 16]] as const) {
+      const trace = await lean(lines, format);
+      expect(trace.pageCount).toBe(2);
+      expect(problems(trace)).toEqual([]);
+      const pages = new Set(
+        ["TOTAL", "Authorized Signatory", "This is a computer-generated invoice"].map(
+          (t) => boxOf(trace, (b) => b.text.startsWith(t)).page,
+        ),
+      );
+      expect(pages.size).toBe(1);
+    }
+  });
+});
+
 describe("tidy invoices keep a clean layout", () => {
   it.each(["a4", "a5", "thermal"] as const)("%s: one-line names, notes and legal name", async (format) => {
     for (const lines of [1, 5, 12, 40]) {

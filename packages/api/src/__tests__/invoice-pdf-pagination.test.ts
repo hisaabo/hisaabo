@@ -11,9 +11,16 @@
  * Item rows used to be a fixed height, so a wrapped item name or row note was drawn over the row
  * below instead of taking room (see invoice-pdf-layout.test.ts), and the A5 legal name shared a
  * line with the address. Rows now take the height of their wrapped text and the legal name has
- * its own line. The fixtures' long item names and two-line row notes are what push eight of the
+ * its own line. The fixtures' long item names and two-line row notes are what push some of the
  * counts below up by one page (each is marked with its old count): the same invoices, now with
  * nothing drawn on top of anything else.
+ *
+ * The closing block (totals, amount in words, signatory, footer) used to need the signatory under
+ * the totals, so a lean invoice that missed that by a few points put the totals on one page and the
+ * signatory and footer alone on the next. The signatory now stands beside the totals when that is
+ * all that keeps it off the page (A5: between the amount in words and the totals; A4: left of the
+ * totals), and when it fits neither way the totals move to the next page with it. That brought
+ * lean A5 invoices of up to 6 short lines and lean A4 invoices of up to 15 back to one page.
  *
  * These tests render synthetic invoices (see helpers/pdf-fixtures.ts) and pin the page counts. The
  * bounds are the layout's actual counts, not generous ceilings: a template change that adds a page
@@ -24,7 +31,15 @@
 import { describe, it, expect } from "vitest";
 import QRCode from "qrcode";
 import { generateLedgerPDF, type LedgerPDFData } from "../lib/ledger-pdf.js";
-import { buildFullInvoice, countPdfPages, renderInvoicePdf } from "./helpers/pdf-fixtures.js";
+import { buildFullInvoice, buildNormalInvoice, countPdfPages, renderInvoicePdf } from "./helpers/pdf-fixtures.js";
+import { traceInvoiceLayout, type LayoutTrace } from "./helpers/pdf-layout-trace.js";
+
+/** The (0-based) page a piece of text was drawn on. */
+const pageOf = (trace: LayoutTrace, text: string): number => {
+  const box = trace.boxes.find((b) => b.text === text);
+  if (!box) throw new Error(`"${text}" was not drawn`);
+  return box.page;
+};
 
 /** A "lean" invoice: no per-line notes, no notes/terms, no bank / UPI / QR block. */
 const LEAN = { lineNotes: false, notesAndTerms: false, payment: false } as const;
@@ -47,11 +62,11 @@ describe("A5 invoice pagination", () => {
 
   it.each([
     [1, 1],
-    [2, 2], // 1 before: the wrapped name and the legal name now take their room; the signatory moves over
-    [3, 2],
+    [2, 1],
+    [3, 1], // 2 before: the signatory and footer were alone on page 2
     [10, 2],
-    [20, 3], // 2 before
-    [40, 4], // 3 before
+    [20, 2],
+    [40, 4], // 3 before: rows take the height of their wrapped names
   ])("a lean %i-line invoice takes %i pages", async (lines, pages) => {
     const pdf = await renderInvoicePdf(await buildFullInvoice(lines, LEAN), "a5");
     expect(countPdfPages(pdf)).toBe(pages);
@@ -84,13 +99,73 @@ describe("A4 invoice pagination", () => {
 
   it.each([
     [1, 1],
-    [10, 2], // 1 before: three of the ten names wrap and now take their room
-    [12, 2],
+    [10, 1],
+    [12, 1], // 2 before: the signatory and footer were alone on page 2
     [20, 2],
     [40, 2],
   ])("a lean %i-line invoice takes %i pages", async (lines, pages) => {
     const pdf = await renderInvoicePdf(await buildFullInvoice(lines, LEAN), "a4");
     expect(countPdfPages(pdf)).toBe(pages);
+  });
+});
+
+describe("lean invoices: the closing block never leaves a page of its own", () => {
+  // Short item names (one line each), no notes, terms or bank block; the totals carry a paid and a
+  // balance-due row and the footer is the free-plan one, so this is the tightest closing block.
+  const lean = async (lines: number, format: "a4" | "a5") => {
+    const data = await buildNormalInvoice(lines, LEAN);
+    if (format === "a5") data.businessLegalName = undefined;
+    return data;
+  };
+
+  it.each([1, 3, 5, 6])("A5: %i lines fit on one page", async (lines) => {
+    expect(countPdfPages(await renderInvoicePdf(await lean(lines, "a5"), "a5"))).toBe(1);
+  });
+
+  it.each([1, 5, 10, 14, 15])("A4: %i lines fit on one page", async (lines) => {
+    expect(countPdfPages(await renderInvoicePdf(await lean(lines, "a4"), "a4"))).toBe(1);
+  });
+
+  it("A5: the first line count that does not fit moves the totals and the signatory together", async () => {
+    const data = await lean(7, "a5");
+    const trace = traceInvoiceLayout(data, "a5");
+    expect(trace.pageCount).toBe(2);
+    expect(pageOf(trace, "TOTAL")).toBe(1);
+    expect(pageOf(trace, "Authorized Signatory")).toBe(1);
+  });
+
+  it("A4: the first line count that does not fit moves the totals and the signatory together", async () => {
+    const trace = traceInvoiceLayout(await lean(16, "a4"), "a4");
+    expect(trace.pageCount).toBe(2);
+    expect(pageOf(trace, "TOTAL")).toBe(1);
+    expect(pageOf(trace, "Authorized Signatory")).toBe(1);
+  });
+
+  // No page may hold only the signatory and the footer, for any line count, with or without
+  // per-line notes, a paid plan, or an unpaid invoice (a shorter totals block).
+  it.each([
+    ["a5", {}],
+    ["a5", { unpaid: true }],
+    ["a5", { paidPlan: true }],
+    ["a4", {}],
+    ["a4", { unpaid: true }],
+    ["a4", { paidPlan: true }],
+  ] as const)("%s %j: no page holds only the signatory and the footer", async (format, variant) => {
+    for (let lines = 1; lines <= 24; lines++) {
+      const data = await lean(lines, format);
+      if ("unpaid" in variant) data.amountPaid = "0.00";
+      if ("paidPlan" in variant) data.isPaidPlan = true;
+      const trace = traceInvoiceLayout(data, format);
+      const closing = new Set([data.businessName, "For", "Authorized Signatory"]);
+      const footer = (t: string) => /^(This is a computer-generated invoice|Powered by)/.test(t);
+      for (let page = 0; page < trace.pageCount; page++) {
+        const texts = trace.boxes.filter((b) => b.page === page).map((b) => b.text);
+        const other = texts.filter((t) => !closing.has(t) && !footer(t));
+        expect(other.length, `${format} ${lines} lines: page ${page + 1} has only the signatory / footer`).toBeGreaterThan(0);
+      }
+      // ... and the totals are on the signatory's page
+      expect(pageOf(trace, "TOTAL"), `${format} ${lines} lines`).toBe(pageOf(trace, "Authorized Signatory"));
+    }
   });
 });
 
