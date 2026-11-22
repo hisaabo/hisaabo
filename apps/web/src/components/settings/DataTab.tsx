@@ -103,7 +103,7 @@ function ImportSection({ onOpen, canImport }: { onOpen: () => void; canImport: b
     <SectionCard
       icon={<UploadIcon />}
       title="Import data"
-      description="Migrate from myBillBook, Tally, or upload CSV files into the current business."
+      description="Migrate your parties, items and invoices from myBillBook into the current business."
     >
       {canImport && (
         <button className="btn-secondary" onClick={onOpen}>

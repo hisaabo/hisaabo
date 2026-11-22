@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Combobox } from "@/components/ui/Combobox";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { LinkButton } from "@/components/ui/LinkButton";
+import { TallyExportPanel } from "@/components/reports/TallyExportPanel";
 import { MonthPeriodBar } from "@/components/ui/MonthPeriodBar";
 import { getCurrentFYBounds, getPreviousFYBounds, fyLabel } from "@/lib/fy-bounds";
 import { documentRouteFor } from "@/lib/document-routes";
@@ -127,7 +128,7 @@ function GSTReportsPage() {
       {activeTab === "balance-sheet" && <BalanceSheetView />}
       {activeTab === "aging" && <AgingReportView />}
       {activeTab === "ledger" && <PartyLedgerView partyId={partyIdFromSearch ?? ""} />}
-      {activeTab === "tally" && <TallyExportView />}
+      {activeTab === "tally" && <TallyExportPanel />}
     </div>
   );
 }
@@ -1449,148 +1450,6 @@ function PartyLedgerView({ partyId }: { partyId: string }) {
             </div>
           )}
         </>
-      )}
-    </div>
-  );
-}
-
-// ── Tally Export View ──────────────────────────────────────────
-
-function TallyExportView() {
-  const [downloading, setDownloading] = useState(false);
-
-  const { preset, setPreset, fromDate, toDate, customFrom, customTo, setCustomRange } =
-    useDateRange("tally-export", "this-fy");
-
-  const { data, isLoading } = trpc.party.tallyExport.useQuery({
-    fromDate: fromDate || undefined,
-    toDate: toDate || undefined,
-  });
-
-  const utils = trpc.useUtils();
-
-  async function handleDownload() {
-    setDownloading(true);
-    try {
-      const result = await utils.party.tallyExport.fetch({
-        fromDate: fromDate || undefined,
-        toDate: toDate || undefined,
-      });
-      if (!result) return;
-      const blob = new Blob(["\ufeff" + result.csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = result.filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Tally export downloaded — ${result.rowCount} vouchers`);
-    } catch {
-      toast.error("Export failed");
-    } finally {
-      setDownloading(false);
-    }
-  }
-
-  return (
-    <div className="space-y-5">
-      {/* Period selector */}
-      <div className="card px-4 py-4">
-        <p className="text-xs text-text-tertiary mb-3 font-medium uppercase tracking-wide">Period</p>
-        <DateRangeBar
-          preset={preset}
-          onPresetChange={setPreset}
-          customFrom={customFrom}
-          customTo={customTo}
-          onCustomChange={setCustomRange}
-        />
-      </div>
-
-      {/* Summary + download */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Total Vouchers</p>
-          <p className="text-lg font-bold tabular-nums text-text-primary">
-            {isLoading ? "—" : (data?.rowCount ?? 0)}
-          </p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Format</p>
-          <p className="text-base font-semibold text-text-primary">Tally CSV</p>
-          <p className="text-xs text-text-tertiary">Compatible with Tally ERP 9 / Prime</p>
-        </div>
-        <div className="card px-4 py-3 flex items-center">
-          <button
-            onClick={handleDownload}
-            disabled={downloading || isLoading}
-            className="btn-primary w-full inline-flex items-center justify-center gap-2"
-          >
-            {downloading ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Preparing...
-              </>
-            ) : (
-              <>
-                <DownloadIcon className="w-4 h-4" />
-                Download Tally Export
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Preview table */}
-      {isLoading && <ReportSkeleton />}
-
-      {data && data.preview.length > 0 && (
-        <div className="card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border-light">
-            <h3 className="text-sm font-semibold text-text-primary">
-              Preview — first {data.preview.length} of {data.rowCount} vouchers
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Vch Type</th>
-                  <th>Vch No.</th>
-                  <th>Debit Ledger</th>
-                  <th>Credit Ledger</th>
-                  <th className="text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.preview.map((row, i) => (
-                  <tr key={i}>
-                    <td className="text-text-secondary text-[13px] tabular-nums">{row.date}</td>
-                    <td className="text-text-secondary text-[13px]">{row.vchType}</td>
-                    <td className="font-mono text-[13px] text-text-secondary">{row.vchNo || "—"}</td>
-                    <td className="text-text-primary">{row.debitLedger}</td>
-                    <td className="text-text-primary">{row.creditLedger}</td>
-                    <td className="text-right tabular-nums font-medium">{fmtStr(row.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {data.rowCount > 10 && (
-            <div className="px-4 py-3 border-t border-border-light">
-              <p className="text-xs text-text-tertiary">
-                Showing 10 of {data.rowCount} vouchers. Download the full export to see all entries.
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {data && data.rowCount === 0 && (
-        <EmptyState
-          title="No vouchers found"
-          description="No invoices, payments or expenses found for the selected period."
-        />
       )}
     </div>
   );

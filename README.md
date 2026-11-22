@@ -238,7 +238,7 @@ GSTR-1/3B/9 generation, GSTR-2B reconciliation, e-invoicing (NIC IRP with IRN an
 
 ### Bank Reconciliation
 
-CSV import with pre-built templates for SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB, Union, IDBI, and IndusInd. Auto-detection of bank format from headers. 4-tier matching: exact (amount + date + reference), strong (amount + 2-day window), narration parsing (UPI ID, cheque number), partial (amount only, 7-day window). Auto-categorization rules. Template versioning for format changes. BRS with matched, unmatched, and timing difference totals.
+CSV import with pre-built templates for SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB, Union, IDBI, and IndusInd. Auto-detection of bank format from headers. 4-tier matching: exact (amount + date + reference), strong (amount + 2-day window), narration parsing (UPI ID, cheque number), partial (amount only, 7-day window). Auto-categorization rules. Lines already imported from an overlapping statement of the same account are skipped. Template versioning for format changes. BRS with matched, unmatched, and timing difference totals.
 
 ### Parties, Items, and Payments
 

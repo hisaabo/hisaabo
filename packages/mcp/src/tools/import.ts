@@ -19,6 +19,20 @@ import { wrapTool } from "../lib/errors.js";
 /** Inline records per call; larger imports belong in the CLI/UI where the user can review them. */
 const MAX_IMPORT_RECORDS = 500;
 
+/**
+ * The server resolves `source` through its import adapter registry
+ * (packages/api/src/routers/import/adapters/registry.ts); only "hisaabo" and
+ * "mybillbook" are registered, and anything else is rejected as an unknown
+ * import source. These tools send canonical Hisaabo fields, which is exactly
+ * what the "hisaabo" adapter takes, so it is the default. ("mybillbook" expects
+ * raw myBillBook export columns and is for the web import wizard.)
+ */
+const importSource = z.string().default("hisaabo")
+  .describe("Server import adapter. Leave as 'hisaabo' (the canonical fields these tools send); it is also stored on each created record as its origin.");
+
+const IMPORT_SOURCE_NOTE =
+  "source selects the server import adapter; leave it as 'hisaabo' (data from Tally, Busy or Excel must be mapped to these fields first).";
+
 export function registerImportTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
@@ -27,11 +41,10 @@ export function registerImportTools(server: ToolServer, client: HisaaboClient) {
       "Batch import customers and/or suppliers. Requires admin role.",
       "Duplicates (same name, case-insensitive) are automatically skipped — never overwritten.",
       "Returns a summary: created (new records), skipped (duplicates), total (input count).",
-      "Use source to tag where the data came from, e.g. 'mybillbook', 'tally', 'excel'.",
+      IMPORT_SOURCE_NOTE,
     ].join(" "),
     {
-      source: z.string().default("excel")
-        .describe("Source system name, e.g. 'mybillbook', 'tally', 'excel'. Used for audit trail."),
+      source: importSource,
       parties: z.array(z.object({
         name: z.string().min(1).max(200)
           .describe("Party name. Duplicate names (case-insensitive) are skipped."),
@@ -97,8 +110,7 @@ export function registerImportTools(server: ToolServer, client: HisaaboClient) {
       "Stock quantity is always set to 0 on import — use import_invoices or item_adjust_stock to build stock from history.",
     ].join(" "),
     {
-      source: z.string().default("excel")
-        .describe("Source system name for audit trail."),
+      source: importSource,
       items: z.array(z.object({
         name: z.string().min(1).max(200)
           .describe("Item name. Duplicates (case-insensitive) are skipped."),
@@ -155,8 +167,7 @@ export function registerImportTools(server: ToolServer, client: HisaaboClient) {
       "Use this for migrating historical data from MyBillBook, Tally, Busy, or Excel.",
     ].join(" "),
     {
-      source: z.string().default("excel")
-        .describe("Source system name for audit trail."),
+      source: importSource,
       auto_create_payments: z.boolean().default(false)
         .describe("If true, automatically create payment records for invoices with amountPaid > 0."),
       default_payment_mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).default("cash")
@@ -251,8 +262,7 @@ export function registerImportTools(server: ToolServer, client: HisaaboClient) {
       "Returns: created, skipped, total, and any errors encountered.",
     ].join(" "),
     {
-      source: z.string().default("excel")
-        .describe("Source system name for audit trail."),
+      source: importSource,
       paid_invoice_numbers: z.array(z.string()).default([])
         .describe("List of invoice numbers that were fully paid in the source system. Used for auto-allocation fallback."),
       payments: z.array(z.object({

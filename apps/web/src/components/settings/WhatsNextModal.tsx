@@ -44,7 +44,7 @@ export function WhatsNextModal({ open, businessName, onImport }: WhatsNextModalP
     {
       icon: <UploadIcon />,
       title: "Import from another app",
-      description: "Migrate parties, items, and invoices from myBillBook, Tally, or CSV files",
+      description: "Migrate parties, items, and invoices from your myBillBook export",
       onClick: onImport,
     },
     {
