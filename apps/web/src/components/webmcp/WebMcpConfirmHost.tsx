@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Modal } from "@/components/ui/Modal";
 import { registerConfirmHost, type ConfirmRequest } from "@/lib/webmcp/confirm";
 
 interface Pending {
@@ -87,14 +87,44 @@ export function WebMcpConfirmHost({ scopeKey = null }: WebMcpConfirmHostProps) {
   // A change of user, tenant or business denies every prompt raised before it.
   useEffect(() => denyAll, [scopeKey, denyAll]);
 
+  const request = current?.request;
+
   return (
-    <ConfirmDialog
-      open={current !== null}
-      title={current?.request.title ?? ""}
-      description={current?.request.description}
-      confirmLabel="Allow"
-      onConfirm={() => current && settle(current, true)}
-      onCancel={() => current && settle(current, false)}
-    />
+    <Modal open={current !== null} onClose={() => current && settle(current, false)} className="max-w-md">
+      <div className="pb-2" data-testid="webmcp-confirm">
+        <p className="text-sm font-semibold text-text-primary">{request?.title}</p>
+        <p className="text-sm mt-2 text-text-secondary">{request?.description}</p>
+        {request?.lines && request.lines.length > 0 && (
+          <ul className="mt-3 space-y-1 text-sm text-text-primary list-disc pl-5">
+            {request.lines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        )}
+        {request?.changes && request.changes.length > 0 && (
+          <dl className="mt-3 space-y-1 text-sm">
+            {request.changes.map((change, i) => (
+              <div key={i} className="flex flex-wrap gap-x-2">
+                <dt className="font-medium text-text-primary">{change.field}:</dt>
+                <dd className="text-text-secondary">
+                  <span className="line-through">{change.before}</span>
+                  <span aria-hidden="true"> → </span>
+                  <span className="sr-only"> changes to </span>
+                  <span className="font-medium text-text-primary">{change.after}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-2 pt-4 border-t border-border-light">
+        <button type="button" className="btn-ghost" onClick={() => current && settle(current, false)}>
+          Cancel
+        </button>
+        <button type="button" className="btn-primary" onClick={() => current && settle(current, true)}>
+          Allow
+        </button>
+      </div>
+    </Modal>
   );
 }

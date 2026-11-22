@@ -85,6 +85,27 @@ export interface WebMcpToolContext {
   invalidate: () => Promise<void> | void;
 }
 
+/** One field of an update, as the person reads it: "Status: draft → sent". */
+export interface WebMcpConfirmChange {
+  field: string;
+  before: string;
+  after: string;
+}
+
+/**
+ * What the confirmation dialog says about a write, in the person's terms: the
+ * party's name instead of its UUID, the invoice total, the fields an update
+ * changes. Built by a tool's optional `summarize`.
+ */
+export interface WebMcpConfirmSummary {
+  /** One sentence: "Create a sale invoice for Acme Traders". */
+  headline: string;
+  /** Supporting facts, one per line: "Total: ₹17,700.00 (2 lines)". */
+  details?: string[];
+  /** Field-level before → after, for updates. */
+  changes?: WebMcpConfirmChange[];
+}
+
 /**
  * A Hisaabo tool definition. `execute` returns plain JSON-serialisable data
  * (or a string); the runtime wraps it in the WebMCP `{ content: [{ type: "text", text }] }`
@@ -101,6 +122,12 @@ export interface WebMcpToolDefinition {
   annotations: WebMcpAnnotations;
   /** Omit to allow every signed-in member. */
   requires?: WebMcpPermission;
+  /**
+   * Write tools only. Resolve the input into what a person needs to approve it
+   * (names, totals, before → after). Return null to fall back to the plain input
+   * summary. It may read (that is how names are resolved) but must never write.
+   */
+  summarize?: (input: Record<string, unknown>, ctx: WebMcpToolContext) => Promise<WebMcpConfirmSummary | null>;
   execute: (input: Record<string, unknown>, ctx: WebMcpToolContext) => Promise<unknown>;
 }
 

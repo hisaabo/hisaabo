@@ -22,6 +22,7 @@ import {
   uuid,
   withPaginationMeta,
 } from "./shared";
+import { rupees } from "./summary";
 
 const PARTY_TYPES = ["customer", "supplier"] as const;
 const PARTY_FILTERS = ["all", "customer", "supplier", "outstanding", "overdue"] as const;
@@ -128,6 +129,26 @@ const partyCreate: WebMcpToolDefinition = {
   ),
   annotations: { consequentialHint: true },
   requires: { resource: "Party", action: "create" },
+  summarize: async (input) => {
+    const type = enumOf(input.type, PARTY_TYPES);
+    const name = str(input.name);
+    if (!type || !name) return null;
+    const details: string[] = [];
+    const contact = [str(input.phone), str(input.email)].filter(Boolean).join(" · ");
+    if (contact) details.push(`Contact: ${contact}`);
+    if (str(input.gstin)) details.push(`GSTIN: ${str(input.gstin)}`);
+    const place = [str(input.city), str(input.state)].filter(Boolean).join(", ");
+    if (place) details.push(`Location: ${place}`);
+    const opening = str(input.openingBalance);
+    if (opening && Number(opening) !== 0) {
+      details.push(
+        `Opening balance: ${rupees(opening)} (${Number(opening) > 0 ? "they already owe you" : "you already owe them"})`,
+      );
+    }
+    if (str(input.creditLimit)) details.push(`Credit limit: ${rupees(str(input.creditLimit))}`);
+    if (int(input.creditPeriodDays) !== undefined) details.push(`Credit period: ${int(input.creditPeriodDays)} days`);
+    return { headline: `Create ${type} “${name}”`, details };
+  },
   execute: async (input, ctx) => {
     const type = enumOf(input.type, PARTY_TYPES);
     const name = str(input.name);

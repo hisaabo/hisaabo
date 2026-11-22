@@ -6,6 +6,7 @@
  * invoice before deciding how to split a payment.
  */
 
+import { money as decimal } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
@@ -24,6 +25,7 @@ import {
   uuid,
   withPaginationMeta,
 } from "./shared";
+import { day, lookupInvoice, lookupParty, rupees, shortId } from "./summary";
 
 const PAYMENT_MODES = [
   "cash",
@@ -161,6 +163,67 @@ const paymentCreate: WebMcpToolDefinition = {
   ),
   annotations: { consequentialHint: true },
   requires: { resource: "Payment", action: "create" },
+  summarize: async (input, ctx) => {
+    const amount = str(input.amount);
+    const partyId = str(input.partyId);
+    if (!amount || !partyId) return null;
+    const party = await lookupParty(ctx, partyId);
+    const who = party?.name ?? `party ${shortId(partyId)}`;
+    const headline =
+      party?.type === "supplier"
+        ? `Record ${rupees(amount)} paid to ${who}`
+        : party?.type === "customer"
+          ? `Record ${rupees(amount)} received from ${who}`
+          : `Record a payment of ${rupees(amount)} with ${who}`;
+
+    const details: string[] = [];
+    const mode = enumOf(input.mode, PAYMENT_MODES);
+    if (mode) details.push(`Mode: ${mode.replace(/_/g, " ")}`);
+    if (str(input.referenceNumber)) details.push(`Reference: ${str(input.referenceNumber)}`);
+    const paidOn = day(input.paymentDate);
+    if (paidOn) details.push(`Date: ${paidOn}`);
+
+    const invoiceId = str(input.invoiceId);
+    const allocations = objectArray(input.allocations) ?? [];
+    if (invoiceId) {
+      const invoice = await lookupInvoice(ctx, invoiceId);
+      if (invoice?.total && invoice.paid) {
+        let line = `Applied to ${invoice.number} (balance ${rupees(decimal.sub(invoice.total, invoice.paid))}`;
+        try {
+          line += ` → ${rupees(decimal.sub(decimal.sub(invoice.total, invoice.paid), amount))}`;
+        } catch {
+          // an unparseable amount: leave the "after" out rather than guess
+        }
+        details.push(`${line})`);
+      } else {
+        details.push(`Applied to ${invoice?.number ?? `invoice ${shortId(invoiceId)}`}`);
+      }
+    } else if (allocations.length > 0) {
+      const shown = await Promise.all(
+        allocations.slice(0, 3).map(async (a) => {
+          const invoice = await lookupInvoice(ctx, str(a.invoiceId));
+          return `${invoice?.number ?? `invoice ${shortId(str(a.invoiceId))}`} ${rupees(a.amount)}`;
+        }),
+      );
+      const more = allocations.length - shown.length;
+      details.push(`Split across ${allocations.length} invoice${allocations.length === 1 ? "" : "s"}: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}`);
+    } else {
+      details.push("Not applied to an invoice: recorded as an advance on the party's account");
+    }
+
+    const tds = allocations.map((a) => str(a.tdsAmount)).filter((v): v is string => !!v);
+    if (tds.length > 0) {
+      try {
+        details.push(`TDS withheld: ${rupees(decimal.sum(tds))}`);
+      } catch {
+        // malformed TDS amount: the server will reject it
+      }
+    }
+    if (str(input.discount) && Number(str(input.discount)) !== 0) {
+      details.push(`Discount settled: ${rupees(str(input.discount))}`);
+    }
+    return { headline, details };
+  },
   execute: async (input, ctx) => {
     const partyId = str(input.partyId);
     const amount = str(input.amount);

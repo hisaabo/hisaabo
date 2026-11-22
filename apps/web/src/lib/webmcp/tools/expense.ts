@@ -21,6 +21,7 @@ import {
   str,
   withPaginationMeta,
 } from "./shared";
+import { day, rupees } from "./summary";
 
 const PAYMENT_MODES = [
   "cash",
@@ -114,6 +115,19 @@ const expenseCreate: WebMcpToolDefinition = {
   ),
   annotations: { consequentialHint: true },
   requires: { resource: "Expense", action: "create" },
+  summarize: async (input) => {
+    const category = str(input.category);
+    const amount = str(input.amount);
+    if (!category || !amount) return null;
+    const details: string[] = [];
+    const mode = enumOf(input.mode, PAYMENT_MODES);
+    if (mode) details.push(`Paid by: ${mode.replace(/_/g, " ")}`);
+    if (str(input.description)) details.push(`For: ${str(input.description)}`);
+    const incurred = day(input.expenseDate);
+    if (incurred) details.push(`Date: ${incurred}`);
+    if (str(input.referenceNumber)) details.push(`Reference: ${str(input.referenceNumber)}`);
+    return { headline: `Record an expense of ${rupees(amount)} under “${category}”`, details };
+  },
   execute: async (input, ctx) => {
     const category = str(input.category);
     const amount = str(input.amount);

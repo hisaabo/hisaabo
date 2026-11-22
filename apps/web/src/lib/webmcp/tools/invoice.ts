@@ -10,7 +10,7 @@
  * instructions.
  */
 
-import { canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE } from "@hisaabo/shared";
+import { calcInvoiceTotals, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
@@ -31,6 +31,7 @@ import {
   QTY_PATTERN,
   UUID_PATTERN,
 } from "./shared";
+import { day, lookupInvoice, lookupParty, rupees, shortId } from "./summary";
 
 const INVOICE_TYPES = ["sale", "purchase"] as const;
 
@@ -133,6 +134,43 @@ function toLineItem(raw: Record<string, unknown>) {
     itemId: str(raw.itemId),
     description: str(raw.description),
   };
+}
+
+/**
+ * The total the server will compute, using the same shared calculator, so the
+ * confirmation shows a real number instead of echoing line items. Null when an
+ * input does not parse — the server is still the validator of record.
+ */
+function estimateTotals(
+  input: Record<string, unknown>,
+  lineItems: Record<string, unknown>[],
+): { total: string; taxTotal: string } | null {
+  // The decimal helpers turn garbage into 0.00 rather than failing, so refuse to
+  // estimate anything the schema itself would reject.
+  const validLines = lineItems.every((li) => {
+    const row = toLineItem(li);
+    return new RegExp(QTY_PATTERN).test(row.quantity) && new RegExp(MONEY_PATTERN).test(row.unitPrice);
+  });
+  if (!validLines) return null;
+  try {
+    const totals = calcInvoiceTotals({
+      lineItems: lineItems.map((li) => {
+        const row = toLineItem(li);
+        return {
+          quantity: row.quantity,
+          unitPrice: row.unitPrice,
+          taxPercent: row.taxPercent ?? "0",
+          discountPercent: row.discountPercent ?? "0",
+        };
+      }),
+      invoiceDiscount: str(input.invoiceDiscount),
+      invoiceDiscountType: enumOf(input.invoiceDiscountType, DISCOUNT_TYPES),
+      roundOff: str(input.roundOff),
+    });
+    return { total: totals.total, taxTotal: totals.taxTotal };
+  } catch {
+    return null;
+  }
 }
 
 const invoiceList: WebMcpToolDefinition = {
@@ -238,6 +276,40 @@ const invoiceCreate: WebMcpToolDefinition = {
   ),
   annotations: { consequentialHint: true },
   requires: { resource: "Invoice", action: "create" },
+  summarize: async (input, ctx) => {
+    const type = enumOf(input.type, INVOICE_TYPES);
+    const lineItems = objectArray(input.lineItems) ?? [];
+    if (!type || lineItems.length === 0) return null;
+    const partyId = str(input.partyId);
+    const party = await lookupParty(ctx, partyId);
+    const who = party?.name ?? `party ${shortId(partyId)}`;
+    const documentType = enumOf(input.documentType, DOCUMENT_TYPES) ?? "invoice";
+    const noun =
+      documentType === "invoice"
+        ? type === "sale" ? "sale invoice" : "purchase bill"
+        : documentType.replace(/_/g, " ");
+
+    const details: string[] = [];
+    const totals = estimateTotals(input, lineItems);
+    if (totals) {
+      details.push(`Total: ${rupees(totals.total)} (includes ${rupees(totals.taxTotal)} GST)`);
+    }
+    const shown = lineItems.slice(0, 3).map((li) => {
+      const row = toLineItem(li);
+      return `${row.itemName} × ${row.quantity} @ ${rupees(row.unitPrice)}`;
+    });
+    const more = lineItems.length - shown.length;
+    details.push(`${lineItems.length} line${lineItems.length === 1 ? "" : "s"}: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}`);
+    const dated = day(input.invoiceDate);
+    if (dated) details.push(`Dated ${dated}`);
+    const due = day(input.dueDate);
+    if (due) details.push(`Due ${due}`);
+    if (str(input.notes)) details.push(`Note: ${str(input.notes)}`);
+    return {
+      headline: type === "sale" ? `Create a ${noun} for ${who}` : `Record a ${noun} from ${who}`,
+      details,
+    };
+  },
   execute: async (input, ctx) => {
     const partyId = str(input.partyId);
     const type = enumOf(input.type, INVOICE_TYPES);
@@ -287,6 +359,20 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
   ),
   annotations: { consequentialHint: true },
   requires: { resource: "Invoice", action: "update" },
+  summarize: async (input, ctx) => {
+    const id = str(input.invoiceId);
+    const status = enumOf(input.status, SETTABLE_STATUSES);
+    if (!id || !status) return null;
+    const invoice = await lookupInvoice(ctx, id);
+    const label = invoice
+      ? `${invoice.number}${invoice.partyName ? ` for ${invoice.partyName}` : ""}`
+      : `invoice ${shortId(id)}`;
+    return {
+      headline: `Change the status of ${label}`,
+      details: invoice?.total ? [`Invoice total: ${rupees(invoice.total)}`] : [],
+      changes: [{ field: "Status", before: invoice?.status ?? "unknown", after: status }],
+    };
+  },
   execute: async (input, ctx) => {
     const id = str(input.invoiceId);
     if (!id) throw new Error("invoiceId is required.");

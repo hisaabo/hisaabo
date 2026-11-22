@@ -15,9 +15,17 @@
  */
 
 import { defineAbilityFor, stripControlChars } from "@hisaabo/shared";
-import { isConfirmHostMounted, requestConfirmation, summarizeInput } from "./confirm";
+import {
+  describeSummary,
+  isConfirmHostMounted,
+  requestConfirmation,
+  requestToPlainText,
+  summarizeInput,
+  type ConfirmRequest,
+} from "./confirm";
 import { fenceValue } from "./fence";
 import type {
+  WebMcpConfirmSummary,
   WebMcpToolContext,
   WebMcpToolDefinition,
   WebMcpToolResult,
@@ -175,20 +183,13 @@ export async function confirmWrite(
   def: WebMcpToolDefinition,
   input: Record<string, unknown>,
   options?: WebMCP.ToolExecuteCallbackOptions,
-  ctx?: Pick<WebMcpToolContext, "signal">,
+  ctx?: WebMcpToolContext,
 ): Promise<boolean> {
-  const title = `Allow AI agent: ${stripControlChars(def.title ?? def.name)}?`;
-  const summary = summarizeInput(input);
+  const request = await buildConfirmRequest(def, input, ctx);
   const ask = async (): Promise<boolean> => {
-    if (isConfirmHostMounted()) {
-      return requestConfirmation({
-        title,
-        description: `A browser AI agent wants to change your Hisaabo data. ${summary}`,
-        signal: ctx?.signal,
-      });
-    }
+    if (isConfirmHostMounted()) return requestConfirmation(request);
     return typeof window !== "undefined" && typeof window.confirm === "function"
-      ? window.confirm(`${title}\n\n${summary}`) === true
+      ? window.confirm(requestToPlainText(request)) === true
       : false;
   };
   try {
@@ -199,6 +200,52 @@ export async function confirmWrite(
   } catch {
     return false;
   }
+}
+
+/** Longest a tool may take to resolve names for its summary before the dialog falls back to the plain one. */
+const SUMMARIZE_TIMEOUT_MS = 4_000;
+
+/**
+ * What the dialog will say. The tool's own `summarize` resolves UUIDs into names,
+ * totals and before → after diffs; if it is absent, slow, fails or returns
+ * nothing, the generic one-line summary of the raw input is used instead. The
+ * business name is in the title so the person sees WHERE the write will land.
+ */
+async function buildConfirmRequest(
+  def: WebMcpToolDefinition,
+  input: Record<string, unknown>,
+  ctx?: WebMcpToolContext,
+): Promise<ConfirmRequest> {
+  const businessName = ctx?.businessName ? stripControlChars(ctx.businessName).trim() : "";
+  const action = stripControlChars(def.title ?? def.name);
+  const title = `Allow AI agent: ${action}${businessName ? ` in ${businessName}` : ""}?`;
+
+  let summary: WebMcpConfirmSummary | null = null;
+  if (def.summarize && ctx) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      summary = await Promise.race([
+        def.summarize(input, ctx),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), SUMMARIZE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      summary = null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  const described = summary ? describeSummary(summary) : null;
+  if (described && described.description) {
+    return { title, ...described, signal: ctx?.signal };
+  }
+  return {
+    title,
+    description: `A browser AI agent wants to change your Hisaabo data. ${summarizeInput(input)}`,
+    signal: ctx?.signal,
+  };
 }
 
 /**

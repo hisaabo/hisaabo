@@ -107,6 +107,56 @@ describe("confirmation host", () => {
   });
 });
 
+describe("confirmation host — informed summary", () => {
+  it("shows the business in the title and the resolved summary, with the before → after of an update", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const def = {
+      ...writeDef(),
+      title: "Change invoice status",
+      summarize: async () => ({
+        headline: "Change the status of INV-0042 for Acme Traders",
+        details: ["Invoice total: ₹17,700.00"],
+        changes: [{ field: "Status", before: "draft", after: "sent" }],
+      }),
+    } as WebMcpToolDefinition;
+    const execute = vi.fn();
+    const tool = buildBrowserTool(
+      { ...def, execute },
+      { ...ctx, businessName: "Sharma Traders", businessId: "biz-1", activeBusinessId: () => "biz-1" } as WebMcpToolContext,
+    );
+    let pending!: Promise<unknown>;
+    act(() => {
+      pending = tool.execute({ invoiceId: "x" }, opts()) as Promise<unknown>;
+    });
+
+    const dialog = await screen.findByTestId("webmcp-confirm");
+    expect(dialog).toHaveTextContent("Allow AI agent: Change invoice status in Sharma Traders?");
+    expect(dialog).toHaveTextContent("Change the status of INV-0042 for Acme Traders");
+    expect(dialog).toHaveTextContent("Invoice total: ₹17,700.00");
+    expect(dialog).toHaveTextContent("Status:");
+    expect(screen.getByText("draft")).toHaveClass("line-through");
+    expect(screen.getByText("sent")).toBeInTheDocument();
+    // The raw input summary is not shown when a resolved one exists.
+    expect(dialog).not.toHaveTextContent("invoice id: x");
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await pending;
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the plain input summary for a tool without summarize", async () => {
+    render(<WebMcpConfirmHost scopeKey="k" />);
+    const tool = buildBrowserTool(writeDef(), { ...ctx, businessName: "Sharma Traders" } as WebMcpToolContext);
+    act(() => {
+      void tool.execute({ name: "Acme" }, opts());
+    });
+    const dialog = await screen.findByTestId("webmcp-confirm");
+    expect(dialog).toHaveTextContent("Allow AI agent: Create party in Sharma Traders?");
+    expect(dialog).toHaveTextContent("name: Acme");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+});
+
 describe("confirmation host — the context the prompt was raised for changes", () => {
   it("denies the open and the queued prompts when the scope (user / tenant / business) changes", async () => {
     const { rerender } = render(<WebMcpConfirmHost scopeKey="user-1:tenant-1:biz-A" />);
