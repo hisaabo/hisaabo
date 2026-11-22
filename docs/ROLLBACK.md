@@ -122,7 +122,7 @@ docker compose start api
 
 ### Single-Tenant Restore (Multi-Tenant Deployments)
 
-In multi-tenant mode, each tenant has its own database (`tenant_<slug>`). Backups produce separate dump files per database, so you can restore a single tenant without affecting others.
+In multi-tenant mode, each tenant has its own database (`t_<32 hex>` for tenants created from v0.10.1, `tenant_<slug>` for earlier ones; the name is in `tenants.db_name`). Backups produce separate dump files per database, so you can restore a single tenant without affecting others.
 
 **This is the preferred approach when a single tenant's data is corrupted or needs rollback while all other tenants remain operational.**
 
@@ -155,6 +155,8 @@ docker compose exec backup restore-db.sh tenant_acme dump_tenant_acme_20260414_0
 # List available backups for a tenant
 docker compose exec backup ls -lht /var/backups/hisaabo/dump_tenant_acme_*
 ```
+
+A restored database comes back with default privileges (`--no-privileges`, and a freshly created database is connectable by every role). Restart the `api` container, or run `node packages/db/dist/migrate.mjs --restrict-tenant-db-access`, to close it to other tenants' roles again and re-grant its own role; see [Tenant databases and roles](DEPLOYMENT.md#tenant-databases-and-roles-multi-tenant).
 
 #### Verification
 

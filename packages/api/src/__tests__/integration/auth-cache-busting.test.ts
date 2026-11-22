@@ -47,6 +47,7 @@ import { enforceSessionLimit } from "../../lib/plan-limits.js";
 import { rotateSessionsOnPrivilegeEvent } from "../../lib/session-rotation.js";
 import { sessionHandle } from "../../routers/auth.js";
 import { _resetApiKeyTouchThrottle } from "../../lib/auth-caches.js";
+import { MULTI_ORG_LATCH_KEY } from "../../lib/tenant-businesses.js";
 
 const factory = createCallerFactory(appRouter);
 
@@ -231,18 +232,30 @@ describe("authz caches: write -> next call sees it", () => {
     expect(ctx.tenantId).toBeNull();
   });
 
-  it("business creator removed from the tenant -> business FORBIDDEN on the very next call", async () => {
-    const creator = await createUser();
-    await addMember(tenant.id, creator.id, "admin");
-    const creatorBiz = await createBusiness(getTenantTestDb(), creator.id);
-    const { session } = await newMember("admin");
+  it("multi-org self-hosted: business creator removed from the tenant -> business FORBIDDEN on the very next call", async () => {
+    // A second tenant row makes this a multi-org shared-DB install, the only
+    // layout where the creator-membership rule applies (single-org and cloud:
+    // business-creator-rule.test.ts).
+    const otherOrg = await createTenant({ plan: "business" });
+    cacheBus.invalidate({ kind: "tenant", tenantId: otherOrg.id });
+    try {
+      const creator = await createUser();
+      await addMember(tenant.id, creator.id, "admin");
+      const creatorBiz = await createBusiness(getTenantTestDb(), creator.id);
+      const { session } = await newMember("admin");
 
-    await expect((await as({ cookie: session }, creatorBiz.id)).party.create(partyInput)).resolves.toBeTruthy();
-    await (await as({ cookie: ownerSession })).tenant.removeMember({ userId: creator.id });
-    await expect((await as({ cookie: session }, creatorBiz.id)).party.create(partyInput)).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      message: "Business not found",
-    });
+      await expect((await as({ cookie: session }, creatorBiz.id)).party.create(partyInput)).resolves.toBeTruthy();
+      await (await as({ cookie: ownerSession })).tenant.removeMember({ userId: creator.id });
+      await expect((await as({ cookie: session }, creatorBiz.id)).party.create(partyInput)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: "Business not found",
+      });
+    } finally {
+      await getControlDb().delete(tenants).where(eq(tenants.id, otherOrg.id));
+      // the multi-org latch would keep the creator rule on for the rest of the file
+      await getControlDb().delete(systemConfig).where(eq(systemConfig.key, MULTI_ORG_LATCH_KEY));
+      cacheBus.invalidate({ kind: "tenant", tenantId: otherOrg.id });
+    }
   });
 
   it("tenant suspended (event after the write) -> next call FORBIDDEN 'Organization is not active'; reactivation is seen too", async () => {

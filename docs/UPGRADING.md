@@ -8,6 +8,20 @@ A bug-fix release. Take the usual backup, then **upgrade the API first**: set `H
 
 - **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
 - **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
+- **Multi-tenant: new tenant databases get random names.** Until now a tenant's database and role were named from its slug (`tenant_<slug, lowercased, cut to 40 characters>`). When two sign-ups had the same long name (a slug base of 34 characters or more loses its random suffix after the cut) they were assigned the same database name, and the second sign-up failed on `CREATE DATABASE`. Tenants created from 0.10.1 on get `t_<32 random hex characters>` for the database and `t_<same hex>_u` for the role (34 and 36 characters, inside Postgres' 63-byte identifier limit). The slug shown in URLs and the UI is unchanged. **Existing tenants keep their `tenant_<slug>` names**: the API, the migration step, the admin dashboard and `rotate-key` always read the names from `tenants.db_name` and `tenants.db_user`, never derive them from a slug, and nothing is renamed. Anything of yours that guesses a tenant database from its slug (a script, a dashboard) must read `tenants.db_name` instead; with the new names it cannot work.
+- **Multi-tenant: tenant databases are closed to other roles.** `CREATE DATABASE` grants `CONNECT` and `TEMPORARY` on the new database to `PUBLIC`, i.e. to every role in the cluster, so any tenant's database role could open a session on every other tenant's database (row data was still protected by table privileges, but the door should not be open). From 0.10.1 provisioning grants `CONNECT` and `TEMPORARY` to the tenant's own role and revokes them from `PUBLIC`.
+- **Multi-tenant: the migration step applies this to every existing tenant database.** After the control and tenant migrations, every API start (and so every deploy) runs one idempotent pass over each database listed in `tenants`: `GRANT CONNECT, TEMPORARY` to the tenant's own role, then `REVOKE CONNECT, TEMPORARY ... FROM PUBLIC`, in one statement per database. The first pass after the upgrade closes the databases you already have; later passes change nothing (and also close a database that an older replica provisioned during a rolling deploy). It never fails startup: per-database errors are logged and counted. Look for this line in the API log:
+
+  ```
+  Tenant database access: closed to PUBLIC  {"total":228,"restricted":228,"missing":0,"skipped":0,"failed":0}
+  ```
+
+  `restricted` counts only databases **verified in the catalog** afterwards: the tenant role can connect and `PUBLIC` holds nothing. `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed or where the change had no effect (the log has one `could not restrict database` error per tenant with the reason). The usual cause is a control role that neither owns the database nor is a superuser: Postgres then only prints a warning ("no privileges could be revoked") and reports success while leaving the database open, which the pass detects and reports as `failed` ("PUBLIC can still connect ..."). Run the preflight query below before upgrading to find those databases. When several API instances start together, one runs the pass and the others log `Tenant database access: skipped, another instance is running the same pass` instead of waiting for it, so the pass never delays startup. To run the pass on its own, without migrations, and get exit code 1 if any database failed (or if another instance held the lock):
+
+  ```bash
+  docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+    node packages/db/dist/migrate.mjs --restrict-tenant-db-access
+  ```
 
 ### Migrations
 
@@ -45,9 +59,72 @@ That bounds tenant connections at `(10 + 10) x 2 = 40`. Add about 15 for the API
 
 How eviction behaves: an evicted pool is not closed, so a request still using it is not affected, and its connections close by themselves after 20 idle seconds. At most `TENANT_POOL_DRAINING_MAX` evicted pools are allowed to drain at once; beyond that the oldest is closed after its running queries finish (up to 30 seconds). Only in such a storm, where more pools are evicted inside 20 seconds than the cap allows, can a request that holds the closed pool fail with `CONNECTION_ENDED`, and only if it starts a new query or transaction after that. To check connections during a busy period, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
 
+### Before you start (multi-tenant)
+
+1. **Back up the control database and every tenant database** (`backup.sh`, see the 0.10.0 section below).
+2. **Multi-tenant only: preflight the control role.** The pass can only change databases that the `CONTROL_DATABASE_URL` role owns (or acts as the owner of through role membership), or that it can change as a superuser. Connected as that role to the **control database**, this catalog-only query must return no rows:
+
+   ```sql
+   SELECT t.slug, t.db_name, pg_get_userbyid(d.datdba) AS owner
+   FROM tenants t
+   JOIN pg_database d ON d.datname = t.db_name
+   WHERE NOT pg_has_role(current_user, d.datdba, 'USAGE');
+   ```
+
+   Every row is a tenant database the pass will report as `failed`. Fix it with `ALTER DATABASE "<db_name>" OWNER TO <control role>;` (as the current owner or a superuser) or run the control role as a superuser. It only sees databases on the control database's server; tenants with another `db_host` need the same check there.
+3. **Multi-tenant only: check that no two tenants share a database.** Each row of `tenants` must point at its own database. Two rows with the same host, port and database name would share data, and the access pass would treat them as one. On the control database this query must return no rows:
+
+   ```sql
+   SELECT coalesce(db_host, 'localhost') AS db_host, coalesce(db_port, '5432') AS db_port, db_name,
+          count(*) AS tenants, array_agg(slug ORDER BY slug) AS slugs
+   FROM tenants
+   WHERE db_name IS NOT NULL
+   GROUP BY 1, 2, 3
+   HAVING count(*) > 1;
+   ```
+
+   Provisioning always gives a tenant a database of its own, so a row here means a hand-edited or restored `tenants` table: fix it before upgrading (point each row at its own database, or remove the duplicate). A unique index on `(db_host, db_port, db_name)` is planned for 0.11.0; until then nothing in the database prevents it.
+4. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+
+### If you connect to tenant databases with a role other than the control role
+
+Who keeps access after the pass: the **tenant's own role** (explicitly), the **role that owns the database** (the role in `CONTROL_DATABASE_URL`, which ran `CREATE DATABASE`: `POSTGRES_USER` in the bundled compose file) and **superusers**. The API, the migration step, the admin dashboard (`admin`), `ops`, `rotate-key`, `scripts/backup.sh` (it connects as `DB_USER`, which defaults to `POSTGRES_USER`) and the restore sidecar all use one of those, so nothing in the stock deployment needs a change.
+
+If you added **another role** that connects to tenant databases (a read-only BI role, a monitoring or backup role, a pooler's auth role, an engineer's personal login), that role loses access to every tenant database on the first pass, until it is granted explicitly. Typical symptom: `FATAL: permission denied for database "tenant_acme"` / `User does not have CONNECT privilege`. Grant it per database, run on the control database:
+
+```sql
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', db_name, 'bi_reader')
+FROM tenants WHERE db_name IS NOT NULL \gexec
+```
+
+Explicit grants to a role survive every later pass (only `PUBLIC` is revoked). Postgres has no default privileges for databases, so a tenant created later needs the same grant: re-run the statement after new sign-ups, or from a periodic job. Do not work around this by granting `CONNECT` to `PUBLIC` again; the next pass would revoke it. Table privileges inside a tenant database are unchanged.
+
+To check a database by hand: `SELECT datname, datacl FROM pg_database WHERE datname LIKE 'tenant\_%' OR datname LIKE 't\_%';`. A closed database lists only its owner and its own role (for example `{hisaabo=CTc/hisaabo,tenant_acme_user=CTc/hisaabo}`), with no `=Tc/...` entry (the empty grantee is `PUBLIC`). The control database and the `postgres` maintenance database are not touched by this release and remain connectable by `PUBLIC`.
+
+After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLLBACK.md)), the restored database has the default privileges again: restart the `api` container, or run the command above, to close it.
+
 ### Upgrade
 
 Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No environment variable is required or changed; the two pool settings above are optional but recommended for multi-tenant installs with more tenants than pool slots.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f api
+```
+
+ONCE: pull the new image and restart it as usual; it runs the same migration step.
+
+Verify:
+
+- `curl http://127.0.0.1:3000/health` returns `ok`.
+- Multi-tenant: the log shows `Tenant database access: closed to PUBLIC` with `failed: 0`. Spot-check from the host: connect as one tenant's role to another tenant's database and expect `permission denied for database`.
+- Multi-tenant: sign in as a user whose organisation has a business, and open an invoice (it proves the tenant role still connects to its own database).
+- Create an organisation with a long name in a multi-tenant deployment; its row in `tenants` has a `t_...` `db_name`.
+
+### Rolling back
+
+Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
 
 ### What is fixed (reliability)
 
@@ -64,6 +141,8 @@ Take the usual backup first (the `backup.sh` command is under "Before you start"
 - **Bank reconciliation can skip duplicate statement lines (web: on by default; API: opt-in).** When asked to, confirming a column mapping leaves out any line that is already on file in another import of the same bank account (same day, debit, credit and reference number, or the same narration when there is no reference). Overlapping statements and re-uploaded files no longer double up. The 0.10.1 web app has a **Skip lines already imported from an earlier statement** checkbox on the mapping step, ticked by default, and always sends the choice. The API input `skipDuplicates` defaults to **`false`**, so a 0.10.0 web or desktop client talking to a 0.10.1 API (which never sends the flag) imports every line exactly as before; nothing is dropped unless the client asks. The result carries `duplicatesSkipped` and a `duplicates` list (up to 500 lines: file position, date, amounts, narration, and the earlier import that holds each one), and the review screen shows the count with an expandable list of what was skipped, so nothing disappears unseen. `totalLines` in the result and on the import counts the lines actually imported. Imports made before this release are not changed, and they count as "already on file" for later statements. If two statements legitimately contain identical lines with no reference, untick the checkbox (or send `skipDuplicates: false`) for that upload.
 - **Journal entries are never deleted.** `journal.delete` used to remove an entry and its lines with no trace. It now voids the entry, exactly like `journal.void`: a reversing entry is posted, the original is flagged voided, and both stay in the books, reports and Tally export (netting to zero). The response is still `{ success: true }` with extra fields (`voided`, `alreadyVoided`, `reversingEntryNumber`, ...). Calling it on an already voided entry is a no-op. **Both `journal.delete` and `journal.void` now refuse a reversal entry** (the entry a previous void posted) with `BAD_REQUEST`: before, `journal.void` would reverse it, which reinstated the original's effect in the ledger while the original stayed flagged voided. To correct a wrong void, post a new journal entry. **`journal.update` also refuses a reversal entry** (`BAD_REQUEST`, "post a new journal entry to correct it"), because editing it would break the pair's netting to zero. `journal.update` now checks that the entry is not voided under a row lock inside its transaction, so an edit racing a void can no longer rewrite the lines of an entry that was just reversed (the edit is refused instead). Every void, from `journal.void` or `journal.delete`, is now recorded in the audit log as `journal.void`, written in the same transaction as the void itself: the record cannot be missing, and if it cannot be written the void is rolled back with an error. The web app and the CLI only ever offered Void; there is no delete command. Scripts that called `journal.delete` expecting the entry to disappear from `journal.list` will now see it (and its reversal) listed as voided.
 - **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
+- **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start. That state is **latched**: the first time the API sees more than one row in `tenants` it writes a `system_config` row (`self_host_multi_org_seen`) and keeps the rule on even if the extra organisations are deleted later, because a hard-deleted organisation leaves its businesses in the shared database and they would otherwise appear in the surviving organisation. If you really did remove the extra organisations and their businesses, switch the rule off again with `DELETE FROM system_config WHERE key = 'self_host_multi_org_seen';` (it takes effect within about 15 seconds). Cloud and single-organisation installs never write the row.
+- **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
 
 ### Corrected accounting and GST figures
 

@@ -84,7 +84,10 @@ export const ALLOWED_WRITERS: Record<string, string[]> = {
     "lib/api-keys.ts", // the one place a key is minted (router + operator CLI)
     "lib/admin/api-key.ts", // operator CLI revoke (cacheBus + DB trigger)
   ],
-  system_config: ["bin/maintenance.ts"], // CLI process (cache-guard: DB trigger)
+  system_config: [
+    "bin/maintenance.ts", // CLI process (cache-guard: DB trigger)
+    "lib/tenant-businesses.ts", // multi-org latch, written after observing the state it records (cache-guard)
+  ],
   store_slugs: ["lib/store-slug-registry.ts"],
   businesses: ["routers/business.ts"],
 };

@@ -73,7 +73,7 @@ STEP 3: Transactional user creation
     STEP 3d: Tenant assignment
       BRANCH: MULTI_TENANT=true
         ACTION: Create tenant (name="{name}'s Organization", slug=generateSlug)
-        ACTION: provisionTenantDatabase(tenantId, slug) -- CREATE DATABASE, user, schema push
+        ACTION: provisionTenantDatabase() -- random t_<hex> database + role (not derived from the slug), CREATE DATABASE, user, REVOKE CONNECT/TEMP FROM PUBLIC + GRANT to the tenant role, schema migrations
           BRANCH: provision fails -> DELETE orphaned tenant row, THROW
         ACTION: UPDATE tenant with dbName, dbHost, dbPort, dbUser, dbPassword
         ACTION: INSERT tenantMember (role="owner", acceptedAt=now())
