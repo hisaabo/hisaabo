@@ -8,12 +8,13 @@
  */
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
-import { registerVersionRoute } from "../http/version.js";
+import { isVersionExposed, registerVersionRoute } from "../http/version.js";
 import { buildInfo } from "../lib/build-info.js";
 
-function app(info?: { version: string }) {
+// `env` is passed explicitly ({} = nothing set) so the host's EXPOSE_VERSION never leaks in.
+function app(info?: { version: string }, env: Record<string, string | undefined> = {}) {
   const a = new Hono();
-  registerVersionRoute(a, info);
+  registerVersionRoute(a, info, env);
   return a;
 }
 
@@ -45,5 +46,24 @@ describe("GET /api/version", () => {
   it("is read-only: other methods are not routed", async () => {
     const res = await app({ version: "0.10.1" }).request("/api/version", { method: "POST" });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("EXPOSE_VERSION opt-out", () => {
+  it("is on by default and for anything but false", async () => {
+    for (const value of [undefined, "", "true", "1", "yes"]) {
+      expect(isVersionExposed({ EXPOSE_VERSION: value })).toBe(true);
+      const res = await app({ version: "0.10.1" }, { EXPOSE_VERSION: value }).request("/api/version");
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("EXPOSE_VERSION=false (any case, padded) leaves the route out: a plain 404, no version anywhere", async () => {
+    for (const value of ["false", "FALSE", " False "]) {
+      expect(isVersionExposed({ EXPOSE_VERSION: value })).toBe(false);
+      const res = await app({ version: "0.10.1" }, { EXPOSE_VERSION: value }).request("/api/version");
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toContain("0.10.1");
+    }
   });
 });
