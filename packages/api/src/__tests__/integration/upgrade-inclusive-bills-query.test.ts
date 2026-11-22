@@ -8,7 +8,9 @@
  *   old bill  2 x Atta @118.00 (18%)      taxable 236.00, GST 42.48, line 278.48   should be 2 x 118.00 = 236.00  -> overcharge 42.48
  *   old bill  1 x Atta @118.00, 10% off   taxable 106.20, GST 19.12 [19.116], line 125.32  should 106.20          -> overcharge 19.12
  *   old bill  1 x box @590.00 (18%)       taxable 590.00, GST 106.20, line 696.20  should 590.00                  -> overcharge 106.20
- *   NOT listed: Atta billed at the converted 100.00; Steel @118.00 (a tax-exclusive item); a cancelled bill; an online-store order.
+ *   old store order, EDITED after placing (rate 118.00, total re-taxed 139.24)  -> listed, overcharge 21.24
+ *   NOT listed: Atta billed at the converted 100.00; Steel @118.00 (a tax-exclusive item); a cancelled bill;
+ *   an online-store order nobody edited (rate 118.00 and an inclusive line total of exactly 118.00).
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -62,18 +64,27 @@ describe("docs/UPGRADING.md: bills made from items priced including tax", () => 
     await bill("new-atta", { itemId: atta.id, unitPrice: "100.00" }); // the converted rate
     await bill("steel", { itemId: steel.id, unitPrice: "118.00" }); // tax-exclusive item
     await bill("cancelled", { itemId: atta.id, unitPrice: "118.00" }, (id) => w.caller.invoice.updateStatus({ id, status: "cancelled" }));
-    await bill("store", { itemId: atta.id, unitPrice: "118.00" }, async (id) => {
+    // a 0.10.0 store order that was edited afterwards: its inclusive rate was taxed again
+    await bill("store-edited", { itemId: atta.id, unitPrice: "118.00" }, async (id) => {
       await getTenantTestDb().execute(sql`UPDATE invoices SET source = 'online_store' WHERE id = ${id}`);
+    });
+    // a 0.10.0 store order nobody edited: inclusive rate, exact inclusive line total (118.00 = 1 x 118.00)
+    await bill("store-untouched", { itemId: atta.id, unitPrice: "118.00" }, async (id) => {
+      const db = getTenantTestDb();
+      await db.execute(sql`UPDATE invoices SET source = 'online_store' WHERE id = ${id}`);
+      await db.execute(sql`UPDATE invoice_items SET tax_amount = 18.00, total_amount = 118.00 WHERE invoice_id = ${id}`);
     });
   });
 
   it("lists exactly the lines billed at the saved inclusive price, with what they should have totalled", async () => {
     const rows = (await getTenantTestDb().execute(sql.raw(inclusiveBillsQuery()))) as unknown as Array<Record<string, string>>;
     const byNumber = new Map(rows.map((r) => [r.invoice_number, r]));
-    expect([...byNumber.keys()].sort()).toEqual([numbers["old-atta"], numbers["old-atta-disc"], numbers["old-box"]].sort());
+    expect([...byNumber.keys()].sort()).toEqual([numbers["old-atta"], numbers["old-atta-disc"], numbers["old-box"], numbers["store-edited"]].sort());
 
     expect(byNumber.get(numbers["old-atta"]!)).toMatchObject({ item: "Atta", billed_rate: "118.00", line_total: "278.48", should_total: "236.00", overcharge: "42.48" });
     expect(byNumber.get(numbers["old-atta-disc"]!)).toMatchObject({ item: "Atta", line_total: "125.32", should_total: "106.20", overcharge: "19.12" });
+    // 118.00 + 18% = 139.24 on a line that should total 118.00: 21.24 too much
+    expect(byNumber.get(numbers["store-edited"]!)).toMatchObject({ item: "Atta", line_total: "139.24", should_total: "118.00", overcharge: "21.24" });
     expect(byNumber.get(numbers["old-box"]!)).toMatchObject({ item: "Pack", billed_rate: "590.00", line_total: "696.20", should_total: "590.00", overcharge: "106.20" });
   });
 
