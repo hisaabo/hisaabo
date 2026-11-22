@@ -387,9 +387,13 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
 
   const debouncedSearch = useDebounce(search, 300);
 
-  // Server-side filtered items — passes search term to API so results aren't capped at 100 items
+  // Server-side filtered items — passes search term to API so results aren't capped at 100 items.
+  // `selectedFirst`: items already on the store come first, each group in the usual order.
+  // The order follows what is SAVED, and it is re-fetched only when the picker opens or the
+  // search changes, so ticking an item never makes it jump while the manager is working
+  // (their unsaved ticks live in `pendingChanges`, not in this list).
   const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery(
-    { limit: 100, page: 1, search: debouncedSearch || undefined },
+    { limit: 100, page: 1, search: debouncedSearch || undefined, selectedFirst: true },
     { enabled: open },
   );
   const items: any[] = itemsResponse?.data ?? [];

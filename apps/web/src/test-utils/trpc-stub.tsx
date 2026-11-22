@@ -23,8 +23,14 @@ import { useRef } from "react";
 import { vi } from "vitest";
 
 export const stub = {
-  /** Canned `useQuery` data keyed by tRPC path, e.g. "party.list". */
+  /**
+   * Canned `useQuery` data keyed by tRPC path, e.g. "party.list". A function is called
+   * with the query input and its result returned (a tiny fake server for tests that
+   * care how the component asks).
+   */
   data: {} as Record<string, unknown>,
+  /** Input of every `useQuery` call (one entry per render), keyed by tRPC path. */
+  queries: {} as Record<string, unknown[]>,
   /** Session returned by `auth.me`. `undefined` role = no session data at all. */
   session: { role: null as string | null | undefined, isLoading: false },
   /** Arguments of every `mutate`/`mutateAsync` call, keyed by tRPC path. */
@@ -36,6 +42,7 @@ export const stub = {
   search: {} as Record<string, unknown>,
   reset() {
     for (const k of Object.keys(this.data)) delete this.data[k];
+    for (const k of Object.keys(this.queries)) delete this.queries[k];
     for (const k of Object.keys(this.mutations)) delete this.mutations[k];
     for (const k of Object.keys(this.mutationResults)) delete this.mutationResults[k];
     this.session.role = null;
@@ -65,7 +72,7 @@ const node = (path: string[]): unknown =>
         if (prop === "then") return undefined;
         const key = path.join(".");
         if (prop === "useQuery" || prop === "useInfiniteQuery") {
-          return () => {
+          return (input?: unknown) => {
             useRef(null);
             if (key === "auth.me") {
               return {
@@ -83,8 +90,10 @@ const node = (path: string[]): unknown =>
                 isFetching: false,
               };
             }
+            (stub.queries[key] ??= []).push(input);
+            const canned = stub.data[key];
             return {
-              data: stub.data[key],
+              data: typeof canned === "function" ? (canned as (i: unknown) => unknown)(input) : canned,
               isLoading: false,
               isFetching: false,
               isError: false,

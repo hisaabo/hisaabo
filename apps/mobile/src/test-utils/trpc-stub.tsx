@@ -23,6 +23,8 @@ import { ThemeProvider } from "../contexts/ThemeContext";
 
 export const stub = {
   data: {} as Record<string, unknown>,
+  /** Input of every `useQuery` call (one entry per render), keyed by tRPC path. */
+  queries: {} as Record<string, unknown[]>,
   session: { role: null as string | null, isLoading: false },
   mutations: {} as Record<string, unknown[]>,
   /**
@@ -44,6 +46,7 @@ export const stub = {
   params: {} as Record<string, string>,
   reset() {
     for (const k of Object.keys(this.data)) delete this.data[k];
+    for (const k of Object.keys(this.queries)) delete this.queries[k];
     for (const k of Object.keys(this.mutations)) delete this.mutations[k];
     for (const k of Object.keys(this.mutationResults)) delete this.mutationResults[k];
     for (const k of Object.keys(this.mutationHandlers)) delete this.mutationHandlers[k];
@@ -87,7 +90,7 @@ const node = (path: string[]): unknown =>
         if (prop === "then") return undefined;
         const key = path.join(".");
         if (prop === "useQuery" || prop === "useInfiniteQuery") {
-          return () => {
+          return (input?: unknown) => {
             useRef(null);
             if (key === "auth.me") {
               return {
@@ -95,8 +98,11 @@ const node = (path: string[]): unknown =>
                 isLoading: stub.session.isLoading,
               };
             }
+            (stub.queries[key] ??= []).push(input);
+            // a function is a tiny fake server: called with the query input
+            const canned = stub.data[key];
             return {
-              data: stub.data[key],
+              data: typeof canned === "function" ? (canned as (i: unknown) => unknown)(input) : canned,
               isLoading: false,
               isFetching: false,
               isRefetching: false,

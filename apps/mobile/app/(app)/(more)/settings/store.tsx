@@ -573,12 +573,17 @@ function StoreItemsModal({
   const storeEnabledFilter =
     activeTab === "in_store" ? true : activeTab === "not_in_store" ? false : undefined;
 
+  // `selectedFirst`: items already on the store come first, each group in the usual order.
+  // The order follows what is SAVED and is re-fetched only when the picker opens, the search
+  // changes or the tab changes, so ticking an item never makes it jump while the manager is
+  // working (their unsaved ticks live in `pendingChanges`, not in this list).
   const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery(
     {
       limit: 100,
       page: 1,
       search: debouncedSearch || undefined,
       storeEnabled: storeEnabledFilter,
+      selectedFirst: true,
     },
     { enabled: visible && !!businessId },
   );
@@ -615,19 +620,10 @@ function StoreItemsModal({
     [pendingChanges],
   );
 
-  // Sort items: store-enabled first in "All Items" tab, then alphabetical
-  const sortedItems = useMemo(() => {
-    const sorted = [...items];
-    sorted.sort((a, b) => {
-      if (activeTab === "all") {
-        const aEnabled = getEffectiveEnabled(a);
-        const bEnabled = getEffectiveEnabled(b);
-        if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
-      }
-      return (a.name as string).localeCompare(b.name as string);
-    });
-    return sorted;
-  }, [items, activeTab, getEffectiveEnabled]);
+  // The API already returns the items in picker order (on the store first, then the rest,
+  // each in the usual order). Do not re-sort here by the unsaved ticks: that is what made
+  // rows jump under the manager's finger on every tap.
+  const sortedItems = items;
 
   const toggleItem = useCallback((id: string, currentlyEnabled: boolean) => {
     setPendingChanges((prev) => {
