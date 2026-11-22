@@ -6,6 +6,8 @@ import { requireCan } from "../lib/permissions.js";
 import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson } from "../lib/gst-reports.js";
 import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterMonths } from "../lib/gst-period.js";
+import { money } from "@hisaabo/shared";
 
 export const gstRouter = router({
   // Reports are available for ALL businesses — GST-registered get GST terminology,
@@ -54,21 +56,22 @@ export const gstRouter = router({
       const report = await generateGSTR1(ctx.businessId, input.year, input.month, ctx.db);
 
       const [biz] = await ctx.db
-        .select({ gstin: businesses.gstin, financialYearStart: businesses.financialYearStart })
+        .select({ gstin: businesses.gstin })
         .from(businesses)
         .where(eq(businesses.id, ctx.businessId))
         .limit(1);
 
-      const fp = String(input.month).padStart(2, "0") + String(input.year);
-      const fyStart = biz?.financialYearStart ?? 4;
-      const fy = input.month >= fyStart
-        ? `${input.year}-${String(input.year + 1).slice(2)}`
-        : `${input.year - 1}-${String(input.year).slice(2)}`;
+      // The GST return year is always April-March, whatever financial year the business
+      // keeps its books on (`financialYearStart` is for the accounting reports only).
+      const fp = gstFilingPeriod(input.year, input.month);
+      const fy = gstFinancialYearLabel(input.year, input.month);
 
       const portalJson = gstr1ToPortalJson(report, biz?.gstin ?? "", fy, fp);
       return {
         json: portalJson,
         filename: `GSTR1_${report.period.replace(" ", "_")}_portal.json`,
+        // GST financial year of the period (April-March), e.g. "2025-26" for January 2026
+        financialYear: fy,
       };
     }),
 
@@ -105,7 +108,10 @@ export const gstRouter = router({
   // Composition dealers pay a flat tax on total outward supplies instead of
   // collecting GST from customers. The rate varies by category:
   //   1% for traders (manufacturers), 5% for restaurants, 6% for service providers.
-  // This endpoint calculates total outward supplies for a quarter and the tax payable.
+  // This endpoint calculates total outward supplies for a GST quarter and the tax payable.
+  // The quarters are those of the GST financial year, which starts on 1 April whatever the
+  // business's own accounting year: `year` is the START year of the financial year
+  // (2025 = FY 2025-26) and Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar of year + 1.
   cmp08: viewerProcedure
     .input(z.object({
       year: z.number().int().min(2020).max(2099),
@@ -114,10 +120,9 @@ export const gstRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      // Derive start and end months from quarter
-      const startMonth = (input.quarter - 1) * 3 + 1; // Q1→1, Q2→4, Q3→7, Q4→10
-      const quarterStart = new Date(input.year, startMonth - 1, 1);
-      const quarterEnd = new Date(input.year, startMonth + 2, 0, 23, 59, 59); // last day of 3rd month
+      const q = gstQuarterMonths(input.year, input.quarter);
+      const quarterStart = new Date(q.startYear, q.startMonth - 1, 1);
+      const quarterEnd = new Date(q.endYear, q.endMonth, 0, 23, 59, 59, 999); // last instant of the 3rd month
 
       const rows = await ctx.db.select({
         totalAmount: invoices.totalAmount,
@@ -130,20 +135,17 @@ export const gstRouter = router({
           ...buildBusinessDateFilter(invoices, { from: quarterStart, to: quarterEnd }),
         ));
 
-      let taxableValue = 0;
-      for (const row of rows) {
-        taxableValue += parseFloat(row.subtotal);
-      }
+      // Exact paise arithmetic; never JS floats for money.
+      const taxableValue = money.sum(rows.map((row) => row.subtotal));
 
       // Default composition rate for traders: 1%.
       // Businesses can override this; we default to the lowest rate.
       // 1% for traders/manufacturers, 5% for restaurants, 6% for services.
-      const compositionRate = 0.01;
-      const taxPayable = taxableValue * compositionRate;
+      const taxPayable = money.percent(taxableValue, "1");
 
       return {
-        taxableValue: taxableValue.toFixed(2),
-        taxPayable: taxPayable.toFixed(2),
+        taxableValue,
+        taxPayable,
         quarterStart: quarterStart.toISOString(),
         quarterEnd: quarterEnd.toISOString(),
       };

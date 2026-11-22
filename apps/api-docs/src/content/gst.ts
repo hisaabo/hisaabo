@@ -260,7 +260,7 @@ print("Saved portal JSON:", data["filename"])`,
       gotchas: [
         "The JSON schema matches the GST portal's offline tool format exactly. Upload it at gstn.gov.in under GSTR-1 > Upload JSON.",
         "The `fp` (filing period) field uses MMYYYY format (e.g. '012026' for January 2026) as required by the portal.",
-        "Financial year (`fy`) is auto-detected from the business's `financialYearStart` setting (default April).",
+        "The response also carries `financialYear` (e.g. `\"2025-26\"` for January 2026). The GST financial year is always April to March, whatever financial year the business keeps its books on (`financialYearStart` moves only the accounting reports).",
         "Requires `Report:read` permission.",
       ],
       relatedEndpoints: ["gst-gstr1", "gst-gstr1csv"],
@@ -387,16 +387,16 @@ with open(data["filename"], "w") as f:
       auth: "business",
       requiredRole: "viewer",
       input: [
-        { name: "year", type: "number", required: true, description: "Calendar year (2020–2099)" },
-        { name: "quarter", type: "number", required: true, description: "Quarter number (1–4). Q1 = Jan-Mar, Q2 = Apr-Jun, Q3 = Jul-Sep, Q4 = Oct-Dec." },
+        { name: "year", type: "number", required: true, description: "Start year of the GST financial year (2020–2099): 2025 means FY 2025-26, April 2025 to March 2026." },
+        { name: "quarter", type: "number", required: true, description: "GST quarter number (1–4). Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar of the following calendar year." },
       ],
       output: {
         description: "Total taxable value, tax payable at composition rate, and quarter date range.",
         example: {
           taxableValue: "450000.00",
           taxPayable: "4500.00",
-          quarterStart: "2026-01-01T00:00:00.000Z",
-          quarterEnd: "2026-03-31T23:59:59.000Z",
+          quarterStart: "2026-04-01T00:00:00.000Z",
+          quarterEnd: "2026-06-30T23:59:59.999Z",
         },
       },
       codeExamples: {
@@ -405,7 +405,7 @@ with open(data["filename"], "w") as f:
   -H "x-business-id: YOUR_BUSINESS_ID"`,
         javascript: `const cmp = await trpc.gst.cmp08.query({
   year: 2026,
-  quarter: 1, // Q1 = Jan-Mar
+  quarter: 1, // Q1 = Apr-Jun of FY 2026-27
 });
 console.log("Taxable value:", cmp.taxableValue);
 console.log("Tax payable (1%):", cmp.taxPayable);`,
@@ -425,8 +425,9 @@ print(f"Tax payable: Rs. {cmp['taxPayable']}")`,
       gotchas: [
         "Requires `Report:read` permission.",
         "The default composition rate is 1% (for traders/manufacturers). Restaurants pay 5%, service providers pay 6% — the endpoint currently defaults to 1%.",
-        "CMP-08 is filed quarterly by the 18th of the month following the quarter (e.g. Q1 Jan-Mar due by April 18).",
-        "Quarters are calendar quarters (Q1 = Jan-Mar), not financial year quarters. This differs from some GST contexts where Q1 starts in April.",
+        "CMP-08 is filed quarterly by the 18th of the month following the quarter (e.g. Q1 Apr-Jun is due by July 18).",
+        "Quarters are the GST financial-year quarters (Q1 = Apr-Jun), and `year` is the start year of the financial year. Before 0.10.1 they were calendar quarters (Q1 = Jan-Mar of `year`); a stored call that passed `quarter: 1` now returns a different period.",
+        "The GST financial year is always April to March; the business's own `financialYearStart` setting does not change it.",
         "Only sale invoices with status != 'cancelled' are included in the taxable value calculation.",
       ],
       relatedEndpoints: ["gst-gstr1", "gst-gstr3b"],
