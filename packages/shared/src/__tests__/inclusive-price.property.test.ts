@@ -69,7 +69,7 @@ function randomCase(r: () => number) {
   // prices skew small (₹0.01 .. ₹99) and large (up to ₹1,00,000); paise matter most
   const paise = r() < 0.5 ? int(r, 1, 9999) : int(r, 1, 10_000_000);
   const price = ref.fmt(BigInt(paise));
-  const qty = r() < 0.5 ? String(int(r, 1, 200)) : `${int(r, 0, 99)}.${String(int(r, 1, 999)).padStart(3, "0")}`.replace(/^0\./, "0.");
+  const qty = r() < 0.5 ? String(int(r, 1, 200)) : `${int(r, 0, 99)}.${String(int(r, 1, 999)).padStart(3, "0")}`;
   return { price, qty: Number(qty) > 0 ? qty : "1", tax: pick(r, RATES), disc: pick(r, DISCOUNTS) };
 }
 

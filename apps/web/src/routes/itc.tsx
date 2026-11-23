@@ -1,4 +1,5 @@
 import { businessYearMonth } from "@hisaabo/shared";
+import { usePersistedTab } from "@/hooks/usePersistedTab";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -28,7 +29,8 @@ const months = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-type ITCTab = "dashboard" | "ledger" | "aging" | "utilization" | "gstr3b-t4";
+const ITC_TABS = ["dashboard", "ledger", "aging", "utilization", "gstr3b-t4"] as const;
+type ITCTab = (typeof ITC_TABS)[number];
 
 const itcBlockReasons = [
   "motor_vehicle", "food_beverage", "personal", "membership",
@@ -106,14 +108,7 @@ function ITCPage() {
   const now = businessYearMonth(new Date());
   const [year, setYear] = useState(now.year);
   const [month, setMonth] = useState(now.month);
-  const [activeTab, setActiveTabRaw] = useState<ITCTab>(
-    () => (localStorage.getItem("hisaabo_itc_tab") as ITCTab) || "dashboard",
-  );
-
-  const setActiveTab = (tab: ITCTab) => {
-    setActiveTabRaw(tab);
-    localStorage.setItem("hisaabo_itc_tab", tab);
-  };
+  const [activeTab, setActiveTab] = usePersistedTab<ITCTab>("hisaabo_itc_tab", ITC_TABS, "dashboard");
 
   const years = Array.from({ length: 5 }, (_, i) => now.year - i);
   const returnPeriod = returnPeriodString(year, month);
