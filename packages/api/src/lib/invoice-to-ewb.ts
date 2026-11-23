@@ -16,7 +16,7 @@
 
 import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
-import { money, splitDocumentGst, resolveState, supplyKind } from "@hisaabo/shared";
+import { money, splitDocumentGst, resolveState, supplyKind, unitToUqc } from "@hisaabo/shared";
 import { formatIstDate } from "./gst-period.js";
 import { resolveLineHsns } from "./hsn-check.js";
 
@@ -158,35 +158,12 @@ function parseStateCode(code: string | null | undefined): number {
 }
 
 /**
- * Map item unit to NIC-recognised unit code.
- * NIC has ~40 units; we map our enum values to the closest NIC code.
+ * Map item unit to the NIC unit code: the one map shared with the GSTR-1 HSN summary and the e-invoice
+ * (@hisaabo/shared uqc.ts). This file's own map sent codes that are not NIC units ("FT", "INH", "PAR",
+ * "PKT", "TNE", "JAR") and "BDL" (bundles) for a bunch. A unit with no code is "OTH".
  */
 function mapUnit(unit: string | null): string {
-  if (!unit) return "OTH";
-  const map: Record<string, string> = {
-    pcs: "NOS",
-    kg:  "KGS",
-    g:   "GMS",
-    l:   "LTR",
-    ml:  "MLT",
-    m:   "MTR",
-    cm:  "CMS",
-    ft:  "FT",
-    in:  "INH",
-    box: "BOX",
-    dozen: "DOZ",
-    pair:  "PAR",
-    set:   "SET",
-    pkt:   "PKT",
-    bag:   "BAG",
-    ton:   "TNE",
-    btl:   "BTL",
-    bun:   "BDL",
-    jar:   "JAR",
-    pack:  "PAC",
-    other: "OTH",
-  };
-  return map[unit] ?? "OTH";
+  return unitToUqc(unit) ?? "OTH";
 }
 
 // ── Main mapper ───────────────────────────────────────────────────────────────

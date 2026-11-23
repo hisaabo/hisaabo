@@ -207,7 +207,7 @@ with open(data["filename"], "w") as f:
       method: "query",
       path: "gst.gstr1Json",
       title: "Export GSTR-1 as Portal JSON",
-      description: "Generate GSTR-1 data in the exact JSON schema accepted by the GST portal's offline tool. Users can download this JSON and upload it directly to gstn.gov.in instead of manually entering invoice data. Includes the business GSTIN, financial year, and filing period in the portal-required format.",
+      description: "Generate GSTR-1 data in the JSON format of the GST portal's offline tool: B2B, B2CL, B2CS and credit / debit note (CDNR) rows with one entry per GST rate, and the HSN summary (Table 12). The format follows the offline tool as third parties document it and has not been checked against an official GSTN schema: validate the file in the offline tool or the portal before filing. The call fails with PRECONDITION_FAILED, naming what to fix, while a sale line has no usable HSN, a note is to an unregistered customer, a document's lines do not add up to its totals, or a customer's state is not a GST state.",
       auth: "business",
       requiredRole: "viewer",
       input: [

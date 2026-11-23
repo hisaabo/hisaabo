@@ -50,6 +50,7 @@ test itself.
 | `24-gstr1-json-dates` | GSTR-1 portal JSON, CSV and statement dates are the IST day (IST-midnight inputs); period upper bound takes microseconds | pass |
 | `25-cmp08` | CMP-08 counts what GSTR-1 / 3B count: invoices only, net of credit notes and returns, no quotations / challans / deleted / cancelled; IST quarter edges | pass |
 | `26-intra-inter-state` | one intra / inter-state decision in GSTR-1, GSTR-3B, the ledger, the IRP and the e-way bill: GSTIN-only parties, GSTIN beats a wrong stored code (IRP / EWB refuse it), Andhra Pradesh 28 = 37, invalid code `50` ignored, nothing on file = supplier's state | pass |
+| `27-gstr1-json-rows` | GSTR-1 portal JSON: rate-wise `itms` for B2B / B2CL / CDNR, B2CS by supply type + pos + rate, Table 12 `val` and service `NA`, UQC from one list, sections tie to Table 12 and 3B; refused (naming the document) for unregistered notes, lines not matching totals, a non-GST state | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

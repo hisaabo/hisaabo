@@ -39,7 +39,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { gstr1ToCSV, gstr1ToPortalJson, toUqc, assertGstr1JsonExportable, Gstr1ExportBlockedError, type GSTR1Report } from "../lib/gst-reports.js";
+import { gstr1ToCSV, gstr1ToPortalJson, toUqc, assertGstr1JsonExportable, Gstr1ExportBlockedError, type GSTR1Report, type GSTR1Note, type GSTR1RateRow } from "../lib/gst-reports.js";
 import { units } from "@hisaabo/shared";
 
 // =============================================================================
@@ -619,17 +619,46 @@ describe("HSN aggregation — groups line items by HSN code", () => {
  * Builds a minimal but complete GSTR1Report fixture for CSV testing.
  * Using a factory avoids repetition while keeping individual tests readable.
  */
-function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
+type OldB2b = Omit<GSTR1Report["b2b"][number], "items" | "interState"> & Partial<Pick<GSTR1Report["b2b"][number], "items" | "interState">>;
+type OldNote = Omit<GSTR1Note, "items" | "interState"> & Partial<Pick<GSTR1Note, "items" | "interState">>;
+type ReportOverrides = Omit<Partial<GSTR1Report>, "b2b" | "creditNotes" | "debitNotes"> & {
+  b2b?: OldB2b[];
+  creditNotes?: OldNote[];
+  debitNotes?: OldNote[];
+};
+
+/**
+ * Fixture convenience: a document written without rate-wise rows gets ONE row whose rate is read off its
+ * own totals (tax / taxable). Tests that are about the rows themselves pass `items` explicitly.
+ */
+function oneRate(taxable: number, cgst: number, sgst: number, igst: number): GSTR1RateRow[] {
+  const tax = cgst + sgst + igst;
+  return [{ taxRate: taxable > 0 ? Math.round((tax / taxable) * 100) : 0, taxableValue: taxable, cgst, sgst, igst }];
+}
+function withRows(o: ReportOverrides): Partial<GSTR1Report> {
+  const out: Record<string, unknown> = { ...o };
+  if (o.b2b) out.b2b = o.b2b.map((r) => ({ interState: r.igst > 0, items: oneRate(r.taxableValue, r.cgst, r.sgst, r.igst), ...r }));
+  for (const key of ["creditNotes", "debitNotes"] as const) {
+    const notes = o[key];
+    if (notes) out[key] = notes.map((n) => ({ interState: n.igst > 0, items: oneRate(parseFloat(n.taxableAmount), n.cgst, n.sgst, n.igst), ...n }));
+  }
+  return out as Partial<GSTR1Report>;
+}
+
+function makeReport(overrides: ReportOverrides = {}): GSTR1Report {
   return {
     period: "Apr 2025",
     businessGstin: "27AAAPL1234C1ZV",
     businessName: "Laxmi Enterprises",
     b2b: [],
     b2cLarge: [],
+    b2cLargeInvoices: [],
     b2cSmall: [],
+    b2cSmallRows: [],
     hsn: [],
     hsnMissing: [],
     hsnInvalid: [],
+    portalIssues: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -639,7 +668,7 @@ function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     totalTax: 0,
     totalInvoiceValue: 0,
     invoiceCount: 0,
-    ...overrides,
+    ...withRows(overrides),
   };
 }
 
@@ -914,17 +943,20 @@ describe("gstr1ToCSV — period format validation", () => {
  * Builds a minimal GSTR1Report for portal JSON testing.
  * Mirrors makeReport() but with concrete data matching the portal schema examples.
  */
-function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
+function makePortalReport(overrides: ReportOverrides = {}): GSTR1Report {
   return {
     period: "Aug 2025",
     businessGstin: "27AABCA0000R1ZM",
     businessName: "Test Business",
     b2b: [],
     b2cLarge: [],
+    b2cLargeInvoices: [],
     b2cSmall: [],
+    b2cSmallRows: [],
     hsn: [],
     hsnMissing: [],
     hsnInvalid: [],
+    portalIssues: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -934,7 +966,7 @@ function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     totalTax: 0,
     totalInvoiceValue: 0,
     invoiceCount: 0,
-    ...overrides,
+    ...withRows(overrides),
   };
 }
 
@@ -1140,15 +1172,13 @@ describe("gstr1ToPortalJson — B2B section", () => {
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
     );
-    type ItmDet = { txval: number; iamt: number; camt: number; samt: number; csamt: number };
+    type ItmDet = { txval: number; rt: number; iamt?: number; camt?: number; samt?: number; csamt: number };
     type InvEntry = { itms: Array<{ num: number; itm_det: ItmDet }> };
     type B2BEntry = { ctin: string; inv: InvEntry[] };
     const itm = (json.b2b as B2BEntry[])[0].inv[0].itms[0].itm_det;
-    expect(itm.txval).toBe(10000);
-    expect(itm.iamt).toBe(1800);
-    expect(itm.camt).toBe(0);
-    expect(itm.samt).toBe(0);
-    expect(itm.csamt).toBe(0);
+    expect(itm).toEqual({ txval: 10000, rt: 18, iamt: 1800, csamt: 0 }); // inter-state: IGST only, with the real rate
+    expect(itm.camt).toBeUndefined();
+    expect(itm.samt).toBeUndefined();
   });
 
   it("sets rchrg to 'N' and inv_typ to 'R' for regular invoices", () => {
@@ -1179,123 +1209,82 @@ describe("gstr1ToPortalJson — B2B section", () => {
 
 describe("gstr1ToPortalJson — B2CL section", () => {
   /**
-   * B2C Large invoices are grouped by state code (pos field).
-   * The state name from the report must be mapped to a 2-digit state code.
+   * B2C Large is invoice by invoice (number, date, value, rate-wise rows), grouped by place of supply.
    */
-
-  it("groups b2cLarge entries by state into b2cl array", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cLarge: [{
-          state: "Karnataka",
-          taxableValue: 254237.29,
-          cgst: 0,
-          sgst: 0,
-          igst: 45762.71,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    expect((json.b2cl as unknown[]).length).toBe(1);
+  const invoice = (over: Partial<GSTR1Report["b2cLargeInvoices"][number]> = {}) => ({
+    state: "Karnataka",
+    pos: "29",
+    invoiceNumber: "INV-00009",
+    invoiceDate: "2025-08-15T00:00:00.000Z",
+    totalInvoiceValue: 300000,
+    items: [{ taxRate: 18, taxableValue: 254237.29, cgst: 0, sgst: 0, igst: 45762.71 }],
+    ...over,
   });
 
-  it("b2cl entry has pos field (state code)", () => {
+  it("emits each invoice with its number, date, value and a rate-wise row under its place of supply", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cLargeInvoices: [invoice()] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cl).toEqual([
+      {
+        pos: "29",
+        inv: [
+          {
+            inum: "INV-00009",
+            idt: "15-08-2025",
+            val: 300000,
+            itms: [{ num: 1, itm_det: { txval: 254237.29, rt: 18, iamt: 45762.71, csamt: 0 } }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("two invoices to one state are one pos group; another state is another group; a mixed-rate invoice has one row per rate", () => {
     const json = gstr1ToPortalJson(
       makePortalReport({
-        b2cLarge: [{
-          state: "Karnataka",
-          taxableValue: 254237.29,
-          cgst: 0,
-          sgst: 0,
-          igst: 45762.71,
-        }],
+        b2cLargeInvoices: [
+          invoice(),
+          invoice({ invoiceNumber: "INV-00010", items: [
+            { taxRate: 5, taxableValue: 100000, cgst: 0, sgst: 0, igst: 5000 },
+            { taxRate: 18, taxableValue: 150000, cgst: 0, sgst: 0, igst: 27000 },
+          ] }),
+          invoice({ invoiceNumber: "INV-00011", state: "Delhi", pos: "07" }),
+        ],
       }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
+      "27AABCA0000R1ZM", "2025-26", "082025",
     );
-    type B2CLEntry = { pos: string; inv: unknown[] };
-    const entry = (json.b2cl as B2CLEntry[])[0];
-    expect(entry.pos).toBeDefined();
-    expect(typeof entry.pos).toBe("string");
+    type Group = { pos: string; inv: Array<{ inum: string; itms: Array<{ num: number; itm_det: { rt: number; iamt: number } }> }> };
+    const groups = json.b2cl as Group[];
+    expect(groups.map((g) => [g.pos, g.inv.map((v) => v.inum)])).toEqual([["29", ["INV-00009", "INV-00010"]], ["07", ["INV-00011"]]]);
+    expect(groups[0]!.inv[1]!.itms.map((x) => [x.num, x.itm_det.rt, x.itm_det.iamt])).toEqual([[1, 5, 5000], [2, 18, 27000]]);
   });
 });
 
 describe("gstr1ToPortalJson — B2CS section", () => {
   /**
-   * B2C Small entries use sply_ty (INTRA/INTER), pos, rt (tax rate),
-   * and aggregated tax amounts.
+   * B2C Small is keyed supply type + place of supply + rate. INTER carries the CUSTOMER's state and IGST only;
+   * INTRA the supplier's state and CGST + SGST only. (It used to put the supplier's state on every row and
+   * decide INTRA / INTER from "CGST > 0", so an inter-state row to Karnataka was filed with Maharashtra.)
    */
-
-  it("produces b2cs entries from b2cSmall data", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 50000,
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    expect((json.b2cs as unknown[]).length).toBe(1);
+  const row = (over: Partial<GSTR1Report["b2cSmallRows"][number]>) => ({
+    supplyType: "INTRA" as const, pos: "27", taxRate: 18, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, ...over,
   });
 
-  it("intra-state b2cs entry has sply_ty INTRA when cgst > 0", () => {
-    /**
-     * CGST and SGST are present only for intra-state supplies.
-     * When cgst > 0, the supply type must be "INTRA".
-     */
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 50000,
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    type B2CSEntry = { sply_ty: string };
-    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTRA");
+  it("an intra-state row: INTRA, the supplier's pos, rt, CGST + SGST only", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cSmallRows: [row({})] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cs).toEqual([{ sply_ty: "INTRA", pos: "27", typ: "OE", rt: 18, txval: 50000, camt: 4500, samt: 4500, csamt: 0 }]);
   });
 
-  it("inter-state b2cs entry has sply_ty INTER when igst > 0", () => {
+  it("an inter-state row: INTER, the CUSTOMER's pos, IGST only", () => {
     const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 25000,
-          cgst: 0,
-          sgst: 0,
-          igst: 4500,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
+      makePortalReport({ b2cSmallRows: [row({ supplyType: "INTER", pos: "29", taxableValue: 25000, cgst: 0, sgst: 0, igst: 4500 })] }),
+      "27AABCA0000R1ZM", "2025-26", "082025",
     );
-    type B2CSEntry = { sply_ty: string };
-    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTER");
+    expect(json.b2cs).toEqual([{ sply_ty: "INTER", pos: "29", typ: "OE", rt: 18, txval: 25000, iamt: 4500, csamt: 0 }]);
   });
 
-  it("b2cs entry includes txval and rt fields", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 12,
-          taxableValue: 30000,
-          cgst: 1800,
-          sgst: 1800,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    type B2CSEntry = { txval: number; rt: number };
-    const entry = (json.b2cs as B2CSEntry[])[0];
-    expect(entry.txval).toBe(30000);
-    expect(entry.rt).toBe(12);
+  it("a row whose place of supply is unknown is left out (the export is refused first, see portalIssues)", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cSmallRows: [row({ pos: null })] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cs).toEqual([]);
   });
 });
 
@@ -1502,6 +1491,16 @@ describe("gstr1ToPortalJson — HSN section", () => {
     expect(entry.iamt).toBe(0);
     expect(entry.csamt).toBe(0);
   });
+
+  it("every HSN row carries val, the row's total value (it was missing)", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [{ hsn: "8471", description: "Computers", uqc: "NOS", taxRate: 18, quantity: 10, taxableValue: 100000, cgst: 9000, sgst: 9000, igst: 0, totalValue: 118000 }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025",
+    );
+    expect((json.hsn as { data: Array<{ val: number }> }).data[0]!.val).toBe(118000);
+  });
 });
 
 describe("gstr1ToPortalJson — date formatting", () => {
@@ -1590,9 +1589,9 @@ describe("gstr1ToCSV — formula injection", () => {
 // =============================================================================
 
 describe("toUqc — every unit Hisaabo offers maps to a GST UQC code", () => {
-  // The GST UQC list has no inch, jar or pouch: those are OTH. "pcs" stays NOS (numbers).
+  // The GST UQC list has no foot, inch, jar or pouch: those are OTH. "pcs" stays NOS (numbers).
   const expected: Record<(typeof units)[number], string> = {
-    pcs: "NOS", kg: "KGS", g: "GMS", l: "LTR", ml: "MLT", m: "MTR", cm: "CMS", ft: "FTS",
+    pcs: "NOS", kg: "KGS", g: "GMS", l: "LTR", ml: "MLT", m: "MTR", cm: "CMS", ft: "OTH",
     in: "OTH", box: "BOX", dozen: "DOZ", pair: "PRS", set: "SET", pkt: "PAC", bun: "BUN",
     pouch: "OTH", jar: "OTH", btl: "BTL", bag: "BAG", ton: "TON", pack: "PAC", pet: "NOS",
     person: "NOS", other: "OTH",
@@ -1620,8 +1619,8 @@ describe("Table 12 rows in the portal JSON and the CSV", () => {
     const json = gstr1ToPortalJson(makePortalReport({ hsn: rows }), "27AABCA0000R1ZM", "2025-26", "012026");
     const data = (json.hsn as { data: Array<Record<string, unknown>> }).data;
     expect(data).toEqual([
-      { num: 1, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 12.5, rt: 5, txval: 1250, iamt: 0, camt: 31.25, samt: 31.25, csamt: 0 },
-      { num: 2, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 5, rt: 18, txval: 1100, iamt: 18, camt: 90, samt: 90, csamt: 0 },
+      { num: 1, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 12.5, val: 1312.5, rt: 5, txval: 1250, iamt: 0, camt: 31.25, samt: 31.25, csamt: 0 },
+      { num: 2, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 5, val: 1298, rt: 18, txval: 1100, iamt: 18, camt: 90, samt: 90, csamt: 0 },
     ]);
   });
 

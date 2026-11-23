@@ -20,7 +20,7 @@
  */
 
 import type { IRPInvoiceJson } from "./irp-client.js";
-import { money, resolveState, supplyKind, canonicalStateCode, GST_STATE_NAMES, FOREIGN_STATE_CODE } from "@hisaabo/shared";
+import { money, resolveState, supplyKind, canonicalStateCode, unitToUqc, GST_STATE_NAMES, FOREIGN_STATE_CODE } from "@hisaabo/shared";
 import { resolveLineHsns } from "./hsn-check.js";
 import { formatIstDate } from "./gst-period.js";
 
@@ -117,38 +117,14 @@ export interface IRPLineItem {
 }
 
 // ── UQC mapping (Hisaabo unit → IRP UQC code) ─────────────────────────────────
-// Reference: https://einvoice1.gst.gov.in/Others/MasterCodes
-
-const UQC_MAP: Record<string, string> = {
-  pcs: "PCS",
-  kg: "KGS",
-  g: "GMS",
-  l: "LTR",
-  ml: "MLT",
-  m: "MTR",
-  cm: "CMT",
-  ft: "FT",
-  in: "INH",
-  box: "BOX",
-  dozen: "DZN",
-  pair: "PAR",
-  set: "SET",
-  pkt: "PAC",
-  bun: "BUN",
-  pouch: "BAG",
-  jar: "JAR",
-  btl: "BTL",
-  bag: "BAG",
-  ton: "TON",
-  pack: "PAC",
-  pet: "NOS",
-  person: "NOS",
-  other: "OTH",
-};
+// The one map shared with the GSTR-1 HSN summary and the e-way bill (@hisaabo/shared uqc.ts). This file
+// used to carry its own, with codes that are not on the UQC list ("CMT", "FT", "INH", "DZN", "PAR", "JAR").
+// "pcs" stays "PCS" (valid, and what every IRN so far carries); the shared map says "NOS" for it.
 
 function toUQC(unit: string | null | undefined): string {
   if (!unit) return "OTH";
-  return UQC_MAP[unit.toLowerCase()] ?? "OTH";
+  if (unit.trim().toLowerCase() === "pcs") return "PCS";
+  return unitToUqc(unit) ?? "OTH";
 }
 
 // ── Document type mapping ──────────────────────────────────────────────────────
