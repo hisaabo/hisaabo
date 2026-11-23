@@ -8,7 +8,12 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useCan } from "@/hooks/useCan";
-import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { usePricePropagation } from "@/hooks/usePricePropagation";
+import {
+  calcLineItem, calcInvoiceTotals, money, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  inclusiveTieOut, autoRoundOff,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { QuickPartyCreate } from "@/components/QuickPartyCreate";
 import { QuickItemCreate, type QuickItemCreateResult } from "@/components/QuickItemCreate";
 
@@ -67,7 +72,24 @@ interface LineItem {
   discountPercent: string;
   selectedUnit?: string;
   conversionFactor?: string;
+  /** Product variant the line was billed in (kept when editing a document made elsewhere). */
+  variantId?: string;
   availableUnits?: UnitOption[];
+  /**
+   * The rate the Price field held when the line was picked or loaded. A rate that
+   * still equals it was not edited, so it never proposes a catalog price update.
+   */
+  originalUnitPrice?: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax", sale side), when the Price
+   * field was derived from it. The Price field is always the tax-exclusive rate: the bill adds
+   * the GST on top, so the saved ₹118 incl. 18% starts the line at ₹100.00. Editing the GST %
+   * re-derives the rate from this price (the shelf price stays ₹118); typing a rate yourself
+   * clears it (you are now stating the exclusive rate).
+   */
+  inclusivePrice?: string;
+  /** The picked item's sale price includes tax: units picked later are converted the same way. */
+  itemPriceIncludesTax?: boolean;
 }
 
 interface Charge {
@@ -263,6 +285,11 @@ export function DocumentCreator({
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        // Keep the unit / variant the line was billed in: dropping them would
+        // re-save an alternate-unit line as base-unit and skew stock.
+        ...(li.selectedUnit ? { selectedUnit: li.selectedUnit, conversionFactor: li.conversionFactor || undefined } : {}),
+        ...(li.variantId ? { variantId: li.variantId } : {}),
+        originalUnitPrice: li.unitPrice,
       })));
     }
   }, [editData]);
@@ -284,21 +311,37 @@ export function DocumentCreator({
     }
   }
 
-  function handleSuccess() {
+  // "Update saved prices?": what the user accepted for this save. It is written
+  // only after the bill itself saved, and a failure there is a toast, never an
+  // error for the bill.
+  const pricing = usePricePropagation(documentType, invoiceType);
+  const acceptedPricesRef = useRef<PriceUpdateProposal[]>([]);
+
+  function applyAcceptedPrices(savedId: string | undefined) {
+    const accepted = acceptedPricesRef.current;
+    acceptedPricesRef.current = [];
+    void pricing.apply(savedId, accepted);
+  }
+
+  function handleSuccess(data?: { id?: string }) {
     invalidateLists();
     toast.success(isEditing ? `${documentTypeLabels[documentType]} updated` : `${documentTypeLabels[documentType]} created`);
+    applyAcceptedPrices(data?.id ?? editInvoiceId);
     onSuccess?.(partyId || undefined);
     onClose();
   }
 
-  function handleInvoiceCreateSuccess(data: { invoiceNumber: string }) {
+  function handleInvoiceCreateSuccess(data: { id?: string; invoiceNumber: string }) {
     invalidateLists();
     toast.success(`Invoice ${data.invoiceNumber} created`);
+    applyAcceptedPrices(data.id);
     onSuccess?.(partyId || undefined);
     onClose();
   }
 
   function handleError(err: { message: string }) {
+    // The bill did not save, so the prices that were to follow it must not either.
+    acceptedPricesRef.current = [];
     toast.error(isEditing ? "Failed to update document" : "Failed to create document", err.message);
   }
 
@@ -420,28 +463,45 @@ export function DocumentCreator({
     };
   }, [items, charges, invoiceDiscount, invoiceDiscountType, roundOff]);
 
-  // Auto-fill round-off so the grand total floors to a whole rupee, when the
-  // business has "round down to integer" enabled. Stops as soon as the user
-  // edits the field manually (`roundOffOverridden`) so we never silently
-  // override their explicit number.  Edit mode preserves whatever round-off
-  // was saved with the original document.
+  // The document's total before any round-off, and the round-off that brings the lines derived from a
+  // tax-inclusive price back to their shelf total (a bill is tax-exclusive, so a price like ₹10.00 incl. 18%
+  // bills at 9.99; see shared/inclusive-price.ts). Exact integer-paise maths.
+  const rawTotal = useMemo(() => {
+    const activeCharges = charges.filter((c) => c.amount && parseFloat(c.amount) > 0);
+    return calcInvoiceTotals({
+      lineItems: items.map((li) => ({
+        quantity: li.quantity || "0",
+        unitPrice: li.unitPrice || "0",
+        taxPercent: li.taxPercent || "0",
+        discountPercent: li.discountPercent || "0",
+      })),
+      charges: activeCharges.map((c) => ({ amount: c.amount })),
+      invoiceDiscount: invoiceDiscount || "0",
+      invoiceDiscountType,
+      roundOff: "0",
+    }).total;
+  }, [items, charges, invoiceDiscount, invoiceDiscountType]);
+  const tieOut = useMemo(
+    () => inclusiveTieOut(items.map((li) => ({ ...li, quantity: li.quantity || "0", discountPercent: li.discountPercent || "0" }))),
+    [items],
+  );
+  const autoRoundOffValue = autoRoundOff(rawTotal, tieOut, bizDefaultRoundOff);
+
+  // AUTO round-off of a NEW document: brings tax-inclusive lines back to their shelf total, and floors the
+  // grand total to a whole rupee when the business has "round down to integer" on. Stops as soon as the user
+  // edits the field (`roundOffOverridden`) so we never override their explicit number. Edit mode preserves
+  // whatever round-off was saved with the original document.
   useEffect(() => {
     if (isEditing) return;
     if (roundOffOverridden) return;
-    if (!bizDefaultRoundOff) return;
-    const current = parseFloat(roundOff || "0");
-    const rawTotal = totals.total - current;
-    if (!Number.isFinite(rawTotal)) return;
-    const target = (Math.floor(rawTotal) - rawTotal).toFixed(2);
-    if (target !== current.toFixed(2)) {
-      setRoundOff(target);
+    if (money.compare(autoRoundOffValue, roundOff || "0") !== 0) {
+      setRoundOff(autoRoundOffValue);
     }
-  }, [bizDefaultRoundOff, isEditing, roundOffOverridden, totals.total, roundOff]);
+  }, [isEditing, roundOffOverridden, autoRoundOffValue, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {
-    setItems((prev) =>
-      prev.map((li) => (li.id === id ? { ...li, [field]: value } : li))
-    );
+    // applyLineEdit keeps an inclusive-derived rate honest (see shared/inclusive-price.ts)
+    setItems((prev) => prev.map((li) => (li.id === id ? applyLineEdit(li, field, value) : li)));
   }
 
   function selectProduct(lineId: string, productId: string) {
@@ -452,7 +512,7 @@ export function DocumentCreator({
       setItems((prev) =>
         prev.map((li) =>
           li.id === lineId
-            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined }
+            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined, variantId: undefined, originalUnitPrice: undefined, inclusivePrice: undefined, itemPriceIncludesTax: undefined }
             : li
         )
       );
@@ -461,6 +521,9 @@ export function DocumentCreator({
     if (!product) return;
 
     const basePrice = (invoiceType === "sale" ? product.salePrice : product.purchasePrice) || "";
+    // A saved price that includes GST becomes the tax-exclusive rate the bill needs (else it is taxed twice).
+    const includesTax = priceIsTaxInclusive(product, invoiceType);
+    const priceFields = lineFieldsFromItemPrice({ price: basePrice, inclusive: includesTax, taxPercent: product.taxPercent });
     const baseUnit: UnitOption = { unit: product.unit, salePrice: basePrice, conversionFactor: 1 };
     const variants: UnitOption[] = ((product.unitVariants as any[]) || []).map((v: any) => ({
       unit: v.unit,
@@ -482,10 +545,11 @@ export function DocumentCreator({
               // they want one.
               itemName: product.name,
               notes: "",
-              unitPrice: basePrice,
+              ...priceFields,
               taxPercent: product.taxPercent,
               selectedUnit: undefined,
               conversionFactor: undefined,
+              variantId: undefined,
               availableUnits: allUnits.length > 1 ? allUnits : undefined,
             }
           : li
@@ -510,10 +574,15 @@ export function DocumentCreator({
           unitKey === "__base__" ? u.conversionFactor === 1 : u.unit === unitKey
         );
         if (!unit) return li;
+        const priceFields = lineFieldsFromItemPrice({
+          price: unit.salePrice,
+          inclusive: li.itemPriceIncludesTax === true,
+          taxPercent: li.taxPercent,
+        });
         return {
           ...li,
           selectedUnit: unitKey === "__base__" ? undefined : unit.unit,
-          unitPrice: unit.salePrice,
+          ...priceFields,
           conversionFactor: unitKey === "__base__" ? undefined : String(unit.conversionFactor),
         };
       })
@@ -536,9 +605,13 @@ export function DocumentCreator({
               itemName: item.name,
               notes: "",
               unitPrice: price || "",
+              originalUnitPrice: price || "",
+              inclusivePrice: undefined,
+              itemPriceIncludesTax: undefined,
               taxPercent: item.taxPercent || "0",
               selectedUnit: undefined,
               conversionFactor: undefined,
+              variantId: undefined,
               availableUnits: undefined,
             }
           : li
@@ -547,7 +620,7 @@ export function DocumentCreator({
     setQuickItemLineId(null);
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const validItems = items.filter((li) => li.itemName.trim() && li.unitPrice);
     if (validItems.length === 0) {
       toast.error("Add at least one line item with an item name and price");
@@ -577,8 +650,26 @@ export function DocumentCreator({
         discountPercent: li.discountPercent,
         selectedUnit: li.selectedUnit || undefined,
         conversionFactor: li.conversionFactor || undefined,
+        variantId: li.variantId || undefined,
       };
     });
+
+    // One question before saving: update the items' saved prices too? Skipped
+    // (no lookup, no dialog) unless the user can update items and edited a rate
+    // on a catalog-linked line.
+    const decision = await pricing.decide(
+      validItems.map((li) => ({
+        itemId: li.itemId,
+        variantId: li.variantId,
+        selectedUnit: li.selectedUnit,
+        conversionFactor: li.conversionFactor,
+        unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
+        originalUnitPrice: li.originalUnitPrice,
+      })),
+    );
+    if (decision.kind === "back") return;
+    acceptedPricesRef.current = decision.accepted;
 
     const chargesPayload = charges
       .filter((c) => c.label && c.amount && parseFloat(c.amount) > 0)
@@ -669,7 +760,7 @@ export function DocumentCreator({
             type="button"
             className="btn-primary"
             onClick={handleSubmit}
-            disabled={activeMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
+            disabled={activeMutation.isPending || pricing.checking || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {activeMutation.isPending
               ? isEditing ? "Saving..." : "Creating..."
@@ -896,6 +987,17 @@ export function DocumentCreator({
                   </div>
                 </div>
 
+                {/* The saved price included GST: show how the rate was derived. */}
+                {(() => {
+                  const hint = inclusiveBreakdown(li);
+                  return hint ? (
+                    <p className="text-[11px] text-text-tertiary tabular-nums" data-testid="inclusive-hint">
+                      {formatCurrency(hint.inclusive)} incl. GST → {formatCurrency(hint.base)} + {formatCurrency(hint.tax)}
+                      {!hint.ties && ` = ${formatCurrency(hint.total)}`}
+                    </p>
+                  ) : null;
+                })()}
+
                 {/* Row 4: Free-text notes for this line (optional). Stored
                     on the backend as `invoice_items.description` and
                     rendered as italic muted secondary text on the PDF and
@@ -1092,10 +1194,10 @@ export function DocumentCreator({
             <div className="flex justify-between items-center text-sm">
               <div className="flex items-center gap-1.5">
                 <span className="text-text-secondary">Round Off</span>
-                {bizDefaultRoundOff && !isEditing && !roundOffOverridden && (
+                {!isEditing && !roundOffOverridden && (bizDefaultRoundOff || !money.isZero(tieOut)) && (
                   <span
                     className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded text-brand-700 dark:text-brand-400 bg-brand-600/[0.1]"
-                    title="Auto-rounded down to nearest integer (per Settings → Documents). Edit to override."
+                    title="Set automatically: rounded down to a whole rupee when Settings → Documents says so, and brings tax-inclusive prices back to their shelf total. Edit to override."
                   >
                     Auto
                   </span>
@@ -1164,6 +1266,8 @@ export function DocumentCreator({
       initialName={quickItemName}
       invoiceType={invoiceType}
     />
+
+    {pricing.dialog}
 
     <ConfirmDialog
       open={confirmCloseOpen}

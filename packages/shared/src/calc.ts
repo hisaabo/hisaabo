@@ -1,4 +1,6 @@
 import { money } from "./money.js";
+import { divRoundHalfUp, formatPaise, parseDecimal, pow10, toPaiseExact } from "./decimal.js";
+import { splitInclusivePaise } from "./inclusive-price.js";
 
 export interface LineItemInput {
   quantity: string;
@@ -16,23 +18,50 @@ export interface LineItemResult {
   total: string;          // afterDiscount + taxAmount (or original amount if tax-inclusive)
 }
 
+/**
+ * A tax-INCLUSIVE line, in exact integer paise (BigInt): the customer pays
+ *
+ *   gross       = qty x unitPrice                      (round half-up, once)
+ *   total       = gross - discount%                    (the discount is taken off the inclusive amount, once)
+ *   afterDiscount = total / (1 + t)  = round(total x 100 / (100 + t))
+ *   taxAmount   = total - afterDiscount
+ *
+ * so `total` is exactly qty x price less the discount, and `afterDiscount + taxAmount = total`
+ * to the paisa whatever the rounding. (The old float version rounded the per-unit base first and
+ * multiplied after, which drifted from the inclusive total for quantities above 1.)
+ * `subtotal` is the tax-exclusive value before the discount; `discountAmount` = subtotal - afterDiscount.
+ * Throws when an input is not a plain decimal (see `calcLineItem`).
+ */
+function calcInclusiveLine(item: LineItemInput): LineItemResult {
+  const unit = toPaiseExact(item.unitPrice);
+  const qty = parseDecimal(item.quantity);
+  const disc = parseDecimal(item.discountPercent || "0");
+  const tax = parseDecimal(item.taxPercent || "0");
+  // Falling through to the tax-exclusive formula here would silently bill a tax-inclusive price as if it were
+  // exclusive (₹118 incl. 18% -> 118 + 21.24): refuse instead. Validated input is always a plain decimal, so this
+  // is only reachable from a half-typed form field (".5", "2.", "1e-1"), which the forms already catch.
+  if (unit === null) throw new Error(`calcLineItem: unit price "${item.unitPrice}" is not a plain amount`);
+  if (!qty) throw new Error(`calcLineItem: quantity "${item.quantity}" is not a plain number`);
+  if (!disc) throw new Error(`calcLineItem: discount "${item.discountPercent}" is not a plain percentage`);
+  if (!tax) throw new Error(`calcLineItem: GST rate "${item.taxPercent}" is not a plain percentage`);
+
+  const gross = divRoundHalfUp(unit * qty.int, pow10(qty.scale));
+  const discountOnGross = divRoundHalfUp(gross * disc.int, 100n * pow10(disc.scale));
+  const total = gross - discountOnGross;
+
+  const subtotal = splitInclusivePaise(gross, tax).base;
+  const afterDiscount = splitInclusivePaise(total, tax).base;
+  return {
+    subtotal: formatPaise(subtotal),
+    discountAmount: formatPaise(subtotal - afterDiscount),
+    afterDiscount: formatPaise(afterDiscount),
+    taxAmount: formatPaise(total - afterDiscount),
+    total: formatPaise(total),
+  };
+}
+
 export function calcLineItem(item: LineItemInput): LineItemResult {
-  if (item.taxInclusive) {
-    // Tax-inclusive: unitPrice already includes tax
-    // Back-calculate: base = price / (1 + tax/100), tax = price - base
-    const grossPerUnit = money.toNumber(item.unitPrice);
-    const taxRate = money.toNumber(item.taxPercent);
-    const basePerUnit = grossPerUnit / (1 + taxRate / 100);
-    const basePrice = basePerUnit.toFixed(2);
-
-    const subtotal = money.mul(basePrice, item.quantity);
-    const discountAmount = money.percent(subtotal, item.discountPercent);
-    const afterDiscount = money.sub(subtotal, discountAmount);
-    const taxAmount = money.percent(afterDiscount, item.taxPercent);
-    const total = money.add(afterDiscount, taxAmount);
-
-    return { subtotal, discountAmount, afterDiscount, taxAmount, total };
-  }
+  if (item.taxInclusive) return calcInclusiveLine(item);
 
   // Tax-exclusive (default)
   const subtotal = money.mul(item.unitPrice, item.quantity);

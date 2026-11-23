@@ -72,9 +72,11 @@ export function registerInvoiceCommands(program: Command): void {
     .option("--delivery <method>", "Delivery method")
     .option("--notes <text>", "Invoice notes")
     .option("--terms <text>", "Terms and conditions")
+    .option("--update-item-prices", "After saving, also update the saved price of each linked item whose explicit --rate differs (needs permission to update items; the invoice is saved either way)")
     .option("-y, --yes", "Skip confirmation prompts")
     .action(async (opts) => {
       await invoiceCreateCommand({
+        updateItemPrices: opts.updateItemPrices,
         json: opts.json,
         party: opts.party,
         partyId: opts.partyId,

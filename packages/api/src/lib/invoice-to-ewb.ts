@@ -20,6 +20,14 @@ import { money, splitDocumentGst, resolveState, supplyKind, unitToUqc } from "@h
 import { formatIstDate } from "./gst-period.js";
 import { resolveLineHsns } from "./hsn-check.js";
 
+/** The payload built from a stored invoice does not add up to that invoice's stored total (an internal inconsistency). */
+export class EWBPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EWBPayloadError";
+  }
+}
+
 // ── Input types ───────────────────────────────────────────────────────────────
 
 export interface InvoiceForEWB {
@@ -31,6 +39,10 @@ export interface InvoiceForEWB {
   subtotal: string;
   taxAmount: string;
   totalAmount: string;
+  /** Invoice-level discount, additional charges and round-off as stored; they make up `otherValue` (absent = 0). */
+  discountAmount?: string | null;
+  additionalCharges?: string | null;
+  roundOff?: string | null;
   isReverseCharge: boolean;
   // Party
   partyGstin: string | null;
@@ -232,16 +244,14 @@ export function mapInvoiceToEWB(
     { gstin: invoice.partyGstin, stateCode: invoice.partyStateCode },
   ) === "inter";
 
-  // Aggregate tax values
-  let totalTax = 0;
+  // Every amount comes from the line's STORED values (taxable = total - tax, after the line discount), not from
+  // qty x unitPrice: an online-store order of tax-inclusive items stores the exact inclusive amounts next to the
+  // tax-exclusive rate, and a discounted line's taxable value is not qty x rate. The items then add up to the
+  // invoice's stored subtotal and tax exactly.
   const itemList: EWBItemPayload[] = lineItems.map((li, idx) => {
     const taxPct   = parseFloat(li.taxPercent) || 0;
     const qty      = parseFloat(li.quantity) || 0;
-    const price    = parseFloat(li.unitPrice) || 0;
-    const taxAmt   = parseFloat(li.taxAmount) || 0;
-    const taxable  = qty * price; // pre-tax amount per line
-
-    totalTax += taxAmt;
+    const taxable  = money.sub(li.totalAmount, li.taxAmount); // stored pre-tax amount of the line
 
     const rates = splitTaxRate(taxPct, interState);
 
@@ -258,13 +268,33 @@ export function mapInvoiceToEWB(
       sgstRate: rates.sgstRate,
       igstRate: rates.igstRate,
       cessRate: 0,
-      taxableAmount: Math.round(taxable * 100) / 100,
+      taxableAmount: money.toNumber(taxable),
     };
   });
 
-  const totalTaxRounded = Math.round(totalTax * 100) / 100;
+  const totalTaxRounded = money.toNumber(money.sum(lineItems.map((li) => li.taxAmount)));
   const taxSplit = splitTax(totalTaxRounded, lineItems.map((li) => li.taxAmount), interState);
-  const totalValue = parseFloat(invoice.subtotal) || 0;
+  // The header is the stored invoice's. NIC: totInvValue = totalValue + cgstValue + sgstValue + igstValue + cessValue + otherValue,
+  // where totalValue is the taxable value (the items, net of line discounts) and otherValue carries what is not tax and not
+  // an item: additional charges + round-off - the invoice-level discount (it may be negative).
+  const totalValue = money.sum(itemList.map((i) => i.taxableAmount.toFixed(2)));
+  const otherValue = money.sub(
+    money.add(invoice.additionalCharges ?? "0", invoice.roundOff ?? "0"),
+    invoice.discountAmount ?? "0",
+  );
+  const totInvValue = money.add(invoice.totalAmount, "0");
+  const addsUpTo = money.add(
+    money.add(totalValue, money.sum([taxSplit.cgst, taxSplit.sgst, taxSplit.igst].map((v) => v.toFixed(2)))),
+    otherValue,
+  );
+  if (money.compare(addsUpTo, totInvValue) !== 0) {
+    throw new EWBPayloadError(
+      `The e-way bill for ${invoice.invoiceNumber} does not add up to the invoice total, so it was not sent: ` +
+        `totalValue ${totalValue} + GST ${money.sum([taxSplit.cgst, taxSplit.sgst, taxSplit.igst].map((v) => v.toFixed(2)))} + ` +
+        `otherValue ${otherValue} = ${addsUpTo}, but the stored total is ${totInvValue}. ` +
+        `The line amounts and the invoice totals disagree; correct the invoice before generating the e-way bill.`,
+    );
+  }
 
   return {
     supplyType:     isSale ? "O" : "I",
@@ -284,11 +314,13 @@ export function mapInvoiceToEWB(
     toPlace:        toCity.slice(0, 50),
     toPincode:      toPin,
     toStateCode:    toState,
-    totalValue:     Math.round(totalValue * 100) / 100,
+    totalValue:     money.toNumber(totalValue),
     cgstValue:      taxSplit.cgst,
     sgstValue:      taxSplit.sgst,
     igstValue:      taxSplit.igst,
     cessValue:      0,
+    otherValue:     money.toNumber(otherValue),
+    totInvValue:    money.toNumber(totInvValue),
     transMode:      transportModeCode(transport.transportMode),
     transDistance:  transport.distance,
     transporterId:  transport.transporterId,

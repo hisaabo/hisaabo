@@ -20,9 +20,9 @@ import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/
 import { warnIfMultiOrgSelfHosted } from "./lib/tenant-businesses.js";
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
+import { priceStoreOrderLines } from "./lib/store-order-pricing.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, withDedicatedTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -1857,16 +1857,8 @@ app.post("/store/:slug/order", async (c) => {
     });
   }
 
-  // Calculate totals using shared library
-  const totals = calcInvoiceTotals({
-    lineItems: lineItemInputs.map((li) => ({
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-      taxPercent: li.taxPercent,
-      discountPercent: li.discountPercent,
-      taxInclusive: li.taxInclusive,
-    })),
-  });
+  // Totals on the saved (possibly tax-inclusive) prices, plus the invoice rows (tax-exclusive rate per line)
+  const { totals, rows: invoiceLineRows } = priceStoreOrderLines(lineItemInputs);
 
   // Check minimum order amount
   if (biz.storeMinOrderAmount) {
@@ -1947,35 +1939,8 @@ app.post("/store/:slug/order", async (c) => {
         source: "online_store",
       }).returning();
 
-      // Create invoice line items
-      const processedLineItems = lineItemInputs.map((li, idx) => {
-        const calc = calcLineItem({
-          quantity: li.quantity,
-          unitPrice: li.unitPrice,
-          taxPercent: li.taxPercent,
-          discountPercent: li.discountPercent,
-          taxInclusive: li.taxInclusive,
-        });
-        return {
-          invoiceId: invoice.id,
-          itemId: li.itemId,
-          // Online store orders: snapshot the item name into the required
-          // itemName column. Notes column stays null — store customers
-          // don't submit per-line comments through the ordering UI.
-          itemName: li.name,
-          description: null,
-          quantity: li.quantity,
-          unitPrice: li.unitPrice,
-          taxPercent: li.taxPercent,
-          taxAmount: calc.taxAmount,
-          discountPercent: "0",
-          totalAmount: calc.total,
-          sortOrder: idx,
-          conversionFactor: li.conversionFactor ?? "1",
-          selectedUnit: li.selectedUnit ?? null,
-          variantId: li.variantId ?? null,
-        };
-      });
+      // Create invoice line items (the tax-exclusive rate per line; the totals are the order's, unchanged)
+      const processedLineItems = invoiceLineRows.map((row, idx) => ({ ...row, invoiceId: invoice.id, sortOrder: idx }));
 
       await tx.insert(invoiceItems).values(processedLineItems);
 

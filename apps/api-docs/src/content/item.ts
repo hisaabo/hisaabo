@@ -137,7 +137,7 @@ resp = httpx.get(
         { name: "salePrice", type: "string (decimal)", required: false, description: "Default sale price (used on invoices)" },
         { name: "purchasePrice", type: "string (decimal)", required: false, description: "Default purchase price" },
         { name: "taxPercent", type: "string (decimal)", required: false, description: "Default GST rate applied to line items", default: "0" },
-        { name: "taxInclusive", type: "boolean", required: false, description: "Whether `salePrice` already includes tax", default: "false" },
+        { name: "taxInclusive", type: "boolean", required: false, description: "Whether the SALE price already includes GST (\"Price includes tax\"; purchase prices are always tax-exclusive). A bill line is tax-exclusive, so the invoice form, mobile, POS and the CLI's default rate convert such a price down when they put it on a bill (118.00 incl. 18% becomes 100.00 + 18.00); `invoice.create` itself always takes the exclusive rate in `unitPrice`.", default: "false" },
         { name: "stockQuantity", type: "string (decimal)", required: false, description: "Opening stock quantity (3 decimal places)", default: "0" },
         { name: "lowStockAlert", type: "string (decimal)", required: false, description: "Alert threshold — triggers low-stock filter when stock ≤ this value. Also drives the online store's \"Low stock\" label (`runningLow` in the public catalog): shown while stock is above zero and at or below this value" },
         { name: "hsn", type: "string", required: false, description: "HSN/SAC code for GST filing (max 20 chars)" },
@@ -323,7 +323,70 @@ resp = httpx.post(
         "Changing `data.itemType` (product <-> service) is rejected with `BAD_REQUEST` (\"Item type cannot be changed because this item already has invoices, documents or stock movements.\") once the item is referenced by any document line or stock adjustment. Check `hasTransactions` from `item.getById` to know in advance.",
         "Sending the item's current `itemType` unchanged is always allowed.",
       ],
-      relatedEndpoints: ["item-get-by-id"],
+      relatedEndpoints: ["item-get-by-id", "item-update-prices-from-document"],
+    },
+    {
+      id: "item-update-prices-from-document",
+      method: "mutation",
+      path: "item.updatePricesFromDocument",
+      title: "Update Prices From a Bill",
+      description: "Apply the rates typed on a bill to the catalog (\"Update saved prices?\"). Call it AFTER the bill is saved by `invoice.create` / `invoice.update`: it is a second, independent write, so a failure here never blocks or rolls back the bill. Each update names one price slot: the item's base price, one alternate unit's own price (`unit`) or one variant's price (`variantId`), on the `sale` or `purchase` side. All updates run in one transaction (all or nothing) with the item rows locked, and a slot already at the new price is reported `unchanged` and writes nothing, so a retry is harmless. Requires `Item:update` (owner, admin and seller manager; sellers and accountants get `FORBIDDEN`). Every changed slot gets an `audit_log` row (`item.updatePriceFromDocument`: old price, new price, side and, when `documentId` is given, the bill's id, number and type) written in the same transaction, attributed with the caller's source (`mcp`, `webmcp` or none).",
+      auth: "business",
+      requiredRole: "member",
+      input: [
+        { name: "documentId", type: "string (UUID)", required: false, description: "The bill the prices came from. Must be an invoice of this business; every update's `side` must match the bill's type (`sale` / `purchase`). Recorded in the audit trail with the bill number." },
+        { name: "updates", type: "array (1–100)", required: true, description: "Price slots to change (below). The same slot twice in one call is `BAD_REQUEST`." },
+        { name: "updates[].itemId", type: "string (UUID)", required: true, description: "An active item of this business. Anything else fails the whole call with `NOT_FOUND`." },
+        { name: "updates[].side", type: "enum", required: true, description: "Which price: `sale` updates `salePrice`, `purchase` updates `purchasePrice`", enumValues: ["sale", "purchase"] },
+        { name: "updates[].newPrice", type: "string (decimal)", required: true, description: "The new price, > 0, at most 2 decimals. In the saved price's basis unless `priceIncludesTax` says otherwise." },
+        { name: "updates[].unit", type: "string", required: false, description: "An alternate unit of an `alt_units` item whose own price changes (e.g. `5 kg`). Omit for the base unit. Not combinable with `variantId`." },
+        { name: "updates[].variantId", type: "string (UUID)", required: false, description: "A variant of a `variants` item whose own price changes. Required for variant items." },
+        { name: "updates[].priceIncludesTax", type: "boolean", required: false, description: "Basis `newPrice` is stated in. Omit when it is the saved price's own basis. If it differs, the server converts at the item's GST rate with exact integer-paise arithmetic." },
+      ],
+      output: {
+        description: "What changed. `updated` lists changed slots, `unchanged` the ones already at the new price.",
+        example: {
+          documentId: "invoice-uuid",
+          updated: [
+            { itemId: "item-uuid", unit: "5 kg", side: "sale", itemName: "Basmati Rice", label: "Basmati Rice (5 kg)", oldPrice: "450.00", newPrice: "480.00" },
+          ],
+          unchanged: [],
+        },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/item.updatePricesFromDocument \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID" \\
+  -d '{"json":{"documentId":"invoice-uuid","updates":[{"itemId":"item-uuid","unit":"5 kg","side":"sale","newPrice":"480.00"}]}}'`,
+        javascript: `// 1. save the bill; 2. then (optionally) update the catalog from it
+const invoice = await trpc.invoice.create.mutate({ /* ... */ });
+try {
+  await trpc.item.updatePricesFromDocument.mutate({
+    documentId: invoice.id,
+    updates: [{ itemId: "item-uuid", side: "sale", newPrice: "480.00" }],
+  });
+} catch (err) {
+  // the invoice is saved either way: tell the user, do not retry the invoice
+}`,
+        python: `import httpx
+
+resp = httpx.post(
+    "https://api.hisaabo.in/api/trpc/item.updatePricesFromDocument",
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
+    json={"json": {"documentId": invoice_id, "updates": [
+        {"itemId": item_id, "side": "sale", "newPrice": "480.00"},
+    ]}},
+)`,
+      },
+      gotchas: [
+        "A bill rate is always TAX-EXCLUSIVE. A SALE price saved \"including tax\" (`taxInclusive: true`) is stored tax-inclusive, so a rate typed on a bill must be converted back before it is sent: 105.00 + 18% GST is `newPrice: \"123.90\"` (10500 x 118 / 100 = 12390 paise). Or send the exclusive rate with `priceIncludesTax: false` and let the server convert at the item's GST rate. PURCHASE prices are always tax-exclusive; `priceIncludesTax: true` on a purchase update is converted down.",
+        "Only invoices propose price updates (not quotations, proformas, challans, credit / debit notes or returns): a `documentId` of another document type is `BAD_REQUEST`.",
+        "Price history (`item.priceHistory`, `priceSummary`) is derived from the bill lines themselves, so the bill already records the price it was made at; this call adds the catalog change and its audit row, not a history row.",
+        "Compare the RATE, never the discounted net: a line discount is not part of the price.",
+        "CLI: `hisaabo invoice create --update-item-prices`; MCP: `update_item_prices` on `invoice_create` / `invoice_update`. Both compare only the rates you stated.",
+      ],
+      relatedEndpoints: ["item-update", "item-get-by-id", "invoice-create"],
     },
     {
       id: "item-rename-unit",

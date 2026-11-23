@@ -98,7 +98,8 @@ const lineItemSchema = objectSchema(
     unitPrice: {
       type: "string",
       pattern: MONEY_PATTERN,
-      description: "Price per unit as a decimal string, no currency symbol: '250.00', '15000.00'.",
+      description:
+        "TAX-EXCLUSIVE price per unit as a decimal string, no currency symbol: '250.00', '15000.00'. GST is added on top using taxPercent. If the linked item's sale price includes GST (item_get returns taxInclusive: true), send the price WITHOUT the GST, e.g. 118.00 at 18% is '100.00', or the customer is taxed twice.",
     },
     taxPercent: {
       type: "string",

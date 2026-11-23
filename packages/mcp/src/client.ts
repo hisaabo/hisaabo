@@ -250,6 +250,9 @@ export class HisaaboClient {
       update(id: string, data: ItemUpdateInput) {
         return c.mutate("item.update", { id, data });
       },
+      updatePricesFromDocument(input: InputOf<"item.updatePricesFromDocument">) {
+        return c.mutate("item.updatePricesFromDocument", input);
+      },
       delete(id: string) {
         return c.mutate("item.delete", { id });
       },

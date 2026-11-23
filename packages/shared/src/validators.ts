@@ -256,6 +256,30 @@ export const createItemSchema = createItemBaseSchema.refine((d) => {
 
 export const updateItemSchema = partialWithoutDefaults(createItemBaseSchema);
 
+// ── Price updates from a bill ──────────────────────────────────
+// `item.updatePricesFromDocument`: "update the saved prices" after a bill was
+// made. One entry per catalog price slot: the item's base price, one alternate
+// unit's own price (`unit`), or one product variant's price (`variantId`).
+export const itemPriceUpdateSchema = z.object({
+  itemId: z.string().uuid(),
+  /** A product variant's price (items in "variants" mode). Not combinable with `unit`. */
+  variantId: z.string().uuid().optional(),
+  /** An alternate unit's own price (items in "alt_units" mode). Omit for the base unit. */
+  unit: z.string().min(1).max(50).optional(),
+  side: z.enum(["sale", "purchase"]),
+  newPrice: decimalStr,
+  /** Basis `newPrice` is stated in. Omit when it is the item's own basis (the default). */
+  priceIncludesTax: z.boolean().optional(),
+}).refine((u) => !(u.variantId && u.unit), { message: "A price update names a variant or a unit, not both" });
+
+export type ItemPriceUpdate = z.infer<typeof itemPriceUpdateSchema>;
+
+export const updatePricesFromDocumentSchema = z.object({
+  /** The bill the prices came from: recorded in the audit trail with its number. */
+  documentId: z.string().uuid().optional(),
+  updates: z.array(itemPriceUpdateSchema).min(1).max(100),
+});
+
 // ── Item Images ────────────────────────────────────────────────
 // Max images kept per item. Enough for a rich gallery without letting a
 // single item balloon storage/catalog payloads.

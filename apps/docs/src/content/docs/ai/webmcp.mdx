@@ -70,7 +70,7 @@ The browser surface is **curated**, not a mirror of the MCP server: it offers th
 | `dashboard_summary` | Read | `readOnlyHint`, `untrustedContentHint` | No | Sales, cash position, receivables for a period |
 | `invoice_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Invoices, filterable by status, party and date |
 | `invoice_get` | Read | `readOnlyHint`, `untrustedContentHint` | No | One invoice with its line items and tax breakdown |
-| `invoice_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Creates an invoice. Opt-in `idempotencyKey` for safe retries, see below |
+| `invoice_create` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Creates an invoice. Opt-in `idempotencyKey` for safe retries, see below. `unitPrice` is tax-exclusive. It does **not** offer the MCP server's `update_item_prices`: changing catalog prices would be a second write the confirmation dialog does not show, so that stays a choice you make in the invoice form ("Update saved prices?") |
 | `invoice_update_status` | Write | `consequentialHint`, `untrustedContentHint` | **Yes** | Marks an invoice sent, back to draft or unfulfilled. It **cannot cancel or void** an invoice |
 | `party_list` | Read | `readOnlyHint`, `untrustedContentHint` | No | Customers and suppliers, with outstanding balances |
 | `party_get` | Read | `readOnlyHint`, `untrustedContentHint` | No | One party with contact details and balance |

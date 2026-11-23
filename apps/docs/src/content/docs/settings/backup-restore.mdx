@@ -4,6 +4,7 @@ description: Export a full backup of your Hisaabo data and restore it into a new
 ---
 
 import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
 
 <ForDesktop>
 
@@ -100,3 +101,9 @@ It depends on your data volume. The archive is gzip-compressed, so a business wi
 The archive itself is not encrypted — it's a standard gzipped tar file. If you need encryption at rest, encrypt the file after downloading (e.g. with `gpg` or your storage provider's encryption).
 
 </ForDesktop>
+
+<ForMobile>
+
+The mobile app has no backup or restore screen. Backing up a complete organization and restoring it into a new one are done from the **web app or the desktop app**: sign in on a computer, then open **Settings > Data**. The mobile app only shows your data from the server, so nothing is stored on the phone that a backup would need.
+
+</ForMobile>

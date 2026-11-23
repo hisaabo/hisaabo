@@ -1,11 +1,14 @@
+import { defaultBillRate, savedPriceFor, priceWord } from "../../default-rate.js";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError, type InvoiceLineItemInput } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 import { formatAmount, formatINR, todayISO } from "../../format.js";
-import { deliveryMethods } from "@hisaabo/shared";
+import { deliveryMethods, propagateBillPrices, type PriceLineInput, type PricePropagationOutcome } from "@hisaabo/shared";
 
 interface CreateOpts {
+  /** After saving, update the saved price of every linked item whose explicit --rate differs. */
+  updateItemPrices?: boolean;
   json?: boolean;
   party?: string;
   partyId?: string;
@@ -80,6 +83,9 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
 
     // ── Build line items ────────────────────────────────────────────
     const lineItems: InvoiceLineItemInput[] = [];
+    // Lines whose rate the user TYPED. A rate defaulted from the catalog changed nothing, so it must
+    // never propose a price.
+    const typedRateLines: PriceLineInput[] = [];
 
     if (opts.items && opts.items.length > 0) {
       // Flag-based item creation
@@ -91,8 +97,8 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         if (!unitPrice) {
           // Try to find the item and use its sale price
           const items = await client.item.list({ search: itemName, limit: 3 });
-          if (items.data.length > 0 && items.data[0]?.salePrice) {
-            unitPrice = items.data[0].salePrice;
+          if (items.data.length > 0 && savedPriceFor(items.data[0]!, invoiceType)) {
+            unitPrice = defaultBillRate(items.data[0]!, invoiceType);
             lineItems.push({
               itemId: items.data[0].id,
               itemName: items.data[0].name,
@@ -101,7 +107,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
               taxPercent: items.data[0].taxPercent,
             });
           } else {
-            fatalError(`Item not found or has no price: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
+            fatalError(`Item not found or has no ${priceWord(invoiceType)}: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
           }
         } else {
           // Try to find item by name for linking
@@ -115,6 +121,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
               unitPrice,
               taxPercent: matched.taxPercent,
             });
+            typedRateLines.push({ itemId: matched.id, unitPrice, taxPercent: matched.taxPercent });
           } else {
             lineItems.push({ itemName, quantity: qty, unitPrice });
           }
@@ -141,7 +148,8 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         if (items.data.length > 0) {
           items.data.forEach((it, i) => {
             const stock = it.itemType === "service" ? "-" : String(it.stockQuantity);
-            const price = it.salePrice ? formatINR(it.salePrice) : "no price";
+            const shown = savedPriceFor(it, invoiceType);
+            const price = shown ? formatINR(shown) : `no ${priceWord(invoiceType)}`;
             console.log(`      ${i + 1}  ${it.name.padEnd(20)} ${price.padEnd(12)}  Stock: ${stock}`);
           });
           const choice = await prompt(rl, "    Item [1] (or 0 to use as description): ");
@@ -151,7 +159,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
             if (selected) {
               itemId = selected.id;
               description = selected.name;
-              defaultPrice = selected.salePrice ?? "";
+              defaultPrice = defaultBillRate(selected, invoiceType);
               defaultTax = selected.taxPercent;
             }
           }
@@ -162,6 +170,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
 
         const rateStr = await prompt(rl, `    Unit Price [${defaultPrice || "0.00"}]: `);
         const unitPrice = rateStr.trim() || defaultPrice || "0.00";
+        const typedRate = rateStr.trim() !== "";
 
         const taxStr = await prompt(rl, `    Tax % [${defaultTax}]: `);
         const taxPercent = taxStr.trim() || defaultTax;
@@ -173,6 +182,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         console.log(`    > ${description}  x${qty}  @${formatAmount(unitPrice)}  ${taxPercent}% tax  = ${formatAmount(String(amount))}\n`);
 
         lineItems.push({ itemId, itemName: description, quantity: qty, unitPrice, taxPercent, discountPercent });
+        if (typedRate && itemId) typedRateLines.push({ itemId, unitPrice, taxPercent });
         itemNum++;
       }
       rl.close();
@@ -249,14 +259,42 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
       lineItems,
     });
 
+    // The bill is saved. Updating the saved item prices is a second, independent step:
+    // whatever happens there is reported and never turns into a failed `invoice create`.
+    let priceUpdate: PricePropagationOutcome | undefined;
+    if (opts.updateItemPrices) {
+      priceUpdate = await propagateBillPrices({
+        client: {
+          getItem: (id) => client.item.get(id).catch(() => null),
+          applyUpdates: (input) => client.item.updatePricesFromDocument(input),
+        },
+        documentType: invoice.documentType,
+        side: invoiceType,
+        documentId: invoice.id,
+        lines: typedRateLines,
+      });
+    }
+
     if (opts.json) {
-      outputJSON(invoice);
+      outputJSON(priceUpdate ? { ...invoice, itemPriceUpdate: priceUpdate } : invoice);
       return;
     }
 
     success(`Created: ${invoice.invoiceNumber} for ${formatINR(invoice.totalAmount)}`);
     console.log(`  View:    hisaabo invoice get ${invoice.invoiceNumber}`);
     console.log(`  PDF:     hisaabo invoice pdf ${invoice.invoiceNumber}\n`);
+
+    if (priceUpdate) {
+      for (const u of priceUpdate.updated) {
+        console.log(`  Item price (${u.side}): ${u.label}  ${u.oldPrice === null ? "(none)" : formatINR(u.oldPrice)} -> ${formatINR(u.newPrice)}`);
+      }
+      for (const s of priceUpdate.skipped) console.log(`  Item price not updated: ${s.itemName}: ${s.reason}.`);
+      if (priceUpdate.status === "nothing_to_update" && priceUpdate.skipped.length === 0) {
+        console.log("  Item prices: already up to date.");
+      }
+      if (priceUpdate.message) console.error(`  ${priceUpdate.message}`);
+      console.log("");
+    }
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

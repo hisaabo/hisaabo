@@ -51,6 +51,11 @@ test itself.
 | `25-cmp08` | CMP-08 counts what GSTR-1 / 3B count: invoices only, net of credit notes and returns, no quotations / challans / deleted / cancelled; IST quarter edges | pass |
 | `26-intra-inter-state` | one intra / inter-state decision in GSTR-1, GSTR-3B, the ledger, the IRP and the e-way bill: GSTIN-only parties, GSTIN beats a wrong stored code (IRP / EWB refuse it), Andhra Pradesh 28 = 37, invalid code `50` ignored, nothing on file = supplier's state | pass |
 | `27-gstr1-json-rows` | GSTR-1 portal JSON: rate-wise `itms` for B2B / B2CL / CDNR, B2CS by supply type + pos + rate, Table 12 `val` and service `NA`, UQC from one list, sections tie to Table 12 and 3B; refused (naming the document) for unregistered notes, lines not matching totals, a non-GST state | pass |
+| `28-tax-inclusive-items` | Items priced including tax: POS tile rates, an intra-/inter-state bill, purchase side, every document type, 40 random bills tied across invoice, ledger, GSTR-3B and the PDF table | pass |
+| `29-store-order-inclusive-items` | An online-store order of tax-inclusive items: the invoice line holds the exclusive rate, the order total is unchanged, and editing a quantity does not tax the price twice | pass |
+| `30-inclusive-shelf-price-round-off` | A tax-inclusive shelf price that does not bill to the paisa (₹10 incl. 18% = 9.99, ₹41 = 41.01): the invoice round-off brings it back to the shelf total; ledger, GSTR-3B and party balance all at the shelf price | pass |
+| `31-e-document-headers` | E-invoice (IRP) and e-way bill payloads of invoices the routers stored: line discount only, invoice discount only, both, charges + round-off, the store 3 x 99.00 order; NIC header formulas hold exactly | pass |
+| `32-gstr1-inclusive-items` | GSTR-1 portal JSON of a store order of tax-inclusive items (stored taxable 251.69, not qty x rate) and of a shelf-price invoice with round-off: B2B rate rows, Table 12 and GSTR-3B tie; neither invoice is refused | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

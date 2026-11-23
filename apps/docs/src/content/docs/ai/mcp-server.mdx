@@ -461,6 +461,7 @@ Create a sale or purchase invoice.
   notes?: string;
   dueDate?: string;
   deliveryMethod?: "self_pickup" | "hand_delivery" | "courier" | "bus" | "transport" | "post";
+  update_item_prices?: boolean; // default false
 }
 ```
 
@@ -473,8 +474,24 @@ Create a sale or purchase invoice.
   taxAmount: string;
   status: "draft" | "sent" | "paid" | "overdue";
   pdfUrl: string;
+  itemPriceUpdate?: ItemPriceUpdate; // only when update_item_prices was true
 }
 ```
+
+**Rates are tax-exclusive.** `unit_price` is the taxable rate and GST is added on top. If the linked item's sale price includes GST (`item_get` returns `taxInclusive: true`), send the price without the GST: ₹118.00 at 18% is `"100.00"`, or the customer is taxed twice. Purchase prices are always tax-exclusive.
+
+**`update_item_prices: true`** also updates the saved price of every linked item (`item_id`) whose `unit_price` differs from the item's current price: the selling price on a sale, the purchase price on a purchase. Use it when the new price is the new list price; leave it off for a one-off or negotiated price. It is a second write after the invoice is saved, so the invoice exists whatever happens to it, and the result says what happened:
+
+```typescript
+type ItemPriceUpdate = {
+  status: "updated" | "nothing_to_update" | "not_applicable" | "failed";
+  updated: Array<{ label: string; side: "sale" | "purchase"; oldPrice: string | null; newPrice: string }>;
+  skipped: Array<{ itemName: string; reason: string }>; // lines it could not match (a unit renamed since, no variant chosen)
+  message?: string; // why nothing was updated (no permission to edit items, quotations and notes never update prices, ...)
+};
+```
+
+The key's role needs permission to edit items (owner, admin, seller manager); the server refuses anything else and the invoice is still saved. It is applied by `item.updatePricesFromDocument` and recorded in the audit log with source `mcp`, the old and new price and the invoice number. A line's discount is never part of the price: only `unit_price` is compared.
 
 #### `invoice_get`
 
@@ -505,6 +522,7 @@ Edit an existing invoice — update line items, dates, notes, or discount. Only 
   invoice_discount?: string;
   invoice_discount_type?: "amount" | "percent";
   round_off?: string;
+  update_item_prices?: boolean; // only with line_items; same as invoice_create, except that a line resent at the rate it already had on the saved invoice is not a price change
 }
 ```
 

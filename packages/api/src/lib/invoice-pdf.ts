@@ -177,7 +177,7 @@ export function isSameState(data: InvoicePDFData): boolean {
   );
 }
 
-interface GstBreakdown {
+export interface GstBreakdown {
   rate: string;
   taxable: number;
   cgst: number;
@@ -185,7 +185,7 @@ interface GstBreakdown {
   igst: number;
 }
 
-function buildGstBreakdown(data: InvoicePDFData): GstBreakdown[] {
+export function buildGstBreakdown(data: InvoicePDFData): GstBreakdown[] {
   const sameState = isSameState(data);
   const map = new Map<string, GstBreakdown>();
 

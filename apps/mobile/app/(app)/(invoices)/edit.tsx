@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -17,13 +17,17 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
-import { calcInvoiceTotals } from "@hisaabo/shared";
+import {
+  calcInvoiceTotals, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
+import { usePricePropagation } from "../../../src/hooks/usePricePropagation";
 import { pickerDateToISO, storedToPickerDate } from "../../../src/lib/business-day";
 
 interface LineItem {
@@ -35,6 +39,18 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  /** Alternate unit / variant the line was billed in: kept so editing never drops them. */
+  selectedUnit?: string;
+  conversionFactor?: string;
+  variantId?: string;
+  /**
+   * The rate the Rate field held when the line was picked or loaded. A rate that
+   * still equals it was not edited, so it never proposes a catalog price update.
+   */
+  originalUnitPrice?: string;
+  /** The saved price WITH tax the Rate was derived from (a newly picked "Price includes tax" item); see shared/inclusive-price.ts. */
+  inclusivePrice?: string;
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -146,6 +162,7 @@ interface ItemPickerProps {
     salePrice?: string | null;
     purchasePrice?: string | null;
     taxPercent: string;
+    taxInclusive?: boolean | null;
   }) => void;
   onClose: () => void;
 }
@@ -322,6 +339,15 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
         </View>
       </View>
 
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={styles.fieldLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}${hint.ties ? "" : ` = ${formatCurrency(hint.total)}`}`}
+          </Text>
+        ) : null;
+      })()}
+
       <View style={styles.lineTotalRow}>
         <Text style={styles.lineTotalLabel}>Amount</Text>
         <Text style={styles.lineTotalValue}>{formatCurrency(lineTotal)}</Text>
@@ -390,6 +416,11 @@ function InvoiceEditScreenContent() {
             unitPrice: li.unitPrice ?? "0",
             taxPercent: li.taxPercent ?? "0",
             discountPercent: li.discountPercent ?? "0",
+            // Keep the unit / variant the line was billed in: dropping them would
+            // re-save an alternate-unit line as base-unit and skew stock.
+            ...(li.selectedUnit ? { selectedUnit: li.selectedUnit, conversionFactor: li.conversionFactor ?? undefined } : {}),
+            ...(li.variantId ? { variantId: li.variantId } : {}),
+            originalUnitPrice: li.unitPrice ?? "0",
           }))
         );
       }
@@ -397,8 +428,17 @@ function InvoiceEditScreenContent() {
     }
   }, [invoice, initialized]);
 
+  // "Update saved prices?": what the user accepted for this save. It is written
+  // only after the bill itself saved, and a failure there is a toast, never an
+  // error for the bill.
+  const pricing = usePricePropagation(invoice?.documentType, (invoice?.type as "sale" | "purchase" | undefined) ?? "sale");
+  const acceptedPricesRef = useRef<PriceUpdateProposal[]>([]);
+
   const updateMutation = trpc.invoice.update.useMutation({
-    onSuccess: (_data) => {
+    onSuccess: (data) => {
+      const accepted = acceptedPricesRef.current;
+      acceptedPricesRef.current = [];
+      void pricing.apply(data?.id ?? id, accepted);
       utils.invoice.list.invalidate();
       utils.invoice.getById.invalidate({ id: id ?? "" });
       utils.dashboard.summary.invalidate();
@@ -407,6 +447,8 @@ function InvoiceEditScreenContent() {
       router.back();
     },
     onError: (err) => {
+      // The bill did not save, so the prices that were to follow it must not either.
+      acceptedPricesRef.current = [];
       Alert.alert("Error", err.message);
     },
   });
@@ -430,7 +472,7 @@ function InvoiceEditScreenContent() {
     (index: number, field: keyof LineItem, value: string) => {
       setLineItems((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        next[index] = applyLineEdit(next[index]!, field, value);
         return next;
       });
     },
@@ -456,20 +498,31 @@ function InvoiceEditScreenContent() {
       salePrice?: string | null;
       purchasePrice?: string | null;
       taxPercent: string;
+      taxInclusive?: boolean | null;
     }) => {
       const invoiceType = invoice?.type ?? "sale";
       const price =
         invoiceType === "purchase"
           ? item.purchasePrice ?? item.salePrice ?? "0"
           : item.salePrice ?? "0";
+      // A saved price that includes GST becomes the tax-exclusive Rate the bill needs (else it is taxed twice).
+      const priceFields = lineFieldsFromItemPrice({
+        price,
+        inclusive: priceIsTaxInclusive(item, invoiceType as "sale" | "purchase"),
+        taxPercent: item.taxPercent,
+      });
       setLineItems((prev) => {
         const next = [...prev];
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
           itemName: item.name,
-          unitPrice: price,
+          ...priceFields,
           taxPercent: item.taxPercent,
+          // a newly picked item starts in its base unit
+          selectedUnit: undefined,
+          conversionFactor: undefined,
+          variantId: undefined,
         };
         return next;
       });
@@ -481,7 +534,7 @@ function InvoiceEditScreenContent() {
     setLineItems((prev) => [newLineItem(), ...prev]); // prepend — new item at top
   }, []);
 
-  const handleUpdate = useCallback(() => {
+  const handleUpdate = useCallback(async () => {
     if (!selectedParty) {
       Alert.alert("Validation", "Please select a party.");
       return;
@@ -495,6 +548,23 @@ function InvoiceEditScreenContent() {
       Alert.alert("Validation", "Add at least one item.");
       return;
     }
+
+    // One question before saving: update the items' saved prices too? Skipped
+    // (no lookup, no sheet) unless the user can update items and edited a rate
+    // on a catalog-linked line.
+    const decision = await pricing.decide(
+      validItems.map((li) => ({
+        itemId: li.itemId,
+        variantId: li.variantId,
+        selectedUnit: li.selectedUnit,
+        conversionFactor: li.conversionFactor,
+        unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
+        originalUnitPrice: li.originalUnitPrice,
+      })),
+    );
+    if (decision.kind === "back") return;
+    acceptedPricesRef.current = decision.accepted;
 
     haptic.success();
     updateMutation.mutate({
@@ -513,9 +583,12 @@ function InvoiceEditScreenContent() {
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        selectedUnit: li.selectedUnit || undefined,
+        conversionFactor: li.conversionFactor || undefined,
+        variantId: li.variantId || undefined,
       })),
     });
-  }, [selectedParty, lineItems, invoiceDate, dueDate, notes, id, updateMutation]);
+  }, [selectedParty, lineItems, invoiceDate, dueDate, notes, id, updateMutation, pricing]);
 
   if (isLoading) {
     return (
@@ -549,9 +622,9 @@ function InvoiceEditScreenContent() {
           <Text style={styles.topBarSub}>{invoice.invoiceNumber}</Text>
         </View>
         <TouchableOpacity
-          style={[styles.saveBtn, updateMutation.isPending && styles.saveBtnDisabled]}
+          style={[styles.saveBtn, (updateMutation.isPending || pricing.checking) && styles.saveBtnDisabled]}
           onPress={handleUpdate}
-          disabled={updateMutation.isPending}
+          disabled={updateMutation.isPending || pricing.checking}
           activeOpacity={0.8}
         >
           {updateMutation.isPending ? (
@@ -686,6 +759,9 @@ function InvoiceEditScreenContent() {
         onSelect={handleItemSelected}
         onClose={() => setShowItemPicker(false)}
       />
+
+      {/* "Update saved prices?" */}
+      {pricing.dialog}
     </SafeAreaView>
   );
 }

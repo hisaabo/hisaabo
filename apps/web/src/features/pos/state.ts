@@ -16,6 +16,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { calcLineItem, money, inclusiveTieOut, autoRoundOff } from "@hisaabo/shared";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -42,6 +43,12 @@ export interface POSLineItem {
    * a decimal for alt_units entries.
    */
   conversionFactor: string;
+  /**
+   * The item's saved shelf price WITH GST when `unitPrice` was derived from it ("Price includes tax"). A bill line is
+   * tax-exclusive, so such a line can bill a paisa off the shelf price (₹10.00 incl. 18% = 8.47 + 1.52 = 9.99);
+   * the cart's round-off brings the sale back to the shelf total.
+   */
+  inclusivePrice?: string;
 }
 
 export interface POSCart {
@@ -303,24 +310,44 @@ export interface CartTotals {
   subtotal: number;    // sum of (price * qty) before tax/discount
   discount: number;    // sum of line-level discount rupees
   tax: number;         // sum of line-level tax rupees
-  total: number;       // subtotal - discount + tax
+  /** Brings lines priced including tax back to their shelf total (see `POSLineItem.inclusivePrice`); 0 otherwise. */
+  roundOff: number;
+  total: number;       // subtotal - discount + tax + roundOff
 }
 
 export function computeCartTotals(lineItems: POSLineItem[]): CartTotals {
-  let subtotal = 0;
-  let discount = 0;
-  let tax = 0;
-  for (const li of lineItems) {
-    const qty = parseFloat(li.quantity) || 0;
-    const price = parseFloat(li.unitPrice) || 0;
-    const gross = qty * price;
-    const disc = gross * ((parseFloat(li.discountPercent) || 0) / 100);
-    const net = gross - disc;
-    const lineTax = net * ((parseFloat(li.taxPercent) || 0) / 100);
-    subtotal += gross;
-    discount += disc;
-    tax += lineTax;
-  }
-  const total = subtotal - discount + tax;
-  return { subtotal, discount, tax, total };
+  // The same exact (integer-paise) line maths the server uses, so the cart never shows a total
+  // the invoice will not carry. `subtotal` is the pre-discount taxable value, as before.
+  const lines = lineItems.map((li) =>
+    calcLineItem({
+      quantity: li.quantity || "0",
+      unitPrice: li.unitPrice || "0",
+      taxPercent: li.taxPercent || "0",
+      discountPercent: li.discountPercent || "0",
+    }),
+  );
+  const subtotal = money.sum(lines.map((l) => l.subtotal));
+  const discount = money.sum(lines.map((l) => l.discountAmount));
+  const tax = money.sum(lines.map((l) => l.taxAmount));
+  const raw = money.sum(lines.map((l) => l.total));
+  const roundOff = autoRoundOff(
+    raw,
+    inclusiveTieOut(
+      lineItems.map((li) => ({
+        unitPrice: li.unitPrice || "0",
+        taxPercent: li.taxPercent || "0",
+        quantity: li.quantity || "0",
+        discountPercent: li.discountPercent || "0",
+        inclusivePrice: li.inclusivePrice,
+      })),
+    ),
+    false,
+  );
+  return {
+    subtotal: money.toNumber(subtotal),
+    discount: money.toNumber(discount),
+    tax: money.toNumber(tax),
+    roundOff: money.toNumber(roundOff),
+    total: money.toNumber(money.add(raw, roundOff)),
+  };
 }

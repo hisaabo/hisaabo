@@ -1,3 +1,4 @@
+import { defaultBillRate, savedPriceFor, priceWord, type BillSide } from "../../default-rate.js";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -324,6 +325,12 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
       }
     }
 
+    // The side of the document decides which saved price a line starts from (sale price / purchase price).
+    // A purchase return goes back to a supplier: default it to purchase (the API forces it anyway).
+    const type = opts.type ?? (dt.nsKey === "purchaseReturn" ? "purchase" : "sale");
+    if (type !== "sale" && type !== "purchase") fatalError("--type must be sale or purchase", EXIT.USAGE);
+    const side: BillSide = type;
+
     // ── Build line items ───────────────────────────────────────────
     const lineItems: Array<{ itemId?: string; itemName: string; quantity: string; unitPrice: string; taxPercent?: string; discountPercent?: string }> = [];
 
@@ -335,8 +342,8 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
 
         if (!unitPrice) {
           const items = await client.item.list({ search: itemName, limit: 3 });
-          if (items.data.length > 0 && items.data[0]?.salePrice) {
-            unitPrice = items.data[0].salePrice;
+          if (items.data.length > 0 && savedPriceFor(items.data[0]!, side)) {
+            unitPrice = defaultBillRate(items.data[0]!, side);
             lineItems.push({
               itemId: items.data[0].id,
               itemName: items.data[0].name,
@@ -345,7 +352,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
               taxPercent: items.data[0].taxPercent,
             });
           } else {
-            fatalError(`Item not found or has no price: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
+            fatalError(`Item not found or has no ${priceWord(side)}: ${itemName}. Use --rate to specify price.`, EXIT.NOT_FOUND);
           }
         } else {
           const items = await client.item.list({ search: itemName, limit: 3 });
@@ -384,7 +391,8 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
         if (items.data.length > 0) {
           items.data.forEach((it, i) => {
             const stock = it.itemType === "service" ? "-" : String(it.stockQuantity);
-            const price = it.salePrice ? formatINR(it.salePrice) : "no price";
+            const shown = savedPriceFor(it, side);
+            const price = shown ? formatINR(shown) : `no ${priceWord(side)}`;
             console.log(`      ${i + 1}  ${it.name.padEnd(20)} ${price.padEnd(12)}  Stock: ${stock}`);
           });
           const choice = await promptLine(rl, "    Item [1] (or 0 to use as description): ");
@@ -394,7 +402,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
             if (selected) {
               itemId = selected.id;
               description = selected.name;
-              defaultPrice = selected.salePrice ?? "";
+              defaultPrice = defaultBillRate(selected, side);
               defaultTax = selected.taxPercent;
             }
           }
@@ -472,9 +480,6 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
     }
 
     // ── Create ────────────────────────────────────────────────────
-    // A purchase return goes back to a supplier: default it to purchase (the API forces it anyway).
-    const type = opts.type ?? (dt.nsKey === "purchaseReturn" ? "purchase" : "sale");
-    if (type !== "sale" && type !== "purchase") fatalError("--type must be sale or purchase", EXIT.USAGE);
     const doc = await ns.create({
       type,
       partyId: partyId!,
