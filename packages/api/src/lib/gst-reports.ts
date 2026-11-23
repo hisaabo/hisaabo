@@ -265,7 +265,7 @@ export async function generateGSTR1(
   // Get line items for all these invoices
   const allInvoiceIds = saleInvoices.map((inv) => inv.id);
   const allLineItems = allInvoiceIds.length > 0
-    ? await db.select().from(invoiceItems).where(inArray(invoiceItems.invoiceId, allInvoiceIds))
+    ? await db.select().from(invoiceItems).where(inArray(invoiceItems.invoiceId, allInvoiceIds)).orderBy(invoiceItems.sortOrder)
     : [];
 
   const lineItemsByInvoice = new Map<string, typeof allLineItems>();

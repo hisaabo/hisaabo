@@ -152,7 +152,9 @@ export const ewayBillRouter = router({
         })
         .from(invoiceItems)
         .leftJoin(items, eq(invoiceItems.itemId, items.id))
-        .where(eq(invoiceItems.invoiceId, invoice.id));
+        .where(eq(invoiceItems.invoiceId, invoice.id))
+        // line order: "line N" in a refusal, and the NIC item list, must not depend on the heap order of the rows
+        .orderBy(invoiceItems.sortOrder);
 
       if (!lineItemRows.length) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice has no line items" });
