@@ -270,3 +270,51 @@ describe("calendar-month arithmetic and the IST time of day (recurring run dates
     expect(iso(businessInstant({ year: 2026, month: 4, day: 1 }))).toBe("2026-03-31T18:30:00.000Z");
   });
 });
+
+// ── DST edges of other zones ────────────────────────────────────────────────────
+// IST has no daylight saving, so nothing here may move when the machine is in a zone that has it. These are
+// the instants America/Los_Angeles jumps (8 Mar 2026 02:00 -> 03:00) and repeats (1 Nov 2026 02:00 -> 01:00);
+// CI runs this file under TZ=America/Los_Angeles.
+describe("the business calendar does not move at another zone's DST edges", () => {
+  const cases: Array<[string, string, string]> = [
+    // instant, its IST day, what the Los Angeles clock says
+    ["2026-03-08T09:59:59.999Z", "2026-03-08", "01:59:59.999 PST"],
+    ["2026-03-08T10:00:00.000Z", "2026-03-08", "03:00:00 PDT"],
+    ["2026-03-07T18:30:00.000Z", "2026-03-08", "10:30 PST on 7 Mar: 00:00 IST on 8 Mar"],
+    ["2026-11-01T08:30:00.000Z", "2026-11-01", "01:30 PDT (first)"],
+    ["2026-11-01T09:30:00.000Z", "2026-11-01", "01:30 PST (second)"],
+    ["2026-10-31T18:30:00.000Z", "2026-11-01", "11:30 PDT on 31 Oct: 00:00 IST on 1 Nov"],
+  ];
+
+  it.each(cases)("%s is the IST day %s (%s)", (instant, ymd) => {
+    expect(businessDateOf(new Date(instant))).toBe(ymd);
+    expect(iso(businessDayStart(ymd))).toBe(ymd === "2026-03-08" ? "2026-03-07T18:30:00.000Z" : "2026-10-31T18:30:00.000Z");
+  });
+
+  it("This Month, This FY and the day range are the same IST windows at each of those instants", () => {
+    for (const now of ["2026-03-08T09:59:59.999Z", "2026-03-08T10:00:00.000Z"]) {
+      const m = resolveDatePreset("this-month", new Date(now));
+      expect([iso(m.from), iso(m.before)]).toEqual(["2026-02-28T18:30:00.000Z", "2026-03-31T18:30:00.000Z"]);
+      const fy = resolveDatePreset("this-fy", new Date(now));
+      expect(iso(fy.from)).toBe("2025-03-31T18:30:00.000Z"); // 1 Apr 2025 00:00 IST
+    }
+    for (const now of ["2026-11-01T08:30:00.000Z", "2026-11-01T09:30:00.000Z"]) {
+      const m = resolveDatePreset("this-month", new Date(now));
+      expect([iso(m.from), iso(m.before)]).toEqual(["2026-10-31T18:30:00.000Z", "2026-11-30T18:30:00.000Z"]);
+      const fy = resolveDatePreset("this-fy", new Date(now));
+      expect(iso(fy.from)).toBe("2026-03-31T18:30:00.000Z");
+    }
+    // the 8 Mar and 1 Nov days themselves are 24 hours long in IST
+    for (const day of ["2026-03-08", "2026-11-01"]) {
+      const r = resolveDayRange(day, day);
+      expect(r.before!.getTime() - r.from!.getTime()).toBe(24 * 60 * 60 * 1000);
+    }
+  });
+
+  it("a picked day is stored as 00:00 IST and reads back as itself", () => {
+    expect(pickedDateToISO("2026-03-08")).toBe("2026-03-07T18:30:00.000Z");
+    expect(pickedDateToISO("2026-11-01")).toBe("2026-10-31T18:30:00.000Z");
+    expect(pickedDateToEndISO("2026-03-08")).toBe("2026-03-08T18:29:59.999Z");
+    expect(pickedDateToEndISO("2026-11-01")).toBe("2026-11-01T18:29:59.999Z");
+  });
+});

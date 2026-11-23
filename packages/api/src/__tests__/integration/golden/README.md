@@ -158,6 +158,20 @@ done
 Instants in these tests are written out as UTC literals with the IST time in a comment (IST midnight of
 a day is 18:30 UTC of the day before).
 
+The API suites also depend on the **database session's** zone (SQL that uses `date_trunc`, `::date` or
+`to_char`). The postgres.js driver the API uses ignores `PGTZ`, so put the zone on the database itself
+before an API run, and use one worker (a cloned worker database does not carry it):
+
+```bash
+psql "$TEST_DATABASE_URL" -c "ALTER DATABASE hisaabo_test SET timezone TO 'America/Los_Angeles'"
+TZ=America/Los_Angeles API_TEST_WORKERS=1 pnpm --filter @hisaabo/api exec vitest run src/__tests__/integration/golden
+```
+
+CI does all of this in the `time-zones` job of `.github/workflows/ci.yml`: the shared, web, mobile, CLI,
+MCP and the date-sensitive API suites under Asia/Kolkata (the business's own offset) and
+America/Los_Angeles (DST: 8 Mar and 1 Nov 2026 are the edges the DST tests use), with the server and the
+database in the same zone; the whole API suite as well on a push to main. The default jobs run in UTC.
+
 ## Isolation
 
 The older plan (`docs/architecture/testing-plan.md`) describes per-test
