@@ -6,6 +6,14 @@
  * raw `fromDate`/`toDate` range).
  */
 
+import {
+  businessYearMonth,
+  businessMonthStart,
+  businessMonthWindow,
+  businessFinancialYearWindow,
+  businessFinancialYearStartYear,
+  windowToQuery,
+} from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import { enumOf, objectSchema, oneOf } from "./shared";
 
@@ -20,54 +28,36 @@ export const DASHBOARD_PERIODS = [
 
 export type DashboardPeriod = (typeof DASHBOARD_PERIODS)[number];
 
-/** End-of-day for a calendar date, so `toDate` includes the whole last day. */
-function endOfDay(year: number, monthIndex: number, day: number): Date {
-  return new Date(year, monthIndex, day, 23, 59, 59, 999);
-}
-
 /**
  * Resolve a named period to the `{ fromDate, toDate }` the `dashboard.summary`
  * procedure expects. An empty object means "no date filter" — the procedure
  * treats a missing range as all-time.
  *
- * `this-fy` assumes the Indian default financial year (1 April – 31 March). A
- * business configured with a different `financialYearStart` still gets the
- * server's own FY boundary echoed back as `fyStart` in the response.
+ * Periods are calendar periods on the business calendar (IST, half-open windows whose
+ * `toDate` is the last millisecond before the next one starts), see @hisaabo/shared
+ * business-time. `this-fy` assumes the Indian default financial year (1 April – 31 March); it
+ * is open-ended (from 1 April, no `toDate`) as before. A business configured with a different
+ * `financialYearStart` still gets the server's own FY boundary echoed back as `fyStart`.
  */
 export function resolvePeriod(
   period: DashboardPeriod,
   now: Date = new Date(),
 ): { fromDate?: string; toDate?: string } {
-  const year = now.getFullYear();
-  const month = now.getMonth();
+  const { year, month } = businessYearMonth(now);
 
   switch (period) {
-    case "this-fy": {
-      const fyYear = month >= 3 ? year : year - 1;
-      return { fromDate: new Date(fyYear, 3, 1).toISOString() };
-    }
+    case "this-fy":
+      return { fromDate: businessFinancialYearWindow(businessFinancialYearStartYear(now)).from.toISOString() };
     case "this-month":
-      return {
-        fromDate: new Date(year, month, 1).toISOString(),
-        toDate: endOfDay(year, month + 1, 0).toISOString(),
-      };
+      return windowToQuery(businessMonthWindow(year, month));
     case "last-month":
-      return {
-        fromDate: new Date(year, month - 1, 1).toISOString(),
-        toDate: endOfDay(year, month, 0).toISOString(),
-      };
+      return windowToQuery(businessMonthWindow(year, month - 1));
     case "this-quarter": {
-      const q = Math.floor(month / 3);
-      return {
-        fromDate: new Date(year, q * 3, 1).toISOString(),
-        toDate: endOfDay(year, (q + 1) * 3, 0).toISOString(),
-      };
+      const first = Math.floor((month - 1) / 3) * 3 + 1;
+      return windowToQuery({ from: businessMonthStart(year, first), before: businessMonthStart(year, first + 3) });
     }
     case "this-year":
-      return {
-        fromDate: new Date(year, 0, 1).toISOString(),
-        toDate: endOfDay(year, 11, 31).toISOString(),
-      };
+      return windowToQuery({ from: businessMonthStart(year, 1), before: businessMonthStart(year + 1, 1) });
     case "all":
       return {};
   }

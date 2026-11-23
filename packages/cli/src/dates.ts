@@ -21,14 +21,24 @@ function assertValidTimeZone(tz: string, source: string): string {
 }
 
 /**
+ * The business calendar's zone: every Hisaabo business is Indian today, so a day is an IST day
+ * (the API, web and mobile apps use the same zone: @hisaabo/shared business-time). The machine's own
+ * zone is NOT used: running the CLI on a UTC server or a laptop in another country must not move
+ * "this month" or a date-only `--from` / `--date`. Kept as a constant here because this file is
+ * import-free (it runs under `node --experimental-strip-types`).
+ * TODO(0.11.0): take the business's own time zone once `businesses` has one.
+ */
+export const DEFAULT_BUSINESS_TIME_ZONE = "Asia/Kolkata";
+
+/**
  * Resolve the time zone used for day boundaries: explicit `--tz` flag, then
- * the `HISAABO_TZ` env var, then the machine's local zone.
+ * the `HISAABO_TZ` env var, then the business zone (IST), never the machine's own.
  */
 export function resolveTimeZone(flag?: string, env: NodeJS.ProcessEnv = process.env): string {
   if (flag !== undefined && flag !== "") return assertValidTimeZone(flag, "--tz");
   const fromEnv = env["HISAABO_TZ"];
   if (fromEnv !== undefined && fromEnv !== "") return assertValidTimeZone(fromEnv, "HISAABO_TZ");
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  return DEFAULT_BUSINESS_TIME_ZONE;
 }
 
 let activeTimeZone: string | undefined;
@@ -95,6 +105,17 @@ export function zonedTimeToUtcMs(
     .filter((c) => tzOffsetMs(c, tz) === wall - c)
     .sort((x, y) => x - y);
   return candidates[0] ?? wall - before;
+}
+
+/** Today's calendar date (year, month 1-12, day) in the active zone. */
+export function todayParts(now: Date = new Date()): { year: number; month: number; day: number } {
+  return todayYmd(now);
+}
+
+/** The calendar date of an instant in the active zone, as `{ year, month, day }`. */
+export function dateParts(instant: Date): { year: number; month: number; day: number } {
+  const p = zonedParts(instant.getTime(), getTimeZone());
+  return { year: p.year, month: p.month, day: p.day };
 }
 
 /** Today's calendar date in the active zone. */
@@ -174,7 +195,7 @@ export function quarterRange(q: string, now?: Date): { from: string; to: string;
 /**
  * Widen a plain `YYYY-MM-DD` date to a full ISO (UTC) datetime for server fields
  * validated with `z.string().datetime()`. The date is read as a calendar day in
- * the active time zone (`--tz` / `HISAABO_TZ` / machine zone): "start" is that
+ * the active time zone (`--tz` / `HISAABO_TZ` / IST): "start" is that
  * day's first millisecond and "end" its last, converted to the UTC instant.
  * Anything that is not a plain date is passed through.
  */

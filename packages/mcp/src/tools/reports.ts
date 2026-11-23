@@ -23,11 +23,15 @@ import { z } from "zod";
 import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import { pickedDateToISO, pickedDateToEndISO, businessToday } from "@hisaabo/shared";
 
-/** The accounting report procedures require full ISO datetimes; widen YYYY-MM-DD to a whole day. */
-const startOfDay = (d: string) => `${d}T00:00:00.000Z`;
-const endOfDay = (d: string) => `${d}T23:59:59.999Z`;
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * The accounting report procedures require full ISO datetimes; widen YYYY-MM-DD to a whole day on the
+ * business calendar (IST): 00:00 IST to the last millisecond of that day, not the UTC day.
+ */
+const startOfDay = (d: string) => pickedDateToISO(d)!;
+const endOfDay = (d: string) => pickedDateToEndISO(d)!;
+const today = () => businessToday();
 
 export function registerReportTools(server: ToolServer, client: HisaaboClient) {
 

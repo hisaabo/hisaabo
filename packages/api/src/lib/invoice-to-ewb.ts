@@ -16,7 +16,9 @@
 
 import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
-import { money, splitDocumentGst } from "@hisaabo/shared";
+import { money, splitDocumentGst, resolveState, supplyKind, unitToUqc } from "@hisaabo/shared";
+import { formatIstDate } from "./gst-period.js";
+import { resolveLineHsns } from "./hsn-check.js";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -44,6 +46,19 @@ export interface InvoiceForEWB {
   businessCity: string | null;
   businessPincode: string | null;
   businessStateCode: string | null;
+  /** Annual turnover in rupees (`businesses.annual_turnover`): sets the HSN digit minimum. Unknown = 4 digits. */
+  businessAnnualTurnover?: string | null;
+}
+
+/**
+ * Raised when the e-way bill cannot be built as it stands (a line with no usable HSN). Nothing
+ * has been sent to the NIC: the caller turns it into a "cannot generate" message.
+ */
+export class EwayBillNotEligibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EwayBillNotEligibleError";
+  }
 }
 
 export interface LineItemForEWB {
@@ -88,19 +103,8 @@ function docTypeCode(documentType: string, _invoiceType: "sale" | "purchase"): "
  * Format Date to DD/MM/YYYY as required by NIC.
  */
 function formatNICDate(date: Date): string {
-  const d = String(date.getDate()).padStart(2, "0");
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const y = date.getFullYear();
-  return `${d}/${m}/${y}`;
-}
-
-/**
- * Determine if a transaction is inter-state based on state codes.
- * If either side is missing, we conservatively return false (use CGST/SGST).
- */
-function isInterState(fromStateCode: string | null, toStateCode: string | null): boolean {
-  if (!fromStateCode || !toStateCode) return false;
-  return fromStateCode !== toStateCode;
+  // IST calendar date (see gst-period.ts): a date-only "1 April" is stored as 31 March 18:30 UTC.
+  return formatIstDate(date);
 }
 
 /**
@@ -154,35 +158,12 @@ function parseStateCode(code: string | null | undefined): number {
 }
 
 /**
- * Map item unit to NIC-recognised unit code.
- * NIC has ~40 units; we map our enum values to the closest NIC code.
+ * Map item unit to the NIC unit code: the one map shared with the GSTR-1 HSN summary and the e-invoice
+ * (@hisaabo/shared uqc.ts). This file's own map sent codes that are not NIC units ("FT", "INH", "PAR",
+ * "PKT", "TNE", "JAR") and "BDL" (bundles) for a bunch. A unit with no code is "OTH".
  */
 function mapUnit(unit: string | null): string {
-  if (!unit) return "OTH";
-  const map: Record<string, string> = {
-    pcs: "NOS",
-    kg:  "KGS",
-    g:   "GMS",
-    l:   "LTR",
-    ml:  "MLT",
-    m:   "MTR",
-    cm:  "CMS",
-    ft:  "FT",
-    in:  "INH",
-    box: "BOX",
-    dozen: "DOZ",
-    pair:  "PAR",
-    set:   "SET",
-    pkt:   "PKT",
-    bag:   "BAG",
-    ton:   "TNE",
-    btl:   "BTL",
-    bun:   "BDL",
-    jar:   "JAR",
-    pack:  "PAC",
-    other: "OTH",
-  };
-  return map[unit] ?? "OTH";
+  return unitToUqc(unit) ?? "OTH";
 }
 
 // ── Main mapper ───────────────────────────────────────────────────────────────
@@ -201,6 +182,15 @@ export function mapInvoiceToEWB(
 ): GenerateEWBPayload {
   const isSale = invoice.type === "sale";
 
+  // Every line needs a real HSN (the same rule as the e-invoice): it used to go out as "".
+  const { codes: hsnCodes, problems: hsnProblems } = resolveLineHsns(
+    lineItems.map((li) => ({ itemName: li.itemName, itemHsn: li.hsn })),
+    invoice.businessAnnualTurnover,
+  );
+  if (hsnProblems.length > 0) {
+    throw new EwayBillNotEligibleError(`Cannot generate the e-way bill: ${hsnProblems.join("; ")}.`);
+  }
+
   // Determine from/to parties based on supply direction
   const fromGstin = isSale ? (invoice.businessGstin ?? "URP") : (invoice.partyGstin ?? "URP");
   const fromName  = isSale ? invoice.businessName           : invoice.partyName;
@@ -211,9 +201,19 @@ export function mapInvoiceToEWB(
   const fromPin   = isSale
     ? parsePincode(transport.fromPincode ?? invoice.businessPincode)
     : parsePincode(transport.fromPincode ?? invoice.partyPincode);
-  const fromState = isSale
-    ? parseStateCode(invoice.businessStateCode)
-    : parseStateCode(invoice.partyStateCode);
+  // State of each side by the shared rule (GSTIN's state first, legacy codes mapped); a stored code that
+  // disagrees with its GSTIN is refused before anything is sent.
+  const bizState = resolveState({ gstin: invoice.businessGstin, stateCode: invoice.businessStateCode });
+  const partyState = resolveState({ gstin: invoice.partyGstin, stateCode: invoice.partyStateCode });
+  if (bizState.conflict) {
+    throw new EwayBillNotEligibleError(`The business state code ${bizState.conflict.storedCode} does not match its GSTIN, which starts with ${bizState.conflict.gstinCode}; correct one of them in Settings.`);
+  }
+  if (partyState.conflict) {
+    throw new EwayBillNotEligibleError(`"${invoice.partyName}" has state code ${partyState.conflict.storedCode} but its GSTIN starts with ${partyState.conflict.gstinCode}; correct one of them before generating the e-way bill.`);
+  }
+  const bizStateNo = parseStateCode(bizState.rawCode ?? invoice.businessStateCode);
+  const partyStateNo = parseStateCode(partyState.rawCode ?? invoice.partyStateCode);
+  const fromState = isSale ? bizStateNo : partyStateNo;
 
   const toGstin   = isSale ? (invoice.partyGstin ?? "URP")    : (invoice.businessGstin ?? "URP");
   const toName    = isSale ? invoice.partyName                 : invoice.businessName;
@@ -224,19 +224,17 @@ export function mapInvoiceToEWB(
   const toPin     = isSale
     ? parsePincode(transport.toPincode ?? invoice.partyPincode)
     : parsePincode(transport.toPincode ?? invoice.businessPincode);
-  const toState   = isSale
-    ? parseStateCode(invoice.partyStateCode)
-    : parseStateCode(invoice.businessStateCode);
+  const toState   = isSale ? partyStateNo : bizStateNo;
 
-  // Inter-state detection
-  const interState = isInterState(
-    isSale ? invoice.businessStateCode : invoice.partyStateCode,
-    isSale ? invoice.partyStateCode    : invoice.businessStateCode,
-  );
+  // Inter-state detection: the shared decision (undecidable is intra-state)
+  const interState = supplyKind(
+    { gstin: invoice.businessGstin, stateCode: invoice.businessStateCode },
+    { gstin: invoice.partyGstin, stateCode: invoice.partyStateCode },
+  ) === "inter";
 
   // Aggregate tax values
   let totalTax = 0;
-  const itemList: EWBItemPayload[] = lineItems.map((li) => {
+  const itemList: EWBItemPayload[] = lineItems.map((li, idx) => {
     const taxPct   = parseFloat(li.taxPercent) || 0;
     const qty      = parseFloat(li.quantity) || 0;
     const price    = parseFloat(li.unitPrice) || 0;
@@ -253,7 +251,7 @@ export function mapInvoiceToEWB(
       // payload; keep that behaviour.
       productName: li.itemName.slice(0, 100),
       productDesc: li.itemName.slice(0, 100),
-      hsnCode: li.hsn ?? "",
+      hsnCode: hsnCodes[idx]!,
       quantity: qty,
       qtyUnit: mapUnit(li.unit),
       cgstRate: rates.cgstRate,

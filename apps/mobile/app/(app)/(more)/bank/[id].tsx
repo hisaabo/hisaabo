@@ -20,6 +20,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { useCan } from "../../../../src/hooks/useCan";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "payment_gateway" | "other";
 type TxType = "deposit" | "withdrawal";
@@ -73,7 +74,7 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
       type: txType,
       amount: amt.toFixed(2),
       description: description.trim() || undefined,
-      transactionDate: txDate.toISOString(),
+      transactionDate: pickerDateToISO(txDate),
     });
   };
 

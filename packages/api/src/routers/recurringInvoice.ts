@@ -10,8 +10,9 @@ import {
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
-import { generateInvoiceFromTemplate, computeNextRunDate } from "../lib/recurring-invoice-generator.js";
+import { generateInvoiceFromTemplate, computeNextRunDate, templateAnchor } from "../lib/recurring-invoice-generator.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { businessYearMonth, businessMonthStart } from "@hisaabo/shared";
 
 export const recurringInvoiceRouter = router({
   list: viewerProcedure
@@ -239,12 +240,15 @@ export const recurringInvoiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "RecurringInvoice");
 
-      // Recalculate next run date from now
+      // Where it carries on from (see below)
       const [tpl] = await ctx.db.select({
         id: recurringInvoiceTemplates.id,
         frequency: recurringInvoiceTemplates.frequency,
         customIntervalDays: recurringInvoiceTemplates.customIntervalDays,
         status: recurringInvoiceTemplates.status,
+        startDate: recurringInvoiceTemplates.startDate,
+        createdAt: recurringInvoiceTemplates.createdAt,
+        nextRunDate: recurringInvoiceTemplates.nextRunDate,
       }).from(recurringInvoiceTemplates)
         .where(and(
           eq(recurringInvoiceTemplates.id, input.id),
@@ -254,7 +258,16 @@ export const recurringInvoiceRouter = router({
       if (!tpl) throw new TRPCError({ code: "NOT_FOUND" });
       if (tpl.status !== "paused") throw new TRPCError({ code: "BAD_REQUEST", message: "Template is not paused" });
 
-      const nextRunDate = computeNextRunDate(new Date(), tpl.frequency, tpl.customIntervalDays);
+      // A template that was paused past its run date must not fire the missed runs in a burst, so its next
+      // run is the first one after now, on its own schedule (the anchor's, when it has one). A next run
+      // date that is ALREADY in the future is kept as it is: "Run now" consumes the next occurrence early
+      // and moves it on, and recomputing from now would hand the occurrences it consumed back to the
+      // scheduler, which would bill them a second time (or be refused by the one-run-per-occurrence
+      // index and leave the template stuck).
+      const now = new Date();
+      const nextRunDate = tpl.nextRunDate.getTime() > now.getTime()
+        ? tpl.nextRunDate
+        : computeNextRunDate(now, tpl.frequency, tpl.customIntervalDays, templateAnchor(tpl));
       const [updated] = await ctx.db.update(recurringInvoiceTemplates)
         .set({ status: "active", nextRunDate, updatedAt: new Date() })
         .where(eq(recurringInvoiceTemplates.id, input.id))
@@ -341,9 +354,9 @@ export const recurringInvoiceRouter = router({
     .query(async ({ ctx }) => {
       requireCan(ctx.ability, "read", "RecurringInvoice");
       // Count successful runs this month
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      // the plan limit counts runs in the current calendar month on the business (IST) calendar
+      const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+      const monthStart = businessMonthStart(nowYear, nowMonth);
 
       const [{ count }] = await ctx.db.select({ count: sql<number>`count(*)::int` })
         .from(recurringInvoiceRuns)

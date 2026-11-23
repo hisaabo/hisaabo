@@ -380,7 +380,7 @@ describe("formatDate / formatDateShort — defensive behaviour for malformed inp
 // ---------------------------------------------------------------------------
 describe("formatDateTime — date + time label for audit/API-key rows", () => {
   it("formats a Date object as 'D MMM YYYY, h:mm A'", () => {
-    const d = new Date(2026, 2, 28, 14, 30); // 28 Mar 2026, 14:30 local
+    const d = new Date("2026-03-28T09:00:00.000Z"); // 28 Mar 2026, 14:30 IST (the business calendar)
     const result = formatDateTime(d);
     expect(result).toContain("28");
     expect(result).toContain("Mar");

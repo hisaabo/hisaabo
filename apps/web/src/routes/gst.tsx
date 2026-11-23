@@ -1,3 +1,4 @@
+import { businessYearMonth, businessFinancialYearStartYear } from "@hisaabo/shared";
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { MissingHsnWarning } from "@/components/reports/MissingHsnWarning";
 import { Combobox } from "@/components/ui/Combobox";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -42,9 +44,9 @@ export const Route = createFileRoute("/gst")({
 });
 
 function GSTReportsPage() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const now = businessYearMonth(new Date());
+  const [year, setYear] = useState(now.year);
+  const [month, setMonth] = useState(now.month);
   const navigate = useNavigate();
   const { tab: tabFromSearch, partyId: partyIdFromSearch } = useSearch({ from: "/gst" });
 
@@ -166,6 +168,8 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
 
   return (
     <div className="space-y-5">
+      <MissingHsnWarning lines={data.hsnMissing} invalid={data.hsnInvalid} />
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Invoice Count" value={data.invoiceCount} />
@@ -1457,10 +1461,7 @@ function PartyLedgerView({ partyId }: { partyId: string }) {
 
 // ── GSTR-9 View ────────────────────────────────────────────────
 
-const currentFYStart = (() => {
-  const now = new Date();
-  return now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-})();
+const currentFYStart = businessFinancialYearStartYear();
 
 function GSTR9View() {
   const [financialYear, setFinancialYear] = useState(currentFYStart - 1); // Default to last completed FY

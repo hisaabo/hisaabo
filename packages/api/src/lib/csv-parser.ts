@@ -1,3 +1,4 @@
+import { businessDayStart } from "@hisaabo/shared";
 /**
  * csv-parser.ts — CSV parsing utilities for Indian bank statements.
  *
@@ -248,8 +249,7 @@ export function parseDate(raw: string, format?: string): Date | null {
 
   // Try ISO first (most unambiguous)
   if (/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(s)) {
-    const d = new Date(s.slice(0, 10));
-    return isNaN(d.getTime()) ? null : d;
+    return calendarDay(parseInt(s.slice(0, 4), 10), parseInt(s.slice(5, 7), 10) - 1, parseInt(s.slice(8, 10), 10));
   }
 
   // YYYYMMDD
@@ -257,8 +257,7 @@ export function parseDate(raw: string, format?: string): Date | null {
     const year = parseInt(s.slice(0, 4), 10);
     const month = parseInt(s.slice(4, 6), 10) - 1;
     const day = parseInt(s.slice(6, 8), 10);
-    const d = new Date(year, month, day);
-    return isNaN(d.getTime()) ? null : d;
+    return calendarDay(year, month, day);
   }
 
   // DD-MMM-YYYY or DD-MMM-YY
@@ -269,8 +268,7 @@ export function parseDate(raw: string, format?: string): Date | null {
     if (month === undefined) return null;
     let year = parseInt(dmmm[3]!, 10);
     if (year < 100) year += year < 50 ? 2000 : 1900;
-    const d = new Date(year, month, day);
-    return isNaN(d.getTime()) ? null : d;
+    return calendarDay(year, month, day);
   }
 
   // Separator-based: try to figure out format from hint or by inference
@@ -303,8 +301,18 @@ export function parseDate(raw: string, format?: string): Date | null {
 
   if (year < 100) year += year < 50 ? 2000 : 1900;
 
-  const d = new Date(year, month, day);
-  return isNaN(d.getTime()) ? null : d;
+  return calendarDay(year, month, day);
+}
+
+/**
+ * A calendar day (month 0-11) as the instant of 00:00 on the business calendar (IST), whatever the
+ * server's zone; null when the day does not exist (30 Feb). A statement date is a day, not an instant.
+ */
+function calendarDay(year: number, month0: number, day: number): Date | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month0) || !Number.isInteger(day)) return null;
+  const check = new Date(Date.UTC(year, month0, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month0 || check.getUTCDate() !== day) return null;
+  return businessDayStart({ year, month: month0 + 1, day });
 }
 
 // ── Statement Line Parser ─────────────────────────────────────────────────────

@@ -28,6 +28,7 @@ import { DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
 import { useCan, useCanCreateDocument } from "../../../src/hooks/useCan";
+import { pickerDateToISO } from "../../../src/lib/business-day";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -1867,8 +1868,8 @@ function InvoiceCreateForm() {
       partyId: selectedParty.id,
       type: invoiceType,
       documentType: "invoice",
-      invoiceDate: invoiceDate.toISOString(),
-      dueDate: dueDate.toISOString(),
+      invoiceDate: pickerDateToISO(invoiceDate),
+      dueDate: pickerDateToISO(dueDate),
       notes: notes.trim() || undefined,
       additionalCharges: "0",
       invoiceDiscount: "0",

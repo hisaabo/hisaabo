@@ -8,7 +8,15 @@ import {
   invoices, invoiceItems, items, businesses, parties,
   recurringInvoiceTemplates, recurringInvoiceRuns,
 } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
+import {
+  calcLineItem,
+  calcInvoiceTotals,
+  businessDateOf,
+  businessDateParts,
+  businessTimeOfDayMs,
+  businessInstant,
+  addMonthsClampedYmd,
+} from "@hisaabo/shared";
 import type { TenantDatabase } from "../trpc.js";
 import { applyStockDeltas } from "./stock-adjust.js";
 
@@ -40,34 +48,90 @@ export interface TemplateRow {
   maxRuns: number | null;
   endDate: Date | null;
   createdByUserId: string | null;
+  /** With `createdAt`, `nextRunDate` and `frequency` they say whether the template has an anchor day (see `templateAnchor`). */
+  startDate?: Date;
+  createdAt?: Date;
 }
 
-/** Advance a date by N months, clamping to the last day of the target month. */
-function addMonthsClamped(d: Date, months: number): void {
-  const originalDay = d.getDate();
-  d.setDate(1); // avoid day overflow skipping months
-  d.setMonth(d.getMonth() + months);
-  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  d.setDate(Math.min(originalDay, lastDay));
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MONTHS_PER_PERIOD: Record<string, number> = { monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 };
+const DAYS_PER_PERIOD: Record<string, number> = { weekly: 7, biweekly: 14 };
+
+/**
+ * Is `instant` an occurrence of the schedule that counts `months` months at a time from `anchor`, on the
+ * business calendar: the same IST time of day, a whole number of periods after the anchor's month, on the
+ * anchor's day or the last day of a shorter month.
+ */
+function onAnchorSchedule(anchor: Date, instant: Date, months: number): boolean {
+  const a = businessDateParts(anchor);
+  const n = businessDateParts(instant);
+  const periods = (n.year - a.year) * 12 + (n.month - a.month);
+  if (periods < 0 || periods % months !== 0) return false;
+  return businessInstant(addMonthsClampedYmd(a, periods), businessTimeOfDayMs(anchor)).getTime() === instant.getTime();
 }
 
-/** Calculate the next run date after a given date based on frequency. */
+/**
+ * The anchor of a template: the instant of its first occurrence, which every later monthly / quarterly /
+ * half-yearly / yearly occurrence is counted from, so a template due "on the 1st" keeps the 1st and one due
+ * "on the 31st" comes back to the 31st after a short month. Null when there is none: each run is then
+ * counted from the previous one (a clamped 28 Feb is followed by 28 Mar).
+ *
+ * A template is anchored only when BOTH hold:
+ *   - it was created with a start date in the future (`startDate` after `createdAt`), so its first run was
+ *     the start date itself and not "one period after creation"; and
+ *   - its next run date IS still on that start date's schedule.
+ * The second condition is what keeps templates written by an OLDER version (their run dates were advanced
+ * with the server's `setMonth`, so a "31 January" template drifted to 3 March, 3 April, ...) from being
+ * snapped onto a schedule they were never on: they carry on from their own next run date, now counted on the
+ * IST calendar, and nothing they have scheduled moves. A template of this version stays on its schedule by
+ * construction (run, skip and resume all land on it), so it is always anchored. A change of frequency
+ * puts the next run off the new schedule and so drops the anchor. Day-based frequencies have no anchor.
+ */
+export function templateAnchor(t: {
+  startDate?: Date | null;
+  createdAt?: Date | null;
+  nextRunDate?: Date | null;
+  frequency?: string | null;
+}): Date | null {
+  const { startDate, createdAt, nextRunDate, frequency } = t;
+  if (!startDate || !createdAt || !nextRunDate || !frequency) return null;
+  const months = MONTHS_PER_PERIOD[frequency];
+  if (months === undefined) return null;
+  if (startDate.getTime() <= createdAt.getTime()) return null;
+  return onAnchorSchedule(startDate, nextRunDate, months) ? startDate : null;
+}
+
+/**
+ * The run date after `from`, on the BUSINESS calendar (IST, see @hisaabo/shared business-time): the
+ * calendar day moves, the IST time of day is kept, and the result does not depend on the server's
+ * time zone. Days-based frequencies add whole days (IST has no daylight saving). Month-based ones add
+ * calendar months and clamp to the month's last day (31 Jan -> 28/29 Feb, 30 Apr -> 30 May); with an
+ * `anchor` (see `templateAnchor`) the occurrences are counted from the anchor's day, so the day
+ * comes back after a short month (31 Jan -> 28 Feb -> 31 Mar), and a drifted `from` is pulled back
+ * onto the anchor's schedule at its next occurrence.
+ */
 export function computeNextRunDate(
   from: Date,
   frequency: string,
   customIntervalDays?: number | null,
+  anchor?: Date | null,
 ): Date {
-  const d = new Date(from);
-  switch (frequency) {
-    case "weekly": d.setDate(d.getDate() + 7); break;
-    case "biweekly": d.setDate(d.getDate() + 14); break;
-    case "monthly": addMonthsClamped(d, 1); break;
-    case "quarterly": addMonthsClamped(d, 3); break;
-    case "half_yearly": addMonthsClamped(d, 6); break;
-    case "yearly": addMonthsClamped(d, 12); break;
-    case "custom": d.setDate(d.getDate() + (customIntervalDays || 30)); break;
+  const days = frequency === "custom" ? (customIntervalDays || 30) : DAYS_PER_PERIOD[frequency];
+  if (days !== undefined) return new Date(from.getTime() + days * DAY_MS);
+
+  const months = MONTHS_PER_PERIOD[frequency];
+  if (months === undefined) return new Date(from);
+
+  if (anchor) {
+    const a = businessDateParts(anchor);
+    const tod = businessTimeOfDayMs(anchor);
+    // the first occurrence of the anchor's schedule after `from` (at most 200 years of them)
+    for (let k = 0; k < 2400; k++) {
+      const c = businessInstant(addMonthsClampedYmd(a, k * months), tod);
+      if (c.getTime() > from.getTime()) return c;
+    }
   }
-  return d;
+  return businessInstant(addMonthsClampedYmd(businessDateParts(from), months), businessTimeOfDayMs(from));
 }
 
 /** The transaction handle `db.transaction` passes to its callback. */
@@ -252,10 +316,12 @@ export async function generateInvoiceInTx(
     template.nextRunDate,
     template.frequency,
     template.customIntervalDays,
+    templateAnchor(template),
   );
   const newTotalRuns = template.totalRuns + 1;
+  // The end date is a calendar day (IST) and an occurrence ON that day still runs.
   const isCompleted = (template.maxRuns && newTotalRuns >= template.maxRuns)
-    || (template.endDate && nextRun > template.endDate);
+    || (template.endDate && businessDateOf(nextRun) > businessDateOf(template.endDate));
 
   await tx.update(recurringInvoiceTemplates).set({
     totalRuns: newTotalRuns,

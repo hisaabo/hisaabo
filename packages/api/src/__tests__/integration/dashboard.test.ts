@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { businessDateParts } from "@hisaabo/shared";
 import {
   createTestWorld,
   createInvoiceWithItems,
@@ -304,8 +305,9 @@ describe("dashboard.salesTrend", () => {
       // Each period string must be parseable as a date
       const d = new Date(bucket.period);
       expect(isNaN(d.getTime())).toBe(false);
-      // Monthly buckets always start on the 1st (day portion)
-      expect(d.getUTCDate()).toBe(1);
+      // Monthly buckets start at 00:00 IST on the 1st (the business calendar), i.e. 18:30 UTC the day before
+      expect(businessDateParts(d).day).toBe(1);
+      expect(d.getUTCHours() * 60 + d.getUTCMinutes()).toBe(18 * 60 + 30);
       expect(typeof bucket.invoiced).toBe("string");
     }
   });

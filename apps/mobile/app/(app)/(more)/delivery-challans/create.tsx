@@ -24,6 +24,7 @@ import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 interface LineItem {
   itemId?: string;
@@ -217,7 +218,7 @@ function DeliveryChallanCreateScreenContent() {
     if (validItems.length === 0) { Alert.alert("Validation", "Add at least one item."); return; }
     createMutation.mutate({
       partyId: selectedParty.id, type: "sale", documentType: "delivery_challan",
-      invoiceDate: invoiceDate.toISOString(), notes: notes.trim() || undefined,
+      invoiceDate: pickerDateToISO(invoiceDate), notes: notes.trim() || undefined,
       additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
       // Bug B: itemName is the required name snapshot; description is the
       // optional free-text per-line note (empty → omitted).

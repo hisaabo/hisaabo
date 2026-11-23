@@ -1,3 +1,4 @@
+import { businessYearMonth } from "@hisaabo/shared";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -102,9 +103,9 @@ function urgencyBadgeColor(urgency: string): string {
 // ── Main Page ─────────────────────────────────────────────────
 
 function ITCPage() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const now = businessYearMonth(new Date());
+  const [year, setYear] = useState(now.year);
+  const [month, setMonth] = useState(now.month);
   const [activeTab, setActiveTabRaw] = useState<ITCTab>(
     () => (localStorage.getItem("hisaabo_itc_tab") as ITCTab) || "dashboard",
   );
@@ -114,7 +115,7 @@ function ITCPage() {
     localStorage.setItem("hisaabo_itc_tab", tab);
   };
 
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+  const years = Array.from({ length: 5 }, (_, i) => now.year - i);
   const returnPeriod = returnPeriodString(year, month);
 
   const tabs: Array<{ value: ITCTab; label: string }> = [

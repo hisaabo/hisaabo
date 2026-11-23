@@ -20,6 +20,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { DatePickerField } from "../../../../src/components/ui";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -236,8 +237,8 @@ function CreateShipmentScreenContent() {
       shippingCity: shippingCity.trim() || undefined,
       shippingPincode: shippingPincode.trim() || undefined,
       status: "pending",
-      shipmentDate: shipmentDate?.toISOString(),
-      estimatedDelivery: estimatedDelivery?.toISOString(),
+      shipmentDate: shipmentDate ? pickerDateToISO(shipmentDate) : undefined,
+      estimatedDelivery: estimatedDelivery ? pickerDateToISO(estimatedDelivery) : undefined,
       notes: notes.trim() || undefined,
     });
   };

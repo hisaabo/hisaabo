@@ -23,6 +23,7 @@ import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 /* ── Types & Helpers ──────────────────────────────────────────── */
 
@@ -292,8 +293,8 @@ function CreateRecurringInvoiceScreenContent() {
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
       })),
-      startDate: startDate.toISOString(),
-      endDate: showEndDate && endDate ? endDate.toISOString() : undefined,
+      startDate: pickerDateToISO(startDate),
+      endDate: showEndDate && endDate ? pickerDateToISO(endDate) : undefined,
       maxRuns: maxRuns ? parseInt(maxRuns) : undefined,
       notes: notes.trim() || undefined,
     });

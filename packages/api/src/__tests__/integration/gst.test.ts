@@ -742,7 +742,7 @@ describe("Composition scheme enforcement", () => {
         type: "sale",
         documentType: "invoice",
         status: "sent",
-        invoiceDate: new Date(2025, 7, 10, 12, 0, 0), // August 10, 2025 → Q2 FY (Jul–Sep) = Q3 calendar
+        invoiceDate: new Date(2025, 7, 10, 12, 0, 0), // August 10, 2025 → GST Q2 of FY 2025-26 (Jul–Sep)
       },
     );
 
@@ -754,8 +754,8 @@ describe("Composition scheme enforcement", () => {
       businessId: compositionBusiness.id,
     });
 
-    // Q3 of 2025 (July–September, calendar year): quarter=3
-    const cmp08 = await caller.gst.cmp08({ year: 2025, quarter: 3 });
+    // GST quarters run from April: FY 2025-26 Q2 = July-September 2025 (the August invoice above)
+    const cmp08 = await caller.gst.cmp08({ year: 2025, quarter: 2 });
 
     expect(parseFloat(cmp08.taxableValue)).toBeGreaterThan(0);
     expect(parseFloat(cmp08.taxPayable)).toBeGreaterThan(0);

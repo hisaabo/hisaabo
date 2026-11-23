@@ -46,7 +46,7 @@ import {
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { EWBClient, computeValidUpto } from "../lib/ewb-client.js";
-import { mapInvoiceToEWB } from "../lib/invoice-to-ewb.js";
+import { mapInvoiceToEWB, EwayBillNotEligibleError } from "../lib/invoice-to-ewb.js";
 import type { TransportDetails, InvoiceForEWB, LineItemForEWB } from "../lib/invoice-to-ewb.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -152,7 +152,9 @@ export const ewayBillRouter = router({
         })
         .from(invoiceItems)
         .leftJoin(items, eq(invoiceItems.itemId, items.id))
-        .where(eq(invoiceItems.invoiceId, invoice.id));
+        .where(eq(invoiceItems.invoiceId, invoice.id))
+        // line order: "line N" in a refusal, and the NIC item list, must not depend on the heap order of the rows
+        .orderBy(invoiceItems.sortOrder);
 
       if (!lineItemRows.length) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice has no line items" });
@@ -241,6 +243,7 @@ export const ewayBillRouter = router({
         businessCity: business.city,
         businessPincode: business.pincode,
         businessStateCode: business.stateCode,
+        businessAnnualTurnover: business.annualTurnover,
       };
 
       const lineItemsForEWB: LineItemForEWB[] = lineItemRows.map((li) => ({
@@ -269,7 +272,16 @@ export const ewayBillRouter = router({
         toPincode:       input.toPincode,
       };
 
-      const ewbPayload = mapInvoiceToEWB(invoiceForEWB, lineItemsForEWB, transportDetails);
+      // A line with no usable HSN is refused here, before any NIC call and before anything is written.
+      let ewbPayload: ReturnType<typeof mapInvoiceToEWB>;
+      try {
+        ewbPayload = mapInvoiceToEWB(invoiceForEWB, lineItemsForEWB, transportDetails);
+      } catch (err) {
+        if (err instanceof EwayBillNotEligibleError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
+        }
+        throw err;
+      }
 
       // Override GSTIN in the client with the actual business GSTIN
       const ewbClient = requireEWBClient();

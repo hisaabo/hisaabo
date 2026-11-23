@@ -1,7 +1,7 @@
 import PDFDocument from "pdfkit";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { money, splitDocumentGst } from "@hisaabo/shared";
+import { money, splitDocumentGst, BUSINESS_TIME_ZONE, isIntraStateSupply } from "@hisaabo/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
@@ -114,10 +114,13 @@ function fmt(amount: string | number): string {
 
 function fmtDate(dateStr: string): string {
   const d = new Date(dateStr);
+  // The business-calendar date (IST), not the server's: an invoice dated 1 April is stored as
+  // 31 March 18:30 UTC and must print as 01 Apr.
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit",
     month: "short",
     year: "numeric",
+    timeZone: BUSINESS_TIME_ZONE,
   }).format(d);
 }
 
@@ -164,14 +167,14 @@ function isGstRegistered(data: InvoicePDFData): boolean {
   return data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition";
 }
 
-function isSameState(data: InvoicePDFData): boolean {
-  if (data.businessStateCode && data.partyStateCode) {
-    return data.businessStateCode === data.partyStateCode;
-  }
-  if (data.businessState && data.partyState) {
-    return data.businessState.toLowerCase() === data.partyState.toLowerCase();
-  }
-  return false;
+// CGST + SGST or IGST: the ONE decision of @hisaabo/shared (the GSTIN's state, then the state code, then
+// the state name), the same one the returns, the ledger, the e-invoice and the e-way bill use, so the
+// document never shows a split the filing contradicts.
+export function isSameState(data: InvoicePDFData): boolean {
+  return isIntraStateSupply(
+    { gstin: data.businessGstin, stateCode: data.businessStateCode, state: data.businessState },
+    { gstin: data.partyGstin, stateCode: data.partyStateCode, state: data.partyState },
+  );
 }
 
 interface GstBreakdown {

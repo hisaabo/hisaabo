@@ -188,6 +188,109 @@ jobs:
           files: packages/api/coverage/lcov.info
           fail_ci_if_error: false
 
+  # Everything about dates is on the business calendar (IST, no daylight saving), so no result may depend
+  # on the zone of the machine. The jobs above run in UTC (the default of every runner, and of the shipped
+  # images). This one runs the date-sensitive suites under two other server zones, one with the offset of
+  # the business (Asia/Kolkata) and one with DST (America/Los_Angeles: 8 Mar and 1 Nov 2026 are the
+  # edges the DST tests use), and puts the DATABASE session in the same zone, so SQL that leans on the
+  # session zone (date_trunc, ::date, to_char) is caught too. node-postgres-style PGTZ is not read by
+  # the postgres.js driver the API uses, so the zone is set on the database itself.
+  # Subset on a pull request (a few minutes, in parallel); the whole API suite on a push to main.
+  time-zones:
+    name: Time zones (${{ matrix.tz }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: typecheck-lint
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [Asia/Kolkata, America/Los_Angeles]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: hisaabo_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d hisaabo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+
+    env:
+      TZ: ${{ matrix.tz }}
+      PGTZ: ${{ matrix.tz }}
+      TEST_DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+      DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+      # one worker: a worker database is cloned from the template and would not carry its session zone
+      API_TEST_WORKERS: 1
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push schema to test DB
+        run: pnpm db:push
+
+      - name: Put the database session in the same time zone
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h localhost -p 5433 -U test -d hisaabo_test -c "ALTER DATABASE hisaabo_test SET timezone TO '${{ matrix.tz }}'"
+          psql -h localhost -p 5433 -U test -d hisaabo_test -Atc "SELECT 'new sessions run in ' || current_setting('TimeZone')"
+
+      - name: Shared (business calendar, DST edges, state and UQC tables)
+        run: pnpm --filter @hisaabo/shared exec vitest run
+
+      - name: Web date helpers and date pickers
+        run: pnpm --filter @hisaabo/web exec vitest run src/hooks src/lib src/components/ui src/components/settings
+
+      - name: Mobile date helpers (picked days across DST edges)
+        run: pnpm --filter @hisaabo/mobile exec jest src/lib
+
+      - name: CLI and MCP date arguments
+        run: |
+          pnpm --filter @hisaabo/cli test
+          pnpm --filter @hisaabo/mcp exec vitest run
+
+      # The golden suites (dates, GST months, recurring, GSTR-1 JSON, CMP-08, intra / inter-state) and the unit
+      # and integration tests that touch a date.
+      - name: API date-sensitive suites
+        run: >-
+          pnpm --filter @hisaabo/api exec vitest run
+          src/__tests__/integration/golden
+          src/__tests__/integration/recurring-invoice
+          src/__tests__/integration/dashboard
+          src/__tests__/integration/gst
+          src/__tests__/integration/itc
+          src/__tests__/integration/reports
+          src/__tests__/integration/tally-export
+          src/__tests__/gst
+          src/__tests__/uqc-maps
+          src/__tests__/import-dates-ist
+          src/__tests__/invoice-to
+          src/__tests__/invoice-pdf-same-state
+          src/__tests__/tally-xml-export
+          src/__tests__/tds-sections
+
+      - name: Whole API suite (push to main)
+        if: github.event_name == 'push'
+        run: pnpm --filter @hisaabo/api exec vitest run
+
   build:
     name: Build
     runs-on: ubuntu-latest

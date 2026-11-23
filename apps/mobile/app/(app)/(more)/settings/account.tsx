@@ -19,6 +19,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
 import { parseUserAgent } from "../../../../src/lib/parse-user-agent";
+import { getAccountTimeRange } from "../../../../src/lib/business-day";
 
 /* ─── Constants ────────────────────────────────────────────────────────────── */
 
@@ -85,12 +86,7 @@ function getDeviceIcon(deviceType: "desktop" | "mobile" | "tablet"): string {
 }
 
 function getTimeRange(filter: TimeFilter): { fromDate?: string; toDate?: string } {
-  if (filter === "all") return {};
-  const now = new Date();
-  const from = new Date(now);
-  if (filter === "week") from.setDate(from.getDate() - 7);
-  else if (filter === "month") from.setMonth(from.getMonth() - 1);
-  return { fromDate: from.toISOString(), toDate: now.toISOString() };
+  return getAccountTimeRange(filter);
 }
 
 /* ─── Pill Tab Component ───────────────────────────────────────────────────── */

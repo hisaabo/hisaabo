@@ -1,3 +1,4 @@
+import { businessDateOf } from "@hisaabo/shared";
 /**
  * Shared building blocks for the WebMCP tool catalog.
  *
@@ -210,8 +211,7 @@ export function withPaginationMeta<T>(
   return { ...result, hasMore: result.total > result.page * result.limit };
 }
 
-/** Local calendar date as `YYYY-MM-DD` (never UTC-shifted). */
-export function localIsoDate(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** The calendar date `YYYY-MM-DD` of an instant on the business calendar (IST), never the browser's zone. */
+export function businessIsoDate(d: Date): string {
+  return businessDateOf(d);
 }

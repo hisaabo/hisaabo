@@ -96,7 +96,7 @@ describe("TallyExportPanel", () => {
 
     // Default preset is "This FY": both bounds are explicit ISO datetimes.
     const arg = fetchTallyExport.mock.calls[0]![0] as { fromDate: string; toDate: string };
-    expect(arg.fromDate).toMatch(/^\d{4}-04-01T00:00:00\.000Z$/);
+    expect(arg.fromDate).toMatch(/^\d{4}-03-31T18:30:00\.000Z$/); // 1 April 00:00 IST
     expect(new Date(arg.toDate).toISOString()).toBe(arg.toDate);
 
     expect(downloadedAs).toBe("tally-export-2026-04-01-to-2026-11-22.xml");

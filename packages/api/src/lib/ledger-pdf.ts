@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
@@ -53,6 +54,7 @@ function fmtDate(d: Date | string): string {
     day: "2-digit",
     month: "short",
     year: "numeric",
+    timeZone: BUSINESS_TIME_ZONE, // the business-calendar (IST) date, not the server's
   }).format(date);
 }
 

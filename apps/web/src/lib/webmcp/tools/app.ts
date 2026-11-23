@@ -8,7 +8,7 @@
  */
 
 import type { WebMcpToolDefinition } from "../types";
-import { enumOf, localIsoDate, noInput, objectSchema, str, uuid } from "./shared";
+import { enumOf, businessIsoDate, noInput, objectSchema, str, uuid } from "./shared";
 
 /**
  * Sidebar routes (see `navSections` in `apps/web/src/routes/__root.tsx`) keyed
@@ -84,7 +84,7 @@ const hisaaboContext: WebMcpToolDefinition = {
       businessName: ctx.businessName,
       currentPage: pageKeyForPath(ctx.pathname) ?? ctx.pathname,
       currentPath: ctx.pathname,
-      todayIso: localIsoDate(now),
+      todayIso: businessIsoDate(now),
       indianFinancialYear: indianFinancialYear(now),
       currency: "INR",
       moneyFormat: "decimal strings e.g. '1500.00'",
