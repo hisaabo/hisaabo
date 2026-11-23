@@ -19,11 +19,13 @@ config.resolver.unstable_conditionNames = [
 ];
 
 // Resolve .js imports to .ts source files (shared package uses Node ESM
-// .js extensions in its imports, e.g. import { x } from './validators.js')
+// .js extensions in its imports, e.g. import { x } from './validators.js' or
+// '../permissions.js'). Parent-relative imports must be included: without them
+// the release bundle failed on shared/src/notifications/templates.ts.
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Only intercept relative .js imports from workspace packages (not node_modules)
   if (
-    moduleName.startsWith("./") &&
+    (moduleName.startsWith("./") || moduleName.startsWith("../")) &&
     moduleName.endsWith(".js") &&
     context.originModulePath &&
     !context.originModulePath.includes("node_modules")
