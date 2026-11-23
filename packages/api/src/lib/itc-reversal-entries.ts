@@ -23,6 +23,7 @@ import { businesses, itcLedgerEntries, parties } from "@hisaabo/db";
 import { money, splitDocumentGst } from "@hisaabo/shared";
 import { classifyLedgerDocument } from "./ledger-documents.js";
 import { isIntraStateSupply } from "./gst-split.js";
+import { gstReturnPeriodOf } from "./gst-period.js";
 
 // A Drizzle transaction (tenant DB).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,6 +64,7 @@ export async function recordPurchaseReversalItc(
   const [biz] = await tx
     .select({
       gstRegistrationType: businesses.gstRegistrationType,
+      gstin: businesses.gstin,
       stateCode: businesses.stateCode,
       state: businesses.state,
     })
@@ -72,11 +74,11 @@ export async function recordPurchaseReversalItc(
   if (biz?.gstRegistrationType === "composition") return;
 
   const [party] = await tx
-    .select({ stateCode: parties.stateCode, state: parties.state })
+    .select({ gstin: parties.gstin, stateCode: parties.stateCode, state: parties.state })
     .from(parties)
     .where(and(eq(parties.id, p.partyId), eq(parties.businessId, p.businessId)))
     .limit(1);
-  // The same test GSTR-3B and the invoice's own ITC entry use (state codes, then names).
+  // The same decision GSTR-3B and the invoice's own ITC entry use (GSTIN state, state code, then name).
   const sameState = isIntraStateSupply(biz, party);
 
   let cgst = "0";
@@ -94,7 +96,7 @@ export async function recordPurchaseReversalItc(
   await tx.insert(itcLedgerEntries).values({
     businessId: p.businessId,
     invoiceId: p.documentId,
-    returnPeriod: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    returnPeriod: gstReturnPeriodOf(d),
     status: "available",
     cgst,
     sgst,

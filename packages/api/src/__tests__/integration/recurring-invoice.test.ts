@@ -34,7 +34,8 @@ import {
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import { getTenantTestDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
-import { processDueTemplates } from "../../lib/recurring-invoice-scheduler.js";
+import { processDueTemplates, resolveOccurrenceConflict } from "../../lib/recurring-invoice-scheduler.js";
+import { computeNextRunDate } from "../../lib/recurring-invoice-generator.js";
 
 // ── Shared fixture ─────────────────────────────────────────────────────────────
 
@@ -898,17 +899,17 @@ describe("REC-LOCK: concurrent runners generate each occurrence once", () => {
     await db.insert(recurringInvoiceRuns).values({ templateId: tpl.id, businessId: lockBusiness.id, status: "success" });
   });
 
-  it("an occurrence consumed by another run is skipped with a warning, not recorded as a failure", async () => {
+  it("an occurrence that already has a run recorded and was not advanced is advanced past, not retried on every tick", async () => {
     const tpl = await dueTemplate("Occurrence already consumed");
     const db = getTenantTestDb();
-    // The state a lost race would leave: a success run for this occurrence exists but the template was not advanced.
+    // The state an old resume (or a manual edit) leaves: a success run for this occurrence exists but the template is due on it again.
     await db.insert(recurringInvoiceRuns).values({
       templateId: tpl.id, businessId: lockBusiness.id, status: "success", scheduledFor: tpl.nextRunDate,
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       await processDueTemplates(await getTenantDb("single"));
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("already consumed by another run"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("already has a run recorded"));
     } finally {
       warn.mockRestore();
     }
@@ -917,6 +918,29 @@ describe("REC-LOCK: concurrent runners generate each occurrence once", () => {
     expect(res.runs).toHaveLength(1);          // only the pre-existing run: no failed row, no second success
     expect(res.invoices).toBe(0);              // and the rolled-back attempt left no invoice behind
     expect(res.totalRuns).toBe(0);
+    // moved on by one period, so the next tick finds nothing due (it used to conflict on every tick for ever)
+    const [after] = await db.select({ nextRunDate: recurringInvoiceTemplates.nextRunDate, status: recurringInvoiceTemplates.status })
+      .from(recurringInvoiceTemplates).where(eq(recurringInvoiceTemplates.id, tpl.id));
+    expect(after!.nextRunDate).toEqual(computeNextRunDate(tpl.nextRunDate, "monthly", null, null));
+    expect(after!.status).toBe("active");
+    await processDueTemplates(await getTenantDb("single"));
+    expect((await outcome(tpl.id)).runs).toHaveLength(1);
+  });
+
+  it("an occurrence consumed by a concurrent runner (the template has already moved on) is left alone", async () => {
+    const tpl = await dueTemplate("Occurrence consumed concurrently");
+    const db = getTenantTestDb();
+    const movedOn = computeNextRunDate(tpl.nextRunDate, "monthly", null, null);
+    await db.update(recurringInvoiceTemplates).set({ nextRunDate: movedOn }).where(eq(recurringInvoiceTemplates.id, tpl.id));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await resolveOccurrenceConflict(await getTenantDb("single"), tpl.id, tpl.nextRunDate)).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("was consumed by another run"));
+    } finally {
+      warn.mockRestore();
+    }
+    const [after] = await db.select({ nextRunDate: recurringInvoiceTemplates.nextRunDate }).from(recurringInvoiceTemplates).where(eq(recurringInvoiceTemplates.id, tpl.id));
+    expect(after!.nextRunDate).toEqual(movedOn); // not advanced a second time
   });
 
   it("a template that keeps failing records the failure once per distinct error, not once per tick", async () => {

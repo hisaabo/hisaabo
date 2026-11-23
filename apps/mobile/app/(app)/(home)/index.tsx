@@ -24,14 +24,14 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { StatusBadge, Skeleton, QueryError } from "../../../src/components/ui";
 import { BiometricSetupPrompt } from "../../../src/components/BiometricSetupPrompt";
+import { getPeriodDates, type MobilePeriod } from "../../../src/lib/business-day";
 
 /* ── Period helpers ──────────────────────────────────────────── */
-// CRITICAL: Use Date.UTC() instead of new Date(y,m,d) to avoid IST timezone
-// shifting. In IST (UTC+5:30), new Date(2025,3,1).toISOString() produces
-// "2025-03-31T18:30:00Z" — March 31 UTC, not April 1. Aligned with web's
-// useDateRange hook.
+// Periods are IST calendar windows (the business calendar), shared with the web app and the API:
+// see src/lib/business-day.ts and @hisaabo/shared business-time. A phone-local or UTC "This Month"
+// puts a document dated 1 Nov 03:00 IST (2026-10-31T21:30Z) in October.
 
-type Period = "month" | "quarter" | "fy" | "all";
+type Period = MobilePeriod;
 
 const PERIODS: { key: Period; label: string }[] = [
   { key: "month", label: "This Month" },
@@ -39,28 +39,6 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "fy", label: "This FY" },
   { key: "all", label: "All Time" },
 ];
-
-function utcDate(y: number, m: number, d: number, h = 0, min = 0, s = 0): string {
-  return new Date(Date.UTC(y, m, d, h, min, s)).toISOString();
-}
-
-function getPeriodDates(period: Period): { fromDate?: string; toDate?: string } {
-  if (period === "all") return {};
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = now.getUTCMonth();
-  const toDate = now.toISOString();
-  if (period === "month") {
-    return { fromDate: utcDate(yyyy, mm, 1), toDate };
-  }
-  if (period === "quarter") {
-    const q = Math.floor(mm / 3);
-    return { fromDate: utcDate(yyyy, q * 3, 1), toDate };
-  }
-  // Indian FY: April (month 3) to March
-  const fyYear = mm >= 3 ? yyyy : yyyy - 1;
-  return { fromDate: utcDate(fyYear, 3, 1), toDate };
-}
 
 /* ── Dashboard ──────────────────────────────────────────────── */
 

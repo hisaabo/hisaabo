@@ -23,6 +23,7 @@ import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
 import { useCan } from "../../../src/hooks/useCan";
+import { getCustomRangeDates } from "../../../src/lib/business-day";
 
 type LedgerTab = "ledger" | "topItems" | "report";
 
@@ -70,8 +71,7 @@ export default function PartyDetailScreen() {
     page: ledgerPage,
     limit: 50,
   };
-  if (ledgerFrom) ledgerInput.fromDate = new Date(ledgerFrom.getFullYear(), ledgerFrom.getMonth(), ledgerFrom.getDate()).toISOString();
-  if (ledgerTo) ledgerInput.toDate = new Date(ledgerTo.getFullYear(), ledgerTo.getMonth(), ledgerTo.getDate(), 23, 59, 59, 999).toISOString();
+  Object.assign(ledgerInput, getCustomRangeDates(ledgerFrom, ledgerTo));
 
   const { data: ledgerData, isLoading: ledgerLoading } =
     trpc.party.ledger.useQuery(
@@ -89,8 +89,7 @@ export default function PartyDetailScreen() {
     partyId: id ?? "",
     limit: 1000,
   };
-  if (reportFrom) reportInput.fromDate = new Date(reportFrom.getFullYear(), reportFrom.getMonth(), reportFrom.getDate()).toISOString();
-  if (reportTo) reportInput.toDate = new Date(reportTo.getFullYear(), reportTo.getMonth(), reportTo.getDate(), 23, 59, 59, 999).toISOString();
+  Object.assign(reportInput, getCustomRangeDates(reportFrom, reportTo));
 
   const { data: reportData, isLoading: reportLoading } =
     trpc.party.ledgerReport.useQuery(

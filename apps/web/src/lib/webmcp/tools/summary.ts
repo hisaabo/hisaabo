@@ -14,6 +14,7 @@
  * restyle the prompt.
  */
 
+import { BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 import type { WebMcpConfirmChange, WebMcpToolContext } from "../types";
 import { formatCurrency } from "@/lib/utils";
 import { str } from "./shared";
@@ -24,14 +25,14 @@ export function rupees(amount: unknown): string {
   return /^-?\d+(\.\d+)?$/.test(value) ? formatCurrency(value) : "an unspecified amount";
 }
 
-/** "14 Oct 2026" from an ISO string, or the raw text when it does not parse. */
+/** "14 Oct 2026" (the IST day) from an ISO string, or the raw text when it does not parse. */
 export function day(iso: unknown): string | null {
   const value = str(iso);
   if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime())
     ? value
-    : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: BUSINESS_TIME_ZONE });
 }
 
 function record(value: unknown): Record<string, unknown> | null {

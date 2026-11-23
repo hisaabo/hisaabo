@@ -38,10 +38,24 @@ test itself.
 | `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass |
 | `14-purchase-side-reversals` | Credit note / sales return raised from a purchase invoice (`type = purchase`) | pass |
-| `15-tax-inclusive-items` | Items priced including tax: POS tile rates, an intra-/inter-state bill, purchase side, every document type, 40 random bills tied across invoice, ledger, GSTR-3B and the PDF table | pass |
-| `16-store-order-inclusive-items` | An online-store order of tax-inclusive items: the invoice line holds the exclusive rate, the order total is unchanged, and editing a quantity does not tax the price twice | pass |
-| `17-inclusive-shelf-price-round-off` | A tax-inclusive shelf price that does not bill to the paisa (₹10 incl. 18% = 9.99, ₹41 = 41.01): the invoice round-off brings it back to the shelf total; ledger, GSTR-3B and party balance all at the shelf price | pass |
-| `18-e-document-headers` | E-invoice (IRP) and e-way bill payloads of invoices the routers stored: line discount only, invoice discount only, both, charges + round-off, the store 3 x 99.00 order; NIC header formulas hold exactly | pass |
+| `15-einvoice-supply-type` | IRP payload for domestic B2B sales: SupTyp `B2B` intra- and inter-state, place of supply, exports refused | pass |
+| `16-gst-return-periods` | GSTR-1 JSON, GSTR-9 and CMP-08 periods are April-March for businesses whose books start in April, January or July; only the trial balance follows the books year | pass |
+| `17-einvoice-hsn` | IRP payload HSN: missing HSN refused per line, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
+| `18-gstr1-hsn-summary` | GSTR-1 Table 12: one row per HSN + UQC + rate, real UQC, JSON `rt`, CSV section; ties to B2B + B2CS = GSTR-3B 3.1(a); exact quantities | pass |
+| `19-month-windows` | Half-open IST month / quarter windows: GSTR-1, 3B, 9, 2B, CMP-08, ITC period, IRP date, dashboard; 23:59:59.500 and 00:00:00.000 either side of a month and of the FY | pass |
+| `20-eway-bill-hsn` | e-way bill HSN: missing HSN refused per line before the NIC, 4/6/8 digits at exactly ₹5 Cr and a paisa either side | pass |
+| `21-gstr1-hsn-missing` | GSTR-1 with a line that has no HSN: JSON export refused with the list to fix, report and CSV flag it; with an HSN everywhere the JSON carries `rt` and the real UQC | pass |
+| `22-date-ranges` | Date presets and custom ranges on the IST calendar end to end (invoice list, daybook, month / FY buckets, trial-balance year, Tally file name); documents at 23:59:59.500 IST and 00:00:00 IST either side of a month and of the FY | pass |
+| `23-recurring-ist` | Recurring run dates on the IST calendar: monthly on the 1st with no drift, month-end clamping (28/29/30/31, leap year), catch-up, anchored vs unanchored, end date inclusive; Run now x3 then pause / resume keeps the next run; a due occurrence with a run already recorded is advanced; only a template still on its start schedule is anchored | pass |
+| `24-gstr1-json-dates` | GSTR-1 portal JSON, CSV and statement dates are the IST day (IST-midnight inputs); period upper bound takes microseconds | pass |
+| `25-cmp08` | CMP-08 counts what GSTR-1 / 3B count: invoices only, net of credit notes and returns, no quotations / challans / deleted / cancelled; IST quarter edges | pass |
+| `26-intra-inter-state` | one intra / inter-state decision in GSTR-1, GSTR-3B, the ledger, the IRP and the e-way bill: GSTIN-only parties, GSTIN beats a wrong stored code (IRP / EWB refuse it), Andhra Pradesh 28 = 37, invalid code `50` ignored, nothing on file = supplier's state | pass |
+| `27-gstr1-json-rows` | GSTR-1 portal JSON: rate-wise `itms` for B2B / B2CL / CDNR, B2CS by supply type + pos + rate, Table 12 `val` and service `NA`, UQC from one list, sections tie to Table 12 and 3B; refused (naming the document) for unregistered notes, lines not matching totals, a non-GST state | pass |
+| `28-tax-inclusive-items` | Items priced including tax: POS tile rates, an intra-/inter-state bill, purchase side, every document type, 40 random bills tied across invoice, ledger, GSTR-3B and the PDF table | pass |
+| `29-store-order-inclusive-items` | An online-store order of tax-inclusive items: the invoice line holds the exclusive rate, the order total is unchanged, and editing a quantity does not tax the price twice | pass |
+| `30-inclusive-shelf-price-round-off` | A tax-inclusive shelf price that does not bill to the paisa (₹10 incl. 18% = 9.99, ₹41 = 41.01): the invoice round-off brings it back to the shelf total; ledger, GSTR-3B and party balance all at the shelf price | pass |
+| `31-e-document-headers` | E-invoice (IRP) and e-way bill payloads of invoices the routers stored: line discount only, invoice discount only, both, charges + round-off, the store 3 x 99.00 order; NIC header formulas hold exactly | pass |
+| `32-gstr1-inclusive-items` | GSTR-1 portal JSON of a store order of tax-inclusive items (stored taxable 251.69, not qty x rate) and of a shelf-price invoice with round-off: B2B rate rows, Table 12 and GSTR-3B tie; neither invoice is refused | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation
@@ -129,6 +143,39 @@ sheet has no year-end close). They are labelled *documented gap* and **0.12.0 wi
 change these expectations**. When the posted GL lands, change those literals
 deliberately, with the new numbers worked out by hand and reviewed, never
 regenerated from output.
+
+## Date ranges and the time zone
+
+Everything about dates is on the business calendar (IST, UTC+05:30), so the date tests must not depend
+on the zone of the machine. Run the date suites under three zones before changing any date code:
+
+```bash
+for tz in UTC Asia/Kolkata America/Los_Angeles; do
+  TZ=$tz pnpm --filter @hisaabo/shared exec vitest run src/__tests__/business-time.test.ts
+  TZ=$tz API_TEST_WORKERS=1 pnpm --filter @hisaabo/api exec vitest run \
+    src/__tests__/integration/golden/16 src/__tests__/integration/golden/19 src/__tests__/integration/golden/22 src/__tests__/integration/golden/23
+  TZ=$tz pnpm --filter @hisaabo/web exec vitest run src/hooks src/lib src/components/ui src/components/settings
+  TZ=$tz pnpm --filter @hisaabo/mobile exec jest
+  TZ=$tz pnpm --filter @hisaabo/cli test
+done
+```
+
+Instants in these tests are written out as UTC literals with the IST time in a comment (IST midnight of
+a day is 18:30 UTC of the day before).
+
+The API suites also depend on the **database session's** zone (SQL that uses `date_trunc`, `::date` or
+`to_char`). The postgres.js driver the API uses ignores `PGTZ`, so put the zone on the database itself
+before an API run, and use one worker (a cloned worker database does not carry it):
+
+```bash
+psql "$TEST_DATABASE_URL" -c "ALTER DATABASE hisaabo_test SET timezone TO 'America/Los_Angeles'"
+TZ=America/Los_Angeles API_TEST_WORKERS=1 pnpm --filter @hisaabo/api exec vitest run src/__tests__/integration/golden
+```
+
+CI does all of this in the `time-zones` job of `.github/workflows/ci.yml`: the shared, web, mobile, CLI,
+MCP and the date-sensitive API suites under Asia/Kolkata (the business's own offset) and
+America/Los_Angeles (DST: 8 Mar and 1 Nov 2026 are the edges the DST tests use), with the server and the
+database in the same zone; the whole API suite as well on a push to main. The default jobs run in UTC.
 
 ## Isolation
 

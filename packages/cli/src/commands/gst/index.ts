@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
-import { formatAmount, quarterRange, formatDate } from "../../format.js";
+import { formatAmount, quarterRange, formatDate, todayParts } from "../../format.js";
 import { safeFilename, writeFileSafe } from "../../safety.js";
 
 interface GstOpts {
@@ -16,10 +16,10 @@ function resolveMonthYear(opts: GstOpts): { month: number; year: number } {
     const range = quarterRange(opts.quarter);
     return { month: range.month, year: range.year };
   }
-  const now = new Date();
+  const now = todayParts(); // today in the business zone (IST by default), not the machine's
   return {
-    month: opts.month ?? (now.getMonth() + 1),
-    year: opts.year ?? now.getFullYear(),
+    month: opts.month ?? now.month,
+    year: opts.year ?? now.year,
   };
 }
 
@@ -44,6 +44,15 @@ export async function gstR1Command(opts: GstOpts): Promise<void> {
     console.log(`  Total Tax:         ${formatAmount(report.totalTax)}`);
     console.log(`  Total Invoices:    ${report.invoiceCount}`);
     console.log();
+    if (report.hsnMissing && report.hsnMissing.length > 0) {
+      console.log(`  WARNING: ${report.hsnMissing.length} line(s) have no HSN code and are filed under 0000. Add the HSN on the item(s) before filing;`);
+      console.log("  the GSTR-1 JSON export is refused until then (the CSV flags them).\n");
+    }
+    if (report.hsnInvalid && report.hsnInvalid.length > 0) {
+      console.log(`  WARNING: ${report.hsnInvalid.length} line(s) have an HSN code that cannot be filed (not 4 to 8 digits, or too short for the turnover):`);
+      for (const m of report.hsnInvalid.slice(0, 10)) console.log(`    ${m.invoiceNumber} ${m.problem}`);
+      console.log("  the GSTR-1 JSON export is refused until they are corrected (the CSV flags them).\n");
+    }
     console.log("  Use --json for full report data.");
     console.log("  Use: hisaabo gst r1-csv to download GSTN-compatible CSV.\n");
 

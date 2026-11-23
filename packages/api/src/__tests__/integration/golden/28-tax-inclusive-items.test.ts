@@ -1,5 +1,5 @@
 /**
- * Scenario 15 — Items priced INCLUDING tax ("Price includes tax").
+ * Scenario 28 — Items priced INCLUDING tax ("Price includes tax").
  *
  * A bill line is tax-exclusive: the server adds the line's GST on top of `unit_price`. An item whose saved
  * SALE price already contains the GST must therefore start a bill at its tax-exclusive rate
@@ -8,7 +8,7 @@
  *
  * Rounding rule (shared/money.ts, shared/inclusive-price.ts): integer paise, half-up, once per step.
  *
- * ── 15A  POS tiles (the server hands the register the bill rate) ─────────────────────────────────
+ * ── 28A  POS tiles (the server hands the register the bill rate) ─────────────────────────────────
  *   Atta   ₹118.00 incl. 18%   11800 x 100 / 118 = 10000            -> rate 100.00 (GST 18.00)
  *   Rice   ₹105.00 incl.  5%   10500 x 100 / 105 = 10000            -> rate 100.00 (GST  5.00)
  *   Oil    ₹ 99.00 incl. 12%    9900 x 100 / 112 = 8839.29 -> 8839  -> rate  88.39 (GST 10.61)
@@ -17,7 +17,7 @@
  *   Tee (M) ₹236.00 incl. 18%         23600 x 100 / 118 = 20000     -> rate 200.00
  *   Steel ₹100.00 exclusive, 18%                                    -> rate 100.00 (no conversion)
  *
- * ── 15B  Intra-state (MH) sale, 4 lines, billed at the tile rates ─────────────────────────────────
+ * ── 28B  Intra-state (MH) sale, 4 lines, billed at the tile rates ─────────────────────────────────
  *   #  item    qty  rate    disc  taxable          GST (rate)         line total
  *   1  Atta     2   100.00   -    200.00           36.00 (18%)        236.00   [3600p: CGST 18.00 / SGST 18.00]
  *   2  Rice     1   100.00   -    100.00            5.00 ( 5%)        105.00   [500p:  2.50 / 2.50]
@@ -28,12 +28,12 @@
  *   CGST 1800 + 250 + 531 + 1260 = 3841 = 38.41      SGST 1800 + 250 + 530 + 1260 = 3840 = 38.40
  *   Ledger:  Dr 1100 555.20 / Cr 4000 478.39, Cr 2100 38.41, Cr 2101 38.40   (555.20 = 478.39 + 38.41 + 38.40)
  *
- * ── 15C  The same bill to a customer in Karnataka: IGST 76.81 ────────────────────────────────────
- * ── 15D  Purchase: purchase prices are tax-exclusive, never converted ────────────────────────────
+ * ── 28C  The same bill to a customer in Karnataka: IGST 76.81 ────────────────────────────────────
+ * ── 28D  Purchase: purchase prices are tax-exclusive, never converted ────────────────────────────
  *   10 x 90.00 @ 18%   taxable 900.00, GST 162.00 (CGST 81.00 + SGST 81.00), total 1062.00; ITC 81.00 + 81.00
- * ── 15E  Every document type that shares the form bills the same amount ──────────────────────────
+ * ── 28E  Every document type that shares the form bills the same amount ──────────────────────────
  *   rate 100.00 @ 18% x 1 = taxable 100.00 + GST 18.00 = 118.00 (sale side); 90.00 @ 18% = 90.00 + 16.20 = 106.20 (purchase side)
- * ── 15F  Random inclusive bills: invoice, ledger, GSTR-3B and the PDF table all tie ──────────────
+ * ── 28F  Random inclusive bills: invoice, ledger, GSTR-3B and the PDF table all tie ──────────────
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { billRateFromItemPrice } from "@hisaabo/shared";
@@ -82,7 +82,7 @@ async function tileFor(w: GoldenWorld, displayName: string) {
   return tile;
 }
 
-describe("golden 15A: POS tiles of tax-inclusive items carry the tax-exclusive bill rate", () => {
+describe("golden 28A: POS tiles of tax-inclusive items carry the tax-exclusive bill rate", () => {
   let w: GoldenWorld;
   beforeAll(async () => {
     w = await createGoldenWorld();
@@ -156,7 +156,7 @@ async function seedInclusiveBill(w: GoldenWorld, partyId: string, type: "sale" =
   return w.caller.invoice.updateStatus({ id: inv.id, status: "sent" });
 }
 
-describe("golden 15B: intra-state sale of inclusive items ties across every surface", () => {
+describe("golden 28B: intra-state sale of inclusive items ties across every surface", () => {
   let w: GoldenWorld;
   let partyId: string;
   let invoiceId: string;
@@ -257,7 +257,7 @@ describe("golden 15B: intra-state sale of inclusive items ties across every surf
   });
 });
 
-describe("golden 15C: the same bill to a customer in another state is IGST", () => {
+describe("golden 28C: the same bill to a customer in another state is IGST", () => {
   let w: GoldenWorld;
   beforeAll(async () => {
     w = await createGoldenWorld();
@@ -280,7 +280,7 @@ describe("golden 15C: the same bill to a customer in another state is IGST", () 
   });
 });
 
-describe("golden 15D: purchase prices are tax-exclusive: an item flagged inclusive is NOT converted on a purchase", () => {
+describe("golden 28D: purchase prices are tax-exclusive: an item flagged inclusive is NOT converted on a purchase", () => {
   let w: GoldenWorld;
   beforeAll(async () => {
     w = await createGoldenWorld();
@@ -312,7 +312,7 @@ describe("golden 15D: purchase prices are tax-exclusive: an item flagged inclusi
   });
 });
 
-describe("golden 15E: every document type that shares the form bills the same amount", () => {
+describe("golden 28E: every document type that shares the form bills the same amount", () => {
   let w: GoldenWorld;
   let customer: string;
   let supplier: string;
@@ -357,7 +357,7 @@ describe("golden 15E: every document type that shares the form bills the same am
   });
 });
 
-// ── 15F: random inclusive bills (a reference written here, independent of the code under test) ───
+// ── 28F: random inclusive bills (a reference written here, independent of the code under test) ───
 function rng(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -373,7 +373,7 @@ const rint = (r: () => number, lo: number, hi: number) => lo + Math.floor(r() * 
 const rdiv = (n: number, d: number) => Math.floor((2 * n + d) / (2 * d));
 const f2 = (p: number) => `${Math.floor(p / 100)}.${String(p % 100).padStart(2, "0")}`;
 
-describe("golden 15F: random inclusive bills tie across invoice, ledger, GSTR-3B and the PDF table", () => {
+describe("golden 28F: random inclusive bills tie across invoice, ledger, GSTR-3B and the PDF table", () => {
   it("40 invoices (intra- and inter-state): documents, ledger and returns agree to the paisa", async () => {
     const w = await createGoldenWorld();
     const mh = (await addParty(w, "customer", "MH")).id;

@@ -446,8 +446,8 @@ function ChartCard({
 function formatPeriodLabel(period: string, granularity: "week" | "month" | "fy"): string {
   if (granularity === "week") {
     const start = new Date(period);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
+    // +6 calendar days: whole days in ms (IST has no DST), never the browser's local setDate
+    const end = new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000);
     return `${formatDateShort(start)}-${formatDateShort(end)}`;
   }
   if (granularity === "fy") {

@@ -28,6 +28,7 @@ import { QueryError, DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
 import { usePricePropagation } from "../../../src/hooks/usePricePropagation";
+import { pickerDateToISO, storedToPickerDate } from "../../../src/lib/business-day";
 
 interface LineItem {
   itemId?: string;
@@ -394,12 +395,12 @@ function InvoiceEditScreenContent() {
       }
       setInvoiceDate(
         invoice.invoiceDate
-          ? new Date(invoice.invoiceDate)
+          ? storedToPickerDate(invoice.invoiceDate)
           : new Date()
       );
       setDueDate(
         invoice.dueDate
-          ? new Date(invoice.dueDate)
+          ? storedToPickerDate(invoice.dueDate)
           : null
       );
       setNotes(invoice.notes ?? "");
@@ -569,8 +570,8 @@ function InvoiceEditScreenContent() {
     updateMutation.mutate({
       id: id ?? "",
       partyId: selectedParty.id,
-      invoiceDate: invoiceDate.toISOString(),
-      dueDate: dueDate ? dueDate.toISOString() : null,
+      invoiceDate: pickerDateToISO(invoiceDate),
+      dueDate: dueDate ? pickerDateToISO(dueDate) : null,
       notes: notes.trim() || null,
       // Bug B: itemName is the required name snapshot; description is the
       // optional free-text per-line note (empty → omitted).

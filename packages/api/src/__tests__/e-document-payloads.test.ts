@@ -31,7 +31,8 @@ function stored(rows: Array<Omit<IRPLineItem, "description" | "selectedUnit"> & 
     invoiceNumber: "INV-00001", invoiceDate: DATE, type: "sale", documentType: "invoice",
     discountAmount: null, additionalCharges: null, roundOff: null, isReverseCharge: false, ...header,
   };
-  const lines: IRPLineItem[] = rows.map((r) => ({ description: null, selectedUnit: null, ...r }));
+  // every line needs a valid HSN (4 digits up to ₹5 Cr turnover) or the mapper refuses to build the payload
+  const lines: IRPLineItem[] = rows.map((r) => ({ description: null, selectedUnit: null, itemHsn: "8517", ...r }));
   return { invoice, lines };
 }
 

@@ -295,51 +295,49 @@ describe("dashboard_summary — named periods resolve to date ranges", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("turns 'this-month' into the first and last day of the current month", () => {
-    vi.setSystemTime(new Date(2026, 8, 14, 13, 45)); // 14 Sep 2026
-    const { fromDate, toDate } = resolvePeriod("this-month");
+  // Periods are calendar periods on the business calendar (IST): boundaries are IST midnights.
+  it("turns 'this-month' into 1 Sep 00:00 IST .. the last millisecond of 30 Sep IST", () => {
+    vi.setSystemTime(new Date("2026-09-14T08:15:00.000Z"));
+    expect(resolvePeriod("this-month")).toEqual({
+      fromDate: "2026-08-31T18:30:00.000Z",
+      toDate: "2026-09-30T18:29:59.999Z",
+    });
+  });
 
-    const from = new Date(fromDate!);
-    const to = new Date(toDate!);
-    expect(from.getFullYear()).toBe(2026);
-    expect(from.getMonth()).toBe(8);
-    expect(from.getDate()).toBe(1);
-    expect(from.getHours()).toBe(0);
-    expect(to.getMonth()).toBe(8);
-    expect(to.getDate()).toBe(30); // September has 30 days
-    expect(to.getHours()).toBe(23);
-    expect(to.getMinutes()).toBe(59);
+  it("at 03:00 IST on 1 Nov 'this-month' is November, although UTC still says 31 October", () => {
+    vi.setSystemTime(new Date("2026-10-31T21:30:00.000Z"));
+    expect(resolvePeriod("this-month")).toEqual({
+      fromDate: "2026-10-31T18:30:00.000Z",
+      toDate: "2026-11-30T18:29:59.999Z",
+    });
   });
 
   it("handles 'last-month' across a year boundary", () => {
-    vi.setSystemTime(new Date(2026, 0, 9)); // 9 Jan 2026
-    const { fromDate, toDate } = resolvePeriod("last-month");
-    const from = new Date(fromDate!);
-    const to = new Date(toDate!);
-    expect([from.getFullYear(), from.getMonth(), from.getDate()]).toEqual([2025, 11, 1]);
-    expect([to.getFullYear(), to.getMonth(), to.getDate()]).toEqual([2025, 11, 31]);
+    vi.setSystemTime(new Date("2026-01-09T06:00:00.000Z"));
+    expect(resolvePeriod("last-month")).toEqual({
+      fromDate: "2025-11-30T18:30:00.000Z", // 1 Dec 00:00 IST
+      toDate: "2025-12-31T18:29:59.999Z", // the last millisecond of 31 Dec IST
+    });
   });
 
-  it("anchors 'this-fy' to 1 April of the financial year in progress", () => {
-    vi.setSystemTime(new Date(2026, 1, 20)); // 20 Feb 2026 → FY 2025-26
-    const feb = resolvePeriod("this-fy");
-    expect([new Date(feb.fromDate!).getFullYear(), new Date(feb.fromDate!).getMonth()]).toEqual([2025, 3]);
-    expect(feb.toDate).toBeUndefined();
+  it("anchors 'this-fy' to 1 April 00:00 IST of the financial year in progress", () => {
+    vi.setSystemTime(new Date("2026-02-20T06:00:00.000Z")); // FY 2025-26
+    expect(resolvePeriod("this-fy")).toEqual({ fromDate: "2025-03-31T18:30:00.000Z" });
 
-    vi.setSystemTime(new Date(2026, 5, 20)); // 20 Jun 2026 → FY 2026-27
-    const jun = resolvePeriod("this-fy");
-    expect([new Date(jun.fromDate!).getFullYear(), new Date(jun.fromDate!).getMonth()]).toEqual([2026, 3]);
+    vi.setSystemTime(new Date("2026-06-20T06:00:00.000Z")); // FY 2026-27
+    expect(resolvePeriod("this-fy")).toEqual({ fromDate: "2026-03-31T18:30:00.000Z" });
   });
 
   it("covers the calendar quarter and year", () => {
-    vi.setSystemTime(new Date(2026, 7, 5)); // 5 Aug 2026 → Q3 (Jul–Sep)
-    const q = resolvePeriod("this-quarter");
-    expect([new Date(q.fromDate!).getMonth(), new Date(q.fromDate!).getDate()]).toEqual([6, 1]);
-    expect([new Date(q.toDate!).getMonth(), new Date(q.toDate!).getDate()]).toEqual([8, 30]);
-
-    const y = resolvePeriod("this-year");
-    expect([new Date(y.fromDate!).getMonth(), new Date(y.fromDate!).getDate()]).toEqual([0, 1]);
-    expect([new Date(y.toDate!).getMonth(), new Date(y.toDate!).getDate()]).toEqual([11, 31]);
+    vi.setSystemTime(new Date("2026-08-05T06:00:00.000Z")); // Q3 (Jul-Sep)
+    expect(resolvePeriod("this-quarter")).toEqual({
+      fromDate: "2026-06-30T18:30:00.000Z", // 1 Jul 00:00 IST
+      toDate: "2026-09-30T18:29:59.999Z", // the last millisecond of 30 Sep IST
+    });
+    expect(resolvePeriod("this-year")).toEqual({
+      fromDate: "2025-12-31T18:30:00.000Z", // 1 Jan 2026 00:00 IST
+      toDate: "2026-12-31T18:29:59.999Z",
+    });
   });
 
   it("sends no range at all for 'all', which the API reads as all-time", async () => {
@@ -351,14 +349,14 @@ describe("dashboard_summary — named periods resolve to date ranges", () => {
   });
 
   it("defaults to this-fy and echoes the resolved window back to the agent", async () => {
-    vi.setSystemTime(new Date(2026, 8, 14));
+    vi.setSystemTime(new Date("2026-09-14T06:00:00.000Z"));
     const client = makeClient();
     const { ctx } = makeCtx(client);
 
     const out = (await tool("dashboard_summary").execute({}, ctx)) as Record<string, unknown>;
 
     const arg = client.dashboard.summary.query.mock.calls[0][0] as { fromDate: string };
-    expect(new Date(arg.fromDate).getMonth()).toBe(3);
+    expect(arg.fromDate).toBe("2026-03-31T18:30:00.000Z"); // 1 Apr 2026 00:00 IST
     expect(out.period).toBe("this-fy");
     expect(out.totalSales).toBe("1000.00");
     expect(out.currency).toBe("INR");

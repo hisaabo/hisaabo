@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { eq, and, sql, desc, isNull, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, inArray, gte, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { gstr2bUploads, gstr2bRecords, invoices, parties, businesses } from "@hisaabo/db";
 import {
@@ -28,6 +28,7 @@ import {
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "../lib/gst-split.js";
+import { gstMonthWindow } from "../lib/gst-period.js";
 import {
   parseGSTR2BJSON,
   parseGSTR2BCSV,
@@ -102,7 +103,7 @@ export const gstr2bRouter = router({
           .leftJoin(parties, eq(invoices.partyId, parties.id))
           .where(and(...purchaseInvoiceConditions)),
         ctx.db
-          .select({ stateCode: businesses.stateCode, state: businesses.state })
+          .select({ gstin: businesses.gstin, stateCode: businesses.stateCode, state: businesses.state })
           .from(businesses)
           .where(eq(businesses.id, ctx.businessId))
           .limit(1),
@@ -112,7 +113,7 @@ export const gstr2bRouter = router({
       // Tax heads of each purchase invoice, with the rule the returns use: intra-state is split
       // line by line (CGST gets the odd paisa), inter-state is IGST in one piece.
       const purchaseInvoices: PurchaseInvoice[] = purchaseRows.map((r) => {
-        const intraState = isIntraStateSupply(biz, { stateCode: r.partyStateCode, state: r.partyState });
+        const intraState = isIntraStateSupply(biz, { gstin: r.partyGstin, stateCode: r.partyStateCode, state: r.partyState });
         const tax = r.taxAmount ?? ZERO;
         const [cgst, sgst] = intraState ? documentGstSplit(tax, lineSplits.get(r.id)) : [ZERO, ZERO];
         return {
@@ -498,8 +499,7 @@ export const gstr2bRouter = router({
 
       // Determine period date range
       const [year, month] = input.returnPeriod.split("-").map(Number);
-      const periodStart = new Date(year!, month! - 1, 1);
-      const periodEnd   = new Date(year!, month!, 0, 23, 59, 59);
+      const { from: periodStart, before: periodBefore } = gstMonthWindow(year!, month!);
 
       const purchaseRows = await ctx.db
         .select({
@@ -522,7 +522,7 @@ export const gstr2bRouter = router({
             sql`${invoices.status} != 'cancelled'`,
             isNull(invoices.deletedAt),
             gte(invoices.invoiceDate, periodStart),
-            lte(invoices.invoiceDate, periodEnd),
+            lt(invoices.invoiceDate, periodBefore),
             sql`${parties.gstin} IS NOT NULL`,
           ),
         );

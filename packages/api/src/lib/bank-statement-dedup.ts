@@ -38,11 +38,11 @@ export interface DedupLine {
 /**
  * Calendar-day number of a statement date.
  *
- * parseDate() builds ISO dates at UTC midnight but dd/mm/yyyy style dates at
- * server-local midnight, so the same statement day can be a different instant
- * depending on the file format and the server's timezone. Local midnight is
- * always within 12h of UTC midnight of the same day, so rounding to the nearest
- * UTC day maps both to the same number.
+ * parseDate() now builds every date at 00:00 IST (the business calendar), but statements
+ * imported before 0.10.1 hold ISO dates at UTC midnight and dd/mm/yyyy dates at the server's
+ * local midnight. IST midnight (18:30 UTC the evening before) and UTC midnight of the same day
+ * are both within 12h of that day's UTC midnight, so rounding to the nearest UTC day maps all
+ * of them to the same number.
  */
 export function statementDay(date: Date): number {
   return Math.round(date.getTime() / MS_PER_DAY);

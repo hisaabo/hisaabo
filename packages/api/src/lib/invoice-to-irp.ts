@@ -9,10 +9,20 @@
  *
  * Money: all internal amounts are strings (NUMERIC(15,2)), IRP requires numbers.
  * We parse only at the boundary here — never accumulate JS floats.
+ *
+ * SUPPLY TYPE (TranDtls.SupTyp):
+ * The IRP values are B2B, SEZWP, SEZWOP, EXPWP, EXPWOP and DEXP. Hisaabo has no
+ * export / SEZ / deemed-export fields until 0.11.0, so every invoice this mapper
+ * accepts is a domestic B2B supply and SupTyp is always "B2B", intra- or
+ * inter-state alike. Inter- vs intra-state is expressed by IGST vs CGST + SGST
+ * and by the place of supply (BuyerDtls.Pos), never by SupTyp. A party that
+ * looks foreign (GSTIN "URP" or state code 96) is refused rather than mis-filed.
  */
 
 import type { IRPInvoiceJson } from "./irp-client.js";
-import { money } from "@hisaabo/shared";
+import { money, resolveState, supplyKind, canonicalStateCode, unitToUqc, GST_STATE_NAMES, FOREIGN_STATE_CODE } from "@hisaabo/shared";
+import { resolveLineHsns } from "./hsn-check.js";
+import { formatIstDate } from "./gst-period.js";
 
 /** The payload built from a stored invoice does not add up to that invoice's stored total (an internal inconsistency, not an IRP rejection). */
 export class EInvoicePayloadError extends Error {
@@ -35,6 +45,11 @@ export interface IRPBusiness {
   pincode: string | null;
   phone: string | null;
   email: string | null;
+  /**
+   * Annual turnover in rupees (`businesses.annual_turnover`), which sets the HSN digit minimum:
+   * 4 digits up to ₹5 Cr, 6 above. Unknown (null / undefined) means the 4-digit minimum.
+   */
+  annualTurnover?: string | null;
 }
 
 export interface IRPParty {
@@ -47,6 +62,36 @@ export interface IRPParty {
   pincode: string | null;
   phone: string | null;
   email: string | null;
+}
+
+/** TranDtls.SupTyp values in the IRP JSON schema v1.1. */
+export type IRPSupplyType = "B2B" | "SEZWP" | "SEZWOP" | "EXPWP" | "EXPWOP" | "DEXP";
+
+/**
+ * Raised when an invoice cannot be e-invoiced as Hisaabo stands today (an export, or
+ * a seller / buyer whose state cannot be worked out). Nothing has been sent to the IRP:
+ * callers turn it into a plain "cannot generate" message and leave the invoice alone.
+ */
+export class EInvoiceNotEligibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EInvoiceNotEligibleError";
+  }
+}
+
+/**
+ * Why this party looks foreign (an export), or null for a domestic party. Hisaabo parties
+ * have no country field, so the markers are the GSTIN placeholder "URP" (unregistered
+ * person, what a foreign buyer is filed under) and the "Other Country" state code 96,
+ * whether set on the party or read from the start of its GSTIN.
+ */
+export function foreignPartyReason(party: Pick<IRPParty, "gstin" | "stateCode">): string | null {
+  if (party.gstin?.trim().toUpperCase() === "URP") return 'GSTIN "URP"';
+  // an explicit stored 96 counts even when the GSTIN looks domestic: the record says "other country"
+  if (canonicalStateCode(party.stateCode) === FOREIGN_STATE_CODE || resolveState({ gstin: party.gstin, stateCode: party.stateCode }).foreign) {
+    return `state code ${FOREIGN_STATE_CODE} (other country)`;
+  }
+  return null;
 }
 
 export interface IRPInvoice {
@@ -80,38 +125,14 @@ export interface IRPLineItem {
 }
 
 // ── UQC mapping (Hisaabo unit → IRP UQC code) ─────────────────────────────────
-// Reference: https://einvoice1.gst.gov.in/Others/MasterCodes
-
-const UQC_MAP: Record<string, string> = {
-  pcs: "PCS",
-  kg: "KGS",
-  g: "GMS",
-  l: "LTR",
-  ml: "MLT",
-  m: "MTR",
-  cm: "CMT",
-  ft: "FT",
-  in: "INH",
-  box: "BOX",
-  dozen: "DZN",
-  pair: "PAR",
-  set: "SET",
-  pkt: "PAC",
-  bun: "BUN",
-  pouch: "BAG",
-  jar: "JAR",
-  btl: "BTL",
-  bag: "BAG",
-  ton: "TON",
-  pack: "PAC",
-  pet: "NOS",
-  person: "NOS",
-  other: "OTH",
-};
+// The one map shared with the GSTR-1 HSN summary and the e-way bill (@hisaabo/shared uqc.ts). This file
+// used to carry its own, with codes that are not on the UQC list ("CMT", "FT", "INH", "DZN", "PAR", "JAR").
+// "pcs" stays "PCS" (valid, and what every IRN so far carries); the shared map says "NOS" for it.
 
 function toUQC(unit: string | null | undefined): string {
   if (!unit) return "OTH";
-  return UQC_MAP[unit.toLowerCase()] ?? "OTH";
+  if (unit.trim().toLowerCase() === "pcs") return "PCS";
+  return unitToUqc(unit) ?? "OTH";
 }
 
 // ── Document type mapping ──────────────────────────────────────────────────────
@@ -132,12 +153,9 @@ function toIRPDocType(documentType: string): string {
 // ── Date formatting ────────────────────────────────────────────────────────────
 
 function toIRPDate(date: Date): string {
-  // IRP requires DD/MM/YYYY
-  const d = new Date(date);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  // DD/MM/YYYY on the IST calendar: the IRN is registered against this date (and its financial
+  // year), and a date-only "1 April" is stored as 31 March 18:30 UTC.
+  return formatIstDate(new Date(date));
 }
 
 // ── Number helpers ─────────────────────────────────────────────────────────────
@@ -171,11 +189,53 @@ export function mapInvoiceToIRP(
     throw new Error("Party GSTIN is required for e-invoicing (B2B only)");
   }
 
-  const sellerStateCode = business.stateCode ?? "00";
-  const buyerStateCode = party.stateCode ?? sellerStateCode;
-  const isInterState = sellerStateCode !== buyerStateCode;
+  const foreignReason = foreignPartyReason(party);
+  if (foreignReason) {
+    throw new EInvoiceNotEligibleError(
+      `Exports aren't supported in e-invoicing yet; available in 0.11. This customer has ${foreignReason}.`,
+    );
+  }
 
-  const supplyType = isInterState ? "EXPWP" : "B2B";
+  // The state of each side, by the one rule every GST output shares (@hisaabo/shared gst-state): the
+  // GSTIN's state first, then the stored code, then the name; legacy codes mapped (28 -> 37). Never
+  // assumed to be "the seller's": that filed an inter-state sale to a party with no state code as
+  // CGST + SGST. A stored code that disagrees with the GSTIN is refused: the IRP checks the GSTIN.
+  const seller = resolveState({ gstin: business.gstin, stateCode: business.stateCode, state: business.state });
+  if (seller.conflict) {
+    throw new EInvoiceNotEligibleError(
+      `The business state code ${seller.conflict.storedCode} does not match its GSTIN, which starts with ${seller.conflict.gstinCode} (${GST_STATE_NAMES[seller.conflict.gstinCode]}); correct one of them in Settings.`,
+    );
+  }
+  if (!seller.code) {
+    throw new EInvoiceNotEligibleError("The business has no state code; set the business state in Settings before generating an e-invoice.");
+  }
+  const buyer = resolveState({ gstin: party.gstin, stateCode: party.stateCode, state: party.state });
+  if (buyer.conflict) {
+    throw new EInvoiceNotEligibleError(
+      `Customer "${party.name}" has state code ${buyer.conflict.storedCode} but its GSTIN starts with ${buyer.conflict.gstinCode} (${GST_STATE_NAMES[buyer.conflict.gstinCode]}); correct one of them before generating an e-invoice.`,
+    );
+  }
+  if (!buyer.code) {
+    throw new EInvoiceNotEligibleError(`Customer "${party.name}" has no state code; set the customer's state before generating an e-invoice.`);
+  }
+  // What goes to the IRP is the code the GSTIN / record carries (it checks Stcd against the GSTIN's first two digits);
+  // the comparison above used the canonical one, so legacy 28 and 37 are one state.
+  const sellerStateCode = seller.rawCode!;
+  const buyerStateCode = buyer.rawCode!;
+  const isInterState = supplyKind(
+    { gstin: business.gstin, stateCode: business.stateCode, state: business.state },
+    { gstin: party.gstin, stateCode: party.stateCode, state: party.state },
+  ) === "inter";
+
+  // Always B2B (see the header): the IRP wants EXPWP for an export with payment, not
+  // for an inter-state domestic sale.
+  const supplyType: IRPSupplyType = "B2B";
+
+  // Every line needs a valid HSN before anything is built or sent.
+  const { codes: hsnCodes, problems: hsnProblems } = resolveLineHsns(lineItems, business.annualTurnover);
+  if (hsnProblems.length > 0) {
+    throw new EInvoiceNotEligibleError(`Cannot generate the e-invoice: ${hsnProblems.join("; ")}.`);
+  }
 
   // Map line items. Every amount comes from the line's STORED values, never recomputed from qty x unitPrice x rate:
   // the stored taxable value (total - tax), tax and total are what the invoice, ledger, GST returns and PDF report,
@@ -228,7 +288,7 @@ export function mapInvoiceToIRP(
       // per-line comments.
       PrdDesc: li.itemName.slice(0, 300),
       IsServc: isService,
-      HsnCd: li.itemHsn ?? "9999",
+      HsnCd: hsnCodes[idx]!,
       Qty: qty,
       Unit: toUQC(li.selectedUnit),
       UnitPrice: unitPrice,
@@ -282,6 +342,8 @@ export function mapInvoiceToIRP(
       TaxSch: "GST",
       SupTyp: supplyType,
       RegRev: invoice.isReverseCharge ? "Y" : "N",
+      // Hisaabo never charges IGST on an intra-state supply; "Y" is for SEZ / deemed
+      // exports, which arrive in 0.11.0.
       IgstOnIntra: "N",
     },
     DocDtls: {

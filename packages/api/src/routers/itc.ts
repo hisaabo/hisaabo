@@ -17,6 +17,7 @@ import {
   money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
+import { gstReturnPeriodOf } from "../lib/gst-period.js";
 import { requireCan } from "../lib/permissions.js";
 import {
   findLiveSystemJournals,
@@ -28,8 +29,7 @@ import {
 // ── Helpers ──────────────────────────────────────────────────
 
 function currentReturnPeriod(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return gstReturnPeriodOf(new Date());
 }
 
 const ZERO = "0.00";

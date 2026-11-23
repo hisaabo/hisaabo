@@ -1,5 +1,5 @@
 /**
- * Scenario 18 — The e-invoice (IRP) and e-way bill payloads of invoices the REAL routers stored.
+ * Scenario 31 — The e-invoice (IRP) and e-way bill payloads of invoices the REAL routers stored.
  *
  * The mappers read the stored line amounts (taxable = total - tax, tax, total) and the stored header (subtotal, tax,
  * invoice-level discount, charges, round-off, total). This scenario creates invoices through `invoice.create`, reads
@@ -12,13 +12,13 @@
  *   L1  3 x 99.99 @ 12%, 10% line discount:  gross 299.97, discount 29.997 -> 30.00, taxable 269.97, GST 32.3964 -> 32.40, total 302.37
  *   L2  2 x 500.00 @ 18%:                    taxable 1000.00, GST 180.00, total 1180.00
  *
- *   18A  L1 only:                  subtotal 269.97, GST 32.40, total 302.37                        (a line discount, nothing else)
- *   18B  L2, invoice discount 50:  subtotal 1000.00, GST 180.00, total 1000.00 + 180.00 - 50.00 = 1130.00
- *   18C  L1 + L2, 10% invoice discount, packing 50.00, round-off -0.37:
+ *   31A  L1 only:                  subtotal 269.97, GST 32.40, total 302.37                        (a line discount, nothing else)
+ *   31B  L2, invoice discount 50:  subtotal 1000.00, GST 180.00, total 1000.00 + 180.00 - 50.00 = 1130.00
+ *   31C  L1 + L2, 10% invoice discount, packing 50.00, round-off -0.37:
  *          subtotal 1269.97, GST 212.40, discount 10% of 1269.97 = 126.997 -> 127.00
  *          total 1269.97 + 212.40 - 127.00 + 50.00 - 0.37 = 1405.00
  *          intra-state: CGST 16.20 + 90.00 = 106.20, SGST 106.20; inter-state: IGST 212.40
- *   18D  the online-store 3 x 99.00 incl. 18% order (stored through priceStoreOrderLines):
+ *   31D  the online-store 3 x 99.00 incl. 18% order (stored through priceStoreOrderLines):
  *          rate 83.90, taxable 251.69, GST 45.31 (22.66 + 22.65), total 297.00; the item shows Discount 0.01 (251.70 - 251.69)
  */
 import { describe, it, expect, beforeAll } from "vitest";
@@ -57,7 +57,7 @@ async function payloads(w: GoldenWorld, invoiceId: string, stateCode: string) {
   }));
   const irp = mapInvoiceToIRP(
     { invoiceNumber: inv.invoiceNumber, invoiceDate: new Date(DATE), type: "sale", documentType: "invoice", isReverseCharge: false, ...header },
-    lines.map((l) => ({ description: null, selectedUnit: null, ...l })),
+    lines.map((l) => ({ description: null, selectedUnit: null, itemHsn: "8517", ...l })),
     buyer(stateCode),
     business,
   );
@@ -73,7 +73,7 @@ async function payloads(w: GoldenWorld, invoiceId: string, stateCode: string) {
   return { inv, irp, ewb };
 }
 
-describe("golden 18A: a line discount only", () => {
+describe("golden 31A: a line discount only", () => {
   let w: GoldenWorld;
   let id: string;
   beforeAll(async () => {
@@ -95,7 +95,7 @@ describe("golden 18A: a line discount only", () => {
   });
 });
 
-describe("golden 18B: an invoice-level discount only", () => {
+describe("golden 31B: an invoice-level discount only", () => {
   it("stored 1130.00; IRP Discount 50.00, TotInvVal 1130.00; EWB otherValue -50.00, totInvValue 1130.00", async () => {
     const w = await createGoldenWorld();
     const party = await addParty(w, "customer", "MH");
@@ -107,7 +107,7 @@ describe("golden 18B: an invoice-level discount only", () => {
   });
 });
 
-describe("golden 18C: line discount + 10% invoice discount + packing charge + round-off", () => {
+describe("golden 31C: line discount + 10% invoice discount + packing charge + round-off", () => {
   let w: GoldenWorld;
   let id: string;
   beforeAll(async () => {
@@ -144,7 +144,7 @@ describe("golden 18C: line discount + 10% invoice discount + packing charge + ro
   });
 });
 
-describe("golden 18D: the online-store order of 3 x 99.00 incl. 18%", () => {
+describe("golden 31D: the online-store order of 3 x 99.00 incl. 18%", () => {
   it("stored rate 83.90 / GST 45.31 / total 297.00: IRP item Discount 0.01, header Discount 0, TotInvVal 297.00; EWB totalValue 251.69", async () => {
     const w = await createGoldenWorld();
     const party = await addParty(w, "customer", "MH");

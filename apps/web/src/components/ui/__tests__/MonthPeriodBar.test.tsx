@@ -31,6 +31,27 @@ describe("MonthPeriodBar", () => {
     expect(onChange).toHaveBeenCalledWith(2025, 12);
   });
 
+  // The business calendar is IST: at 03:00 IST on 1 Nov (2026-10-31T21:30Z, still 31 Oct in UTC and
+  // in the US) "This Month" is November, whatever zone the browser is in.
+  it("This Month / Last Month follow the IST calendar, not the browser's", async () => {
+    vi.setSystemTime(new Date("2026-10-31T21:30:00.000Z"));
+    const onChange = vi.fn();
+    render(<MonthPeriodBar year={2026} month={11} onChange={onChange} />);
+    expect(screen.getByRole("button", { name: "This Month" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Last Month" }));
+    expect(onChange).toHaveBeenCalledWith(2026, 10);
+  });
+
+  it("flips to the next month at 00:00 IST, not at 00:00 UTC", () => {
+    vi.setSystemTime(new Date("2026-11-30T18:29:59.999Z")); // 23:59:59.999 IST on 30 Nov
+    const { unmount } = render(<MonthPeriodBar year={2026} month={11} onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "This Month" })).toHaveAttribute("aria-pressed", "true");
+    unmount();
+    vi.setSystemTime(new Date("2026-11-30T18:30:00.000Z")); // 00:00:00.000 IST on 1 Dec
+    render(<MonthPeriodBar year={2026} month={12} onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "This Month" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("Custom reveals month/year selectors and reports changes", async () => {
     const onChange = vi.fn();
     render(<MonthPeriodBar year={2026} month={10} onChange={onChange} />);

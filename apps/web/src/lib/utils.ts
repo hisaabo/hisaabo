@@ -1,5 +1,15 @@
-import dayjs from "dayjs";
-import { csvRow } from "@hisaabo/shared";
+import {
+  csvRow,
+  parseYmd,
+  businessDayStart,
+  businessDateOf,
+  businessToday,
+  pickedDateToISO,
+  pickedDateToEndISO,
+  formatBusinessDate,
+  formatBusinessDateShort,
+  formatBusinessMonthYearShort,
+} from "@hisaabo/shared";
 
 // Dynamic quantity formatting (no trailing zeros, up to 3 decimals) lives in
 // @hisaabo/shared so web, mobile and the PDF layer format quantities
@@ -20,65 +30,60 @@ export function formatCurrency(amount: string | number, currency = "INR"): strin
 // User-visible fallback for an absent or malformed date (see
 // apps/mobile/src/lib/utils.ts for the fuller rationale). Web and mobile
 // must agree so screenshots and E2E assertions stay in sync.
-const INVALID_DATE_FALLBACK = "—";
+const INVALID_DATE_FALLBACK = "\u2014";
+
+// A date is shown, picked and compared on the BUSINESS calendar (IST), never the browser's: the
+// same stored instant must read as the same day for every viewer (see @hisaabo/shared business-time).
+// A date-only "YYYY-MM-DD" string is that calendar day; anything else is an instant.
+function toInstant(date: string | Date | null | undefined): Date | null {
+  if (date === null || date === undefined || date === "") return null;
+  if (typeof date === "string" && parseYmd(date)) return businessDayStart(date);
+  const d = date instanceof Date ? date : new Date(date);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 export function formatDate(date: string | Date | null | undefined): string {
-  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
-  const d = dayjs(date);
-  if (!d.isValid()) return INVALID_DATE_FALLBACK;
-  return d.format("DD MMM YYYY");
+  const d = toInstant(date);
+  return d ? formatBusinessDate(d) : INVALID_DATE_FALLBACK;
 }
 
 // Short day+month label (no year) — used in chart week labels and other
 // compact list contexts where the year is implied by the surrounding filter.
 // e.g. "3 Mar".
 export function formatDateShort(date: string | Date | null | undefined): string {
-  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
-  const d = dayjs(date);
-  if (!d.isValid()) return INVALID_DATE_FALLBACK;
-  return d.format("D MMM");
+  const d = toInstant(date);
+  return d ? formatBusinessDateShort(d) : INVALID_DATE_FALLBACK;
 }
 
 // Short month+year label for monthly chart axes, e.g. "Mar 25".
-// Kept separate from formatDate so callers don't need to inline `dayjs(...).format(...)`.
 export function formatMonthYearShort(date: string | Date | null | undefined): string {
-  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
-  const d = dayjs(date);
-  if (!d.isValid()) return INVALID_DATE_FALLBACK;
-  return d.format("MMM YY");
+  const d = toInstant(date);
+  return d ? formatBusinessMonthYearShort(d) : INVALID_DATE_FALLBACK;
 }
 
 export function formatDateInput(date: string | Date | null | undefined): string {
-  if (date === null || date === undefined || date === "") return "";
-  const d = dayjs(date);
-  if (!d.isValid()) return "";
-  return d.format("YYYY-MM-DD");
+  const d = toInstant(date);
+  return d ? businessDateOf(d) : "";
 }
 
-// Centralised "today in YYYY-MM-DD" — used as a form default for
-// <input type="date"> and as the TODAY_ISO module constant. Goes through
-// dayjs so tests can freeze time and so the format is single-sourced.
+// Centralised "today in YYYY-MM-DD" on the business calendar — used as a form default for
+// <input type="date"> and as the TODAY_ISO module constant.
 export function todayISODate(): string {
-  return dayjs().format("YYYY-MM-DD");
+  return businessToday();
 }
 
 // Convert a `YYYY-MM-DD` input value (or a Date) to a full ISO string suitable
-// for tRPC mutation inputs guarded by `z.string().datetime()`. Returns undefined
-// for absent / invalid input so callers can pass it straight to an optional field.
+// for tRPC mutation inputs guarded by `z.string().datetime()`. A picked day is stored as
+// 00:00 on the business calendar (IST), whatever the browser's zone. Returns undefined for
+// absent / invalid input so callers can pass it straight to an optional field.
 export function toISOString(date: string | Date | null | undefined): string | undefined {
-  if (date === null || date === undefined || date === "") return undefined;
-  const d = dayjs(date);
-  if (!d.isValid()) return undefined;
-  return d.toISOString();
+  return pickedDateToISO(date);
 }
 
 // End-of-day variant for range filters: upper-bound "to" inputs should include
-// the whole day, so we push to 23:59:59.999 before emitting ISO.
+// the whole day, so this is the last millisecond of that day on the business calendar.
 export function toISOStringEndOfDay(date: string | Date | null | undefined): string | undefined {
-  if (date === null || date === undefined || date === "") return undefined;
-  const d = dayjs(date);
-  if (!d.isValid()) return undefined;
-  return d.endOf("day").toISOString();
+  return pickedDateToEndISO(date);
 }
 
 export function cn(...classes: (string | false | null | undefined)[]): string {

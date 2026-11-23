@@ -44,7 +44,7 @@ import {
 } from "@hisaabo/db";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { paymentSettlement, paymentTdsSql } from "./payment-settlement.js";
-import { loadLineGstSplits } from "./gst-split.js";
+import { loadLineGstSplits, isIntraStateSupply } from "./gst-split.js";
 import { logger } from "./logger.js";
 import {
   buildDocumentLines,
@@ -96,21 +96,15 @@ function warnUnexplainedDifference(doc: { id?: string; invoiceNumber?: string },
   );
 }
 
-/** Determine whether two state codes represent the same state. */
+/**
+ * Is this supply intra-state (CGST + SGST)? The shared decision (GSTIN state, stored code, state name;
+ * undecidable is intra-state), the same one the GST returns, the PDF, the e-invoice and the e-way bill use.
+ */
 function isSameState(
-  bizStateCode: string | null | undefined,
-  partyStateCode: string | null | undefined,
-  bizState: string | null | undefined,
-  partyState: string | null | undefined,
+  biz: { gstin?: string | null; stateCode?: string | null; state?: string | null } | undefined,
+  party: { gstin?: string | null; stateCode?: string | null; state?: string | null },
 ): boolean {
-  if (bizStateCode && partyStateCode) {
-    return bizStateCode === partyStateCode;
-  }
-  if (bizState && partyState) {
-    return bizState.toLowerCase() === partyState.toLowerCase();
-  }
-  // Cannot determine — treat as intra-state (conservative, avoids wrong IGST split)
-  return true;
+  return isIntraStateSupply(biz, party);
 }
 
 // ── Category → CoA code mapping ─────────────────────────────────
@@ -174,6 +168,7 @@ export async function deriveLedger(
   // ── 1. Fetch business state info for GST split ──────────────────
   const [biz] = await db
     .select({
+      gstin: businesses.gstin,
       stateCode: businesses.stateCode,
       state: businesses.state,
     })
@@ -215,6 +210,7 @@ export async function deriveLedger(
     discountAmount: string;
     additionalCharges: string;
     roundOff: string;
+    partyGstin: string | null;
     partyState: string | null;
     partyStateCode: string | null;
     status: string;
@@ -232,6 +228,7 @@ export async function deriveLedger(
       discountAmount: invoices.discountAmount,
       additionalCharges: invoices.additionalCharges,
       roundOff: invoices.roundOff,
+      partyGstin: parties.gstin,
       partyState: parties.state,
       partyStateCode: parties.stateCode,
     })
@@ -258,7 +255,7 @@ export async function deriveLedger(
     const lines = buildDocumentLines({ ...inv, lineGstSplit: lineGstSplits.get(inv.id) }, {
       coa,
       systemCodes,
-      sameState: isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState),
+      sameState: isSameState(biz, { gstin: inv.partyGstin, stateCode: inv.partyStateCode, state: inv.partyState }),
       onSuspense: warnUnexplainedDifference,
     });
     // Quotations, proformas, delivery challans etc. are non-financial — skip

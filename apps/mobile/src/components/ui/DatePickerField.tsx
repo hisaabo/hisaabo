@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { makeStyles } from "../../lib/makeStyles";
 import { useColors } from "../../contexts/ThemeContext";
 import { formatDate } from "../../lib/utils";
+import { pickerDay } from "../../lib/business-day";
 
 interface Props {
   label: string;
@@ -19,7 +20,8 @@ export function DatePickerField({ label, value, onChange, minimumDate, maximumDa
   const s = useS();
   const colors = useColors();
 
-  const formatted = formatDate(value);
+  // the picker shows the (device-local) calendar day being picked; documents store it as 00:00 IST
+  const formatted = formatDate(pickerDay(value));
 
   return (
     <View>

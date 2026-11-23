@@ -25,7 +25,7 @@
  */
 
 import { createPublicKey, type KeyObject } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 export class IRPNotConfiguredError extends Error {
   readonly code = "IRP_NOT_CONFIGURED";
@@ -85,17 +85,20 @@ export function loadIrpPublicKey(isSandbox: boolean, env: Env = process.env): Ke
   }
 
   if (pathValue) {
+    // One read, with no stat or exists check beforehand: a check followed by a read leaves a
+    // window in which the file can change (CWE-367). ENOENT, EACCES and the like surface from
+    // the read itself. The cache is keyed by the file's content, so an edited or replaced key
+    // file is picked up on the next call without a separate mtime check.
     let text: string;
-    let signature: string;
     try {
-      signature = `${pathValue}:${statSync(pathValue).mtimeMs}`;
-      const cached = cache.get(names.path);
-      if (cached?.signature === signature) return cached.key;
       text = readFileSync(pathValue, "utf8");
     } catch (err) {
       const reason = (err as NodeJS.ErrnoException).code ?? "unreadable";
       throw new IRPNotConfiguredError(`${names.path} points to ${pathValue}, which cannot be read (${reason})`);
     }
+    const signature = `${pathValue}:${text}`;
+    const cached = cache.get(names.path);
+    if (cached?.signature === signature) return cached.key;
     const key = parse(text, `${names.path} (${pathValue})`);
     cache.set(names.path, { signature, key });
     return key;

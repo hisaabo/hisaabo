@@ -1,11 +1,16 @@
 import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, payments, expenses, parties, businesses } from "@hisaabo/db";
-import { money } from "@hisaabo/shared";
+import { money, BUSINESS_TIME_ZONE, businessYearMonth, businessMonthStart } from "@hisaabo/shared";
+
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { gstMonthWindow, istYearMonth } from "../lib/gst-period.js";
 import { paymentSettledSql } from "../lib/payment-settlement.js";
+
+// The business calendar zone as a SQL literal for AT TIME ZONE (a constant, never user input).
+const IST_ZONE = sql.raw(`'${BUSINESS_TIME_ZONE}'`);
 
 // "Collected" means two different things and must not be mixed within a widget:
 //   - SETTLED  = cash + customer-withheld TDS (payments.amount + tds). Compare it
@@ -29,12 +34,13 @@ export const dashboardRouter = router({
       .where(eq(businesses.id, ctx.businessId))
       .limit(1);
 
-    const fyStartMonth = (biz?.financialYearStart ?? 4) - 1; // convert to 0-indexed
+    const fyStartMonth = biz?.financialYearStart ?? 4; // 1-indexed
 
-    const now = new Date();
-    // If current month is before FY start month, the FY started last year
-    const fyYear = now.getMonth() < fyStartMonth ? now.getFullYear() - 1 : now.getFullYear();
-    const fyStart = new Date(fyYear, fyStartMonth, 1);
+    // The books year starts at 00:00 IST (the business calendar) on day 1 of that month.
+    // If the current month is before the FY start month, the FY started last year.
+    const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+    const fyYear = nowMonth < fyStartMonth ? nowYear - 1 : nowYear;
+    const fyStart = businessMonthStart(fyYear, fyStartMonth);
 
     // When no input is provided (All Time), skip date filtering entirely.
     // When dates are provided, scope to that range. When only fromDate is
@@ -266,9 +272,9 @@ export const dashboardRouter = router({
         const fyResults = await ctx.db.execute(sql`
           SELECT
             CASE
-              WHEN EXTRACT(MONTH FROM invoice_date) >= ${fyStartMonth}
-                THEN EXTRACT(YEAR FROM invoice_date)::int
-              ELSE (EXTRACT(YEAR FROM invoice_date) - 1)::int
+              WHEN EXTRACT(MONTH FROM invoice_date AT TIME ZONE ${IST_ZONE}) >= ${fyStartMonth}
+                THEN EXTRACT(YEAR FROM invoice_date AT TIME ZONE ${IST_ZONE})::int
+              ELSE (EXTRACT(YEAR FROM invoice_date AT TIME ZONE ${IST_ZONE}) - 1)::int
             END AS fy_year,
             COALESCE(SUM(total_amount::numeric), 0)::text AS invoiced
           FROM invoices
@@ -284,9 +290,9 @@ export const dashboardRouter = router({
         const fyCollected = await ctx.db.execute(sql`
           SELECT
             CASE
-              WHEN EXTRACT(MONTH FROM p.payment_date) >= ${fyStartMonth}
-                THEN EXTRACT(YEAR FROM p.payment_date)::int
-              ELSE (EXTRACT(YEAR FROM p.payment_date) - 1)::int
+              WHEN EXTRACT(MONTH FROM p.payment_date AT TIME ZONE ${IST_ZONE}) >= ${fyStartMonth}
+                THEN EXTRACT(YEAR FROM p.payment_date AT TIME ZONE ${IST_ZONE})::int
+              ELSE (EXTRACT(YEAR FROM p.payment_date AT TIME ZONE ${IST_ZONE}) - 1)::int
             END AS fy_year,
             COALESCE(SUM(${paymentSettledSql("p")}), 0)::text AS collected,
             COALESCE(SUM(p.amount::numeric), 0)::text AS cash_collected
@@ -324,10 +330,9 @@ export const dashboardRouter = router({
       if (input.fromDate) {
         rangeStart = new Date(input.fromDate);
       } else {
-        const d = new Date();
-        d.setDate(1);
-        d.setMonth(d.getMonth() - (input.months - 1));
-        rangeStart = d;
+        // the first day of the month `months - 1` months back, on the business (IST) calendar
+        const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+        rangeStart = businessMonthStart(nowYear, nowMonth - (input.months - 1));
       }
 
       if (input.toDate) {
@@ -342,21 +347,27 @@ export const dashboardRouter = router({
       // period (e.g. March 1 for calendar months) rather than snapping to
       // ISO week boundaries which can bleed into adjacent months.
       // Month: date_trunc ensures buckets always start on the 1st.
+      // The series is generated on the IST wall clock (timestamp without time zone) and converted
+      // back to instants, so a month starts at 00:00 IST on the 1st whatever the database's
+      // TimeZone setting (date_trunc / "+ 1 month" on a timestamptz use that setting).
       const useRawBounds = input.granularity === "week";
       const seriesStart = useRawBounds
-        ? sql`${rangeStart.toISOString()}::timestamptz`
-        : sql`date_trunc('month', ${rangeStart.toISOString()}::timestamptz)`;
+        ? sql`(${rangeStart.toISOString()}::timestamptz AT TIME ZONE ${IST_ZONE})`
+        : sql`date_trunc('month', ${rangeStart.toISOString()}::timestamptz AT TIME ZONE ${IST_ZONE})`;
       const seriesEnd = useRawBounds
-        ? sql`${rangeEnd.toISOString()}::timestamptz`
-        : sql`date_trunc('month', ${rangeEnd.toISOString()}::timestamptz)`;
+        ? sql`(${rangeEnd.toISOString()}::timestamptz AT TIME ZONE ${IST_ZONE})`
+        : sql`date_trunc('month', ${rangeEnd.toISOString()}::timestamptz AT TIME ZONE ${IST_ZONE})`;
 
       const results = await ctx.db.execute(sql`
         WITH periods AS (
-          SELECT generate_series(
+          SELECT
+            local_start AT TIME ZONE ${IST_ZONE} AS period_start,
+            (local_start + ${stepInterval}::interval) AT TIME ZONE ${IST_ZONE} AS period_end
+          FROM generate_series(
             ${seriesStart},
             ${seriesEnd},
             ${stepInterval}::interval
-          ) as period_start
+          ) AS local_start
         )
         SELECT
           p.period_start,
@@ -366,21 +377,21 @@ export const dashboardRouter = router({
             WHERE business_id = ${ctx.businessId}
               AND type = 'sale' AND document_type = 'invoice'
               AND invoice_date >= p.period_start
-              AND invoice_date < p.period_start + ${stepInterval}::interval
+              AND invoice_date < p.period_end
           ), 0)::text as invoiced,
           COALESCE((
             SELECT SUM(${paymentSettledSql()})
             FROM payments
             WHERE business_id = ${ctx.businessId}
               AND payment_date >= p.period_start
-              AND payment_date < p.period_start + ${stepInterval}::interval
+              AND payment_date < p.period_end
           ), 0)::text as collected,
           COALESCE((
             SELECT SUM(amount::numeric)
             FROM payments
             WHERE business_id = ${ctx.businessId}
               AND payment_date >= p.period_start
-              AND payment_date < p.period_start + ${stepInterval}::interval
+              AND payment_date < p.period_end
           ), 0)::text as cash_collected
         FROM periods p
         ORDER BY p.period_start ASC
@@ -869,11 +880,10 @@ export const dashboardRouter = router({
     .query(async ({ ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const now = new Date();
-      const currMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const currMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-      const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+      // This and last calendar month on the IST business calendar, half-open (see gst-period.ts)
+      const { year: nowYear, month: nowMonth } = istYearMonth(new Date());
+      const { from: currMonthStart, before: currMonthBefore } = gstMonthWindow(nowYear, nowMonth);
+      const { from: prevMonthStart, before: prevMonthBefore } = gstMonthWindow(nowYear, nowMonth - 1);
 
       const [
         [currSales],
@@ -890,7 +900,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
@@ -900,21 +910,21 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, before: prevMonthBefore }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          ...buildBusinessDateFilter(expenses, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(expenses, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          ...buildBusinessDateFilter(expenses, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(expenses, { from: prevMonthStart, before: prevMonthBefore }),
         )),
 
         ctx.db.select({
@@ -924,7 +934,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, before: currMonthBefore }),
         )),
 
         ctx.db.select({
@@ -934,7 +944,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, before: prevMonthBefore }),
         )),
       ]);
 
@@ -945,8 +955,8 @@ export const dashboardRouter = router({
         return Math.round(((c - p) / p) * 100);
       }
 
-      const currMonthName = currMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
-      const prevMonthName = prevMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
+      const currMonthName = currMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit", timeZone: "Asia/Kolkata" });
+      const prevMonthName = prevMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit", timeZone: "Asia/Kolkata" });
 
       return {
         currMonth: currMonthName,

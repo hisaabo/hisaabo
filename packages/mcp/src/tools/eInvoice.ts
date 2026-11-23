@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import { pickedDateToISO, pickedDateToEndISO } from "@hisaabo/shared";
 
 export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient) {
 
@@ -34,9 +35,9 @@ export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient)
     },
     wrapTool(async (input) => {
       const result = await client.eInvoice.dashboard({
-        // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day.
-        fromDate: input.from_date ? `${input.from_date}T00:00:00.000Z` : undefined,
-        toDate: input.to_date ? `${input.to_date}T23:59:59.999Z` : undefined,
+        // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day on the business calendar (IST).
+        fromDate: pickedDateToISO(input.from_date),
+        toDate: pickedDateToEndISO(input.to_date),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],

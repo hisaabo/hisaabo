@@ -1,5 +1,5 @@
 /**
- * Scenario 16 — An online-store order for items priced INCLUDING tax, then edited.
+ * Scenario 29 — An online-store order for items priced INCLUDING tax, then edited.
  *
  * The store prices a line from the saved price. The ORDER total is on that inclusive price and does
  * not change; the invoice LINE holds the tax-exclusive rate (like any bill), so editing the invoice
@@ -33,7 +33,7 @@ const line = (over: Partial<StoreOrderLineInput> & Pick<StoreOrderLineInput, "it
   ...over,
 });
 
-describe("golden 16A: priceStoreOrderLines (the store handler's pricing)", () => {
+describe("golden 29A: priceStoreOrderLines (the store handler's pricing)", () => {
   const ORDER: StoreOrderLineInput[] = [
     line({ itemId: "a", name: "Atta", quantity: "2", unitPrice: "118.00", taxPercent: "18.00", taxInclusive: true }),
     line({ itemId: "o", name: "Oil", quantity: "1", unitPrice: "99.00", taxPercent: "12.00", taxInclusive: true }),
@@ -68,7 +68,7 @@ describe("golden 16A: priceStoreOrderLines (the store handler's pricing)", () =>
   });
 });
 
-describe("golden 16B: the invoice made from the order, then edited", () => {
+describe("golden 29B: the invoice made from the order, then edited", () => {
   let w: GoldenWorld;
   let invoiceId: string;
   let items: Record<string, string>;
@@ -144,7 +144,7 @@ describe("golden 16B: the invoice made from the order, then edited", () => {
   });
 });
 
-describe("golden 16C: store invoices made BEFORE this fix are not changed", () => {
+describe("golden 29C: store invoices made BEFORE this fix are not changed", () => {
   it("an old-style row (unit_price = the inclusive price, inclusive totals) is read back exactly as stored", async () => {
     const w = await createGoldenWorld();
     const customer = (await addParty(w, "customer", "MH")).id;

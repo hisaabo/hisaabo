@@ -1,5 +1,5 @@
 /**
- * Scenario 17 — A tax-inclusive shelf price does not always bill to the paisa; the invoice round-off does.
+ * Scenario 30 — A tax-inclusive shelf price does not always bill to the paisa; the invoice round-off does.
  *
  * A bill line is tax-exclusive: rate = round(price x 100 / (100 + t)) and the server takes
  * GST = round(rate x t / 100) on it, so the line is rate + GST. That is NOT always the shelf price, even for
@@ -7,21 +7,21 @@
  * difference (shared `inclusiveTieOut` + `autoRoundOff`) so the customer pays the shelf price. This scenario
  * pins what the SERVER then books for such a bill, with hand-computed literals.
  *
- * ── 17A  ₹10.00 incl. 18%, qty 1 ─────────────────────────────────────────────────────────────────────
+ * ── 30A  ₹10.00 incl. 18%, qty 1 ─────────────────────────────────────────────────────────────────────
  *   rate  1000 x 100 / 118 = 847.46 -> 847                      = 8.47
  *   GST   847 x 18 / 100   = 152.46 -> 152                      = 1.52   [CGST 0.76 / SGST 0.76]
  *   line  8.47 + 1.52 = 9.99                      (one paisa short of the shelf price)
  *   round-off +0.01  ->  total 10.00
  *   Ledger: Dr 1100 10.00 / Cr 4000 8.47, Cr 2100 0.76, Cr 2101 0.76, Cr 5030 0.01        (8.47 + 1.52 + 0.01 = 10.00)
  *
- * ── 17B  ₹41.00 incl. 18%, qty 1  (the bill is a paisa OVER) ─────────────────────────────────────────
+ * ── 30B  ₹41.00 incl. 18%, qty 1  (the bill is a paisa OVER) ─────────────────────────────────────────
  *   rate  4100 x 100 / 118 = 3474.58 -> 3475                    = 34.75
  *   GST   3475 x 18 / 100  = 625.5   -> 626 (half up)           = 6.26   [CGST 3.13 / SGST 3.13]
  *   line  34.75 + 6.26 = 41.01
  *   round-off -0.01  ->  total 41.00
  *   Ledger: Dr 1100 41.00, Dr 5030 0.01 / Cr 4000 34.75, Cr 2100 3.13, Cr 2101 3.13       (41.01 on each side)
  *
- * ── 17C  Three lines that are each a paisa short: the round-off is their sum ─────────────────────────
+ * ── 30C  Three lines that are each a paisa short: the round-off is their sum ─────────────────────────
  *   ₹10.00 -> 8.47 + 1.52 = 9.99 ;  ₹2.00 -> 169 / 0.30 (1.69 x 18% = 30.42 -> 30) = 1.99 ;
  *   ₹6.00 -> 600 x 100 / 118 = 508.47 -> 508, GST 508 x 18 / 100 = 91.44 -> 91 = 5.08 + 0.91 = 5.99
  *   taxable 8.47 + 1.69 + 5.08 = 15.24    GST 1.52 + 0.30 + 0.91 = 2.73    raw total 17.97 (shelf 10.00 + 2.00 + 6.00 = 18.00)
@@ -29,7 +29,7 @@
  *   CGST 76 + 15 + 46 = 137 = 1.37    SGST 76 + 15 + 45 = 136 = 1.36    (the odd paisa of 0.91 goes to CGST)
  *   Ledger: Dr 1100 18.00 / Cr 4000 15.24, Cr 2100 1.37, Cr 2101 1.36, Cr 5030 0.03       (15.24 + 1.37 + 1.36 + 0.03 = 18.00)
  *
- * ── 17D  3 x ₹99.00 incl. 18% ────────────────────────────────────────────────────────────────────────
+ * ── 30D  3 x ₹99.00 incl. 18% ────────────────────────────────────────────────────────────────────────
  *   rate  9900 x 100 / 118 = 8389.83 -> 8390 = 83.90      taxable 3 x 83.90 = 251.70
  *   GST   25170 x 18 / 100 = 4530.6 -> 4531 = 45.31 [CGST 22.66 / SGST 22.65]   raw total 297.01 (shelf 3 x 99.00 = 297.00)
  *   round-off -0.01 -> total 297.00
@@ -77,7 +77,7 @@ async function billShelfItems(w: GoldenWorld, partyId: string, shelf: Shelf[], e
   return w.caller.invoice.updateStatus({ id: inv.id, status: "sent" });
 }
 
-describe("golden 17A: ₹10.00 incl. 18% x 1 bills 9.99; the round-off +0.01 makes it 10.00", () => {
+describe("golden 30A: ₹10.00 incl. 18% x 1 bills 9.99; the round-off +0.01 makes it 10.00", () => {
   let w: GoldenWorld;
   let invoiceId: string;
   beforeAll(async () => {
@@ -119,7 +119,7 @@ describe("golden 17A: ₹10.00 incl. 18% x 1 bills 9.99; the round-off +0.01 mak
   });
 });
 
-describe("golden 17B: ₹41.00 incl. 18% x 1 bills 41.01; the round-off -0.01 makes it 41.00", () => {
+describe("golden 30B: ₹41.00 incl. 18% x 1 bills 41.01; the round-off -0.01 makes it 41.00", () => {
   let w: GoldenWorld;
   let invoiceId: string;
   beforeAll(async () => {
@@ -150,7 +150,7 @@ describe("golden 17B: ₹41.00 incl. 18% x 1 bills 41.01; the round-off -0.01 ma
   });
 });
 
-describe("golden 17C: three lines a paisa short each: the round-off is their sum, +0.03", () => {
+describe("golden 30C: three lines a paisa short each: the round-off is their sum, +0.03", () => {
   let w: GoldenWorld;
   let invoiceId: string;
   beforeAll(async () => {
@@ -204,7 +204,7 @@ describe("golden 17C: three lines a paisa short each: the round-off is their sum
   });
 });
 
-describe("golden 17D: 3 x ₹99.00 incl. 18% bills 297.01; the round-off -0.01 makes it 297.00", () => {
+describe("golden 30D: 3 x ₹99.00 incl. 18% bills 297.01; the round-off -0.01 makes it 297.00", () => {
   let w: GoldenWorld;
   let invoiceId: string;
   beforeAll(async () => {

@@ -43,12 +43,13 @@ type Row = Pick<IRPLineItem, "itemName" | "quantity" | "unitPrice" | "taxPercent
 const irpInvoice = (h: Stored): IRPInvoice => ({
   invoiceNumber: "INV-00001", invoiceDate: DATE, type: "sale", documentType: "invoice", isReverseCharge: false, ...h,
 });
-const irpLines = (rows: Row[]): IRPLineItem[] => rows.map((r) => ({ description: null, selectedUnit: null, ...r }));
+// every line needs a valid HSN (4 digits up to ₹5 Cr turnover) or the mapper refuses to build the payload
+const irpLines = (rows: Row[]): IRPLineItem[] => rows.map((r) => ({ description: null, selectedUnit: null, itemHsn: "8517", ...r }));
 
 function ewbOf(h: Stored, rows: Row[], intra = true) {
   const invoice: InvoiceForEWB = {
     id: "i1", invoiceNumber: "INV-00001", invoiceDate: DATE, type: "sale", documentType: "invoice", isReverseCharge: false, ...h,
-    partyGstin: buyerMH.gstin, partyName: "Buyer", partyAddress: "2 Lane", partyCity: "Pune", partyPincode: "411001", partyStateCode: intra ? "27" : "29",
+    partyGstin: intra ? buyerMH.gstin : buyerKA.gstin, partyName: "Buyer", partyAddress: "2 Lane", partyCity: "Pune", partyPincode: "411001", partyStateCode: intra ? "27" : "29",
     businessGstin: business.gstin, businessName: "Seller", businessAddress: "1 Road", businessCity: "Mumbai", businessPincode: "400001", businessStateCode: "27",
   };
   const lines: LineItemForEWB[] = rows.map((r) => ({
