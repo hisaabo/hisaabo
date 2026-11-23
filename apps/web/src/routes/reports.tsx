@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
+import { BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput } from "@/lib/utils";
 import { StatCard } from "@/components/ui/StatCard";
@@ -176,7 +177,7 @@ function DaybookReport({
     const headers = ["Date", "Time", "Type", "Ref #", "Party / Category", "Debit", "Credit", "Mode", "Status"];
     const rows: (string | number)[][] = data.entries.map((entry) => [
       formatDateInput(entry.time),
-      new Date(entry.time).toLocaleTimeString(),
+      new Date(entry.time).toLocaleTimeString("en-GB", { timeZone: BUSINESS_TIME_ZONE }), // IST, like the Date column
       entry.entryType,
       entry.number ?? "",
       entry.partyOrCategory,

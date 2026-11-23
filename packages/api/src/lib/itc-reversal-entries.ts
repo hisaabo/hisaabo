@@ -64,6 +64,7 @@ export async function recordPurchaseReversalItc(
   const [biz] = await tx
     .select({
       gstRegistrationType: businesses.gstRegistrationType,
+      gstin: businesses.gstin,
       stateCode: businesses.stateCode,
       state: businesses.state,
     })
@@ -73,11 +74,11 @@ export async function recordPurchaseReversalItc(
   if (biz?.gstRegistrationType === "composition") return;
 
   const [party] = await tx
-    .select({ stateCode: parties.stateCode, state: parties.state })
+    .select({ gstin: parties.gstin, stateCode: parties.stateCode, state: parties.state })
     .from(parties)
     .where(and(eq(parties.id, p.partyId), eq(parties.businessId, p.businessId)))
     .limit(1);
-  // The same test GSTR-3B and the invoice's own ITC entry use (state codes, then names).
+  // The same decision GSTR-3B and the invoice's own ITC entry use (GSTIN state, state code, then name).
   const sameState = isIntraStateSupply(biz, party);
 
   let cgst = "0";

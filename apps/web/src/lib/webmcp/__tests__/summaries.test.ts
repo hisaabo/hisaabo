@@ -418,3 +418,13 @@ describe("confirmWrite uses the summary", () => {
     expect(String(confirm.mock.calls[0][0])).toContain("Allow AI agent: Create a customer or supplier?");
   });
 });
+
+describe("day(): the IST calendar day of an instant, in every viewer zone", () => {
+  it("1 April 00:00 IST (31 March 18:30 UTC) is 1 Apr 2026, one millisecond earlier is 31 Mar", async () => {
+    const { day } = await import("../tools/summary");
+    expect(day("2026-03-31T18:30:00.000Z")).toBe("1 Apr 2026");
+    expect(day("2026-03-31T18:29:59.999Z")).toBe("31 Mar 2026");
+    expect(day("2026-10-14T00:00:00.000Z")).toBe("14 Oct 2026"); // 05:30 IST the same day
+    expect(day("not a date")).toBe("not a date");
+  });
+});

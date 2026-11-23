@@ -16,7 +16,7 @@
 
 import type { GenerateEWBPayload, EWBItemPayload } from "./ewb-client.js";
 import { transportModeCode } from "./ewb-client.js";
-import { money, splitDocumentGst } from "@hisaabo/shared";
+import { money, splitDocumentGst, resolveState, supplyKind } from "@hisaabo/shared";
 import { formatIstDate } from "./gst-period.js";
 import { resolveLineHsns } from "./hsn-check.js";
 
@@ -105,15 +105,6 @@ function docTypeCode(documentType: string, _invoiceType: "sale" | "purchase"): "
 function formatNICDate(date: Date): string {
   // IST calendar date (see gst-period.ts): a date-only "1 April" is stored as 31 March 18:30 UTC.
   return formatIstDate(date);
-}
-
-/**
- * Determine if a transaction is inter-state based on state codes.
- * If either side is missing, we conservatively return false (use CGST/SGST).
- */
-function isInterState(fromStateCode: string | null, toStateCode: string | null): boolean {
-  if (!fromStateCode || !toStateCode) return false;
-  return fromStateCode !== toStateCode;
 }
 
 /**
@@ -233,9 +224,19 @@ export function mapInvoiceToEWB(
   const fromPin   = isSale
     ? parsePincode(transport.fromPincode ?? invoice.businessPincode)
     : parsePincode(transport.fromPincode ?? invoice.partyPincode);
-  const fromState = isSale
-    ? parseStateCode(invoice.businessStateCode)
-    : parseStateCode(invoice.partyStateCode);
+  // State of each side by the shared rule (GSTIN's state first, legacy codes mapped); a stored code that
+  // disagrees with its GSTIN is refused before anything is sent.
+  const bizState = resolveState({ gstin: invoice.businessGstin, stateCode: invoice.businessStateCode });
+  const partyState = resolveState({ gstin: invoice.partyGstin, stateCode: invoice.partyStateCode });
+  if (bizState.conflict) {
+    throw new EwayBillNotEligibleError(`The business state code ${bizState.conflict.storedCode} does not match its GSTIN, which starts with ${bizState.conflict.gstinCode}; correct one of them in Settings.`);
+  }
+  if (partyState.conflict) {
+    throw new EwayBillNotEligibleError(`"${invoice.partyName}" has state code ${partyState.conflict.storedCode} but its GSTIN starts with ${partyState.conflict.gstinCode}; correct one of them before generating the e-way bill.`);
+  }
+  const bizStateNo = parseStateCode(bizState.rawCode ?? invoice.businessStateCode);
+  const partyStateNo = parseStateCode(partyState.rawCode ?? invoice.partyStateCode);
+  const fromState = isSale ? bizStateNo : partyStateNo;
 
   const toGstin   = isSale ? (invoice.partyGstin ?? "URP")    : (invoice.businessGstin ?? "URP");
   const toName    = isSale ? invoice.partyName                 : invoice.businessName;
@@ -246,15 +247,13 @@ export function mapInvoiceToEWB(
   const toPin     = isSale
     ? parsePincode(transport.toPincode ?? invoice.partyPincode)
     : parsePincode(transport.toPincode ?? invoice.businessPincode);
-  const toState   = isSale
-    ? parseStateCode(invoice.partyStateCode)
-    : parseStateCode(invoice.businessStateCode);
+  const toState   = isSale ? partyStateNo : bizStateNo;
 
-  // Inter-state detection
-  const interState = isInterState(
-    isSale ? invoice.businessStateCode : invoice.partyStateCode,
-    isSale ? invoice.partyStateCode    : invoice.businessStateCode,
-  );
+  // Inter-state detection: the shared decision (undecidable is intra-state)
+  const interState = supplyKind(
+    { gstin: invoice.businessGstin, stateCode: invoice.businessStateCode },
+    { gstin: invoice.partyGstin, stateCode: invoice.partyStateCode },
+  ) === "inter";
 
   // Aggregate tax values
   let totalTax = 0;

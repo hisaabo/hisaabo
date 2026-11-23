@@ -255,8 +255,8 @@ export async function generateGSTR1(
   const itemUnitLookup = new Map(itemHsnData.map((i) => [i.id, i.unit as string | null]));
 
   // Fix 3: State comparison using stateCode (preferred) with text fallback
-  const isSameState = (partyState: string | null, partyStateCode: string | null) =>
-    isIntraStateSupply(biz, { state: partyState, stateCode: partyStateCode });
+  const isSameState = (partyGstin: string | null, partyState: string | null, partyStateCode: string | null) =>
+    isIntraStateSupply(biz, { gstin: partyGstin, state: partyState, stateCode: partyStateCode });
 
   // All money below is accumulated as decimal strings (integer paise) and only
   // converted to the JS numbers of the report types when the rows are emitted.
@@ -292,7 +292,7 @@ export async function generateGSTR1(
 
   for (const inv of saleInvoices) {
     const lineItems = lineItemsByInvoice.get(inv.id) || [];
-    const sameState = isSameState(inv.partyState, inv.partyStateCode);
+    const sameState = isSameState(inv.partyGstin, inv.partyState, inv.partyStateCode);
     const taxable = money.add(inv.subtotal, "0");
     const tax = money.add(inv.taxAmount, "0");
     const total = money.add(inv.totalAmount, "0");
@@ -446,7 +446,7 @@ export async function generateGSTR1(
 
   const toNote = (n: (typeof rawCreditNotes)[number]): GSTR1Note => {
     const tax = money.add(n.taxAmount, "0");
-    const sameState = isSameState(n.partyState, n.partyStateCode);
+    const sameState = isSameState(n.partyGstin, n.partyState, n.partyStateCode);
     const [cgst, sgst] = sameState ? documentGstSplit(tax, noteLineSplits.get(n.id)) : ["0.00", "0.00"];
     return {
       invoiceNumber: n.invoiceNumber,
@@ -552,6 +552,7 @@ export async function generateGSTR3B(
     type: invoices.type,
     taxAmount: invoices.taxAmount,
     subtotal: invoices.subtotal,
+    partyGstin: parties.gstin,
     partyState: parties.state,
     partyStateCode: parties.stateCode,
     isReverseCharge: invoices.isReverseCharge,
@@ -577,7 +578,7 @@ export async function generateGSTR3B(
       cls.kind === "reversal" ? money.sub(acc, amount) : money.add(acc, amount);
 
     const tax = money.add(inv.taxAmount, "0");
-    const sameState = isIntraStateSupply(biz, { state: inv.partyState, stateCode: inv.partyStateCode });
+    const sameState = isIntraStateSupply(biz, { gstin: inv.partyGstin, state: inv.partyState, stateCode: inv.partyStateCode });
     const [cgst, sgst] = sameState ? documentGstSplit(tax, purchaseLineSplits.get(inv.id)) : ["0.00", "0.00"];
     const igst = sameState ? "0.00" : tax;
 

@@ -19,6 +19,7 @@ import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
 import { isIntraStateSupply } from "../lib/gst-split.js";
+import { supplyKind } from "@hisaabo/shared";
 import { gstReturnPeriodOf } from "../lib/gst-period.js";
 
 /** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
@@ -240,7 +241,7 @@ export const invoiceRouter = router({
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
-      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode, state: parties.state })
+      const [partyCheck] = await tx.select({ id: parties.id, gstin: parties.gstin, stateCode: parties.stateCode, state: parties.state })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -263,11 +264,14 @@ export const invoiceRouter = router({
       if (input.type === "sale") {
         const [biz] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
+          gstin: businesses.gstin,
           stateCode: businesses.stateCode,
+          state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
 
         if (biz?.gstRegistrationType === "composition") {
-          if (partyCheck.stateCode && biz.stateCode && partyCheck.stateCode !== biz.stateCode) {
+          // the shared intra / inter-state decision: blocked only when both states are known and differ
+          if (supplyKind(biz, partyCheck) === "inter") {
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "Composition scheme businesses cannot make inter-state outward supplies",
@@ -435,6 +439,7 @@ export const invoiceRouter = router({
       if (input.type === "purchase" && parseFloat(totals.taxTotal) > 0) {
         const [bizForItc] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
+          gstin: businesses.gstin,
           stateCode: businesses.stateCode,
           state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);

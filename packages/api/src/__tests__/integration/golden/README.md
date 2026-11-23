@@ -49,6 +49,7 @@ test itself.
 | `23-recurring-ist` | Recurring run dates on the IST calendar: monthly on the 1st with no drift, month-end clamping (28/29/30/31, leap year), catch-up, anchored vs unanchored, end date inclusive | pass |
 | `24-gstr1-json-dates` | GSTR-1 portal JSON, CSV and statement dates are the IST day (IST-midnight inputs); period upper bound takes microseconds | pass |
 | `25-cmp08` | CMP-08 counts what GSTR-1 / 3B count: invoices only, net of credit notes and returns, no quotations / challans / deleted / cancelled; IST quarter edges | pass |
+| `26-intra-inter-state` | one intra / inter-state decision in GSTR-1, GSTR-3B, the ledger, the IRP and the e-way bill: GSTIN-only parties, GSTIN beats a wrong stored code (IRP / EWB refuse it), Andhra Pradesh 28 = 37, invalid code `50` ignored, nothing on file = supplier's state | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

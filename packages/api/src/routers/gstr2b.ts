@@ -103,7 +103,7 @@ export const gstr2bRouter = router({
           .leftJoin(parties, eq(invoices.partyId, parties.id))
           .where(and(...purchaseInvoiceConditions)),
         ctx.db
-          .select({ stateCode: businesses.stateCode, state: businesses.state })
+          .select({ gstin: businesses.gstin, stateCode: businesses.stateCode, state: businesses.state })
           .from(businesses)
           .where(eq(businesses.id, ctx.businessId))
           .limit(1),
@@ -113,7 +113,7 @@ export const gstr2bRouter = router({
       // Tax heads of each purchase invoice, with the rule the returns use: intra-state is split
       // line by line (CGST gets the odd paisa), inter-state is IGST in one piece.
       const purchaseInvoices: PurchaseInvoice[] = purchaseRows.map((r) => {
-        const intraState = isIntraStateSupply(biz, { stateCode: r.partyStateCode, state: r.partyState });
+        const intraState = isIntraStateSupply(biz, { gstin: r.partyGstin, stateCode: r.partyStateCode, state: r.partyState });
         const tax = r.taxAmount ?? ZERO;
         const [cgst, sgst] = intraState ? documentGstSplit(tax, lineSplits.get(r.id)) : [ZERO, ZERO];
         return {

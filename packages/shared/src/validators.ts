@@ -2,6 +2,7 @@ import { z } from "zod";
 import "./zod-messages.js";
 import { validateInvoiceTotals } from "./calc.js";
 import { money } from "./money.js";
+import { isValidStateCode } from "./gst-state.js";
 
 // ── Common ─────────────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ export const createBusinessSchema = z.object({
   address: z.string().min(1).max(500),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
-  stateCode: z.string().max(2).optional(),
+  stateCode: z.string().max(2).refine((v) => v === "" || isValidStateCode(v), { message: "Not a GST state code (01-38, or 97 other territory, 96 other country)" }).optional(),
   pincode: z.string().max(10).optional(),
   invoicePrefix: z.string().min(1).max(10).regex(/^[A-Za-z0-9_-]+$/, "Prefix may only contain letters, numbers, hyphen and underscore").default("INV"),
   currency: z.string().length(3).default("INR"),
@@ -180,7 +181,7 @@ export const createPartySchema = z.object({
   shippingAddress: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
-  stateCode: z.string().max(2).optional(),
+  stateCode: z.string().max(2).refine((v) => v === "" || isValidStateCode(v), { message: "Not a GST state code (01-38, or 97 other territory, 96 other country)" }).optional(),
   pincode: z.string().max(10).optional(),
   openingBalance: z.string().regex(/^-?\d{1,13}(\.\d{1,2})?$/).default("0"),
   category: z.string().max(100).optional(),

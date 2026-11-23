@@ -123,11 +123,11 @@ describe("place of supply when the party has no state code on file", () => {
   });
 
   it("is refused when neither the party's state code nor its GSTIN gives one", () => {
-    expect(() => map(buyer({ stateCode: null, gstin: "ABCDE1234F" }))).toThrow(EInvoiceNotEligibleError);
+    expect(() => map(buyer({ stateCode: null, state: null, gstin: "ABCDE1234F" }))).toThrow(EInvoiceNotEligibleError);
   });
 
   it("the business needs a state too", () => {
-    expect(() => map(buyer(), { ...seller, stateCode: null, gstin: "XXAABCU9603R1ZM" })).toThrow(
+    expect(() => map(buyer(), { ...seller, stateCode: null, state: null, gstin: "XXAABCU9603R1ZM" })).toThrow(
       /business has no state code/,
     );
   });

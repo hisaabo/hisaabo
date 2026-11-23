@@ -20,7 +20,7 @@
  */
 
 import type { IRPInvoiceJson } from "./irp-client.js";
-import { money } from "@hisaabo/shared";
+import { money, resolveState, supplyKind, canonicalStateCode, GST_STATE_NAMES, FOREIGN_STATE_CODE } from "@hisaabo/shared";
 import { resolveLineHsns } from "./hsn-check.js";
 import { formatIstDate } from "./gst-period.js";
 
@@ -71,17 +71,6 @@ export class EInvoiceNotEligibleError extends Error {
   }
 }
 
-/** GST state code the IRP uses for "Other Country" (the buyer of an export). */
-const FOREIGN_STATE_CODE = "96";
-
-/** 2-digit state code: the one on file, else the first two digits of the GSTIN (they are the state code). */
-function resolveStateCode(stateCode: string | null | undefined, gstin: string | null | undefined): string | null {
-  const explicit = stateCode?.trim();
-  if (explicit) return explicit;
-  const fromGstin = gstin?.trim().slice(0, 2);
-  return fromGstin && /^\d{2}$/.test(fromGstin) ? fromGstin : null;
-}
-
 /**
  * Why this party looks foreign (an export), or null for a domestic party. Hisaabo parties
  * have no country field, so the markers are the GSTIN placeholder "URP" (unregistered
@@ -90,7 +79,10 @@ function resolveStateCode(stateCode: string | null | undefined, gstin: string | 
  */
 export function foreignPartyReason(party: Pick<IRPParty, "gstin" | "stateCode">): string | null {
   if (party.gstin?.trim().toUpperCase() === "URP") return 'GSTIN "URP"';
-  if (resolveStateCode(party.stateCode, party.gstin) === FOREIGN_STATE_CODE) return `state code ${FOREIGN_STATE_CODE} (other country)`;
+  // an explicit stored 96 counts even when the GSTIN looks domestic: the record says "other country"
+  if (canonicalStateCode(party.stateCode) === FOREIGN_STATE_CODE || resolveState({ gstin: party.gstin, stateCode: party.stateCode }).foreign) {
+    return `state code ${FOREIGN_STATE_CODE} (other country)`;
+  }
   return null;
 }
 
@@ -224,17 +216,36 @@ export function mapInvoiceToIRP(
     );
   }
 
-  // The state code on file, else the one in the GSTIN. Never assume "same state as the
-  // seller": that filed an inter-state sale to a party with no state code as CGST + SGST.
-  const sellerStateCode = resolveStateCode(business.stateCode, business.gstin);
-  if (!sellerStateCode) {
+  // The state of each side, by the one rule every GST output shares (@hisaabo/shared gst-state): the
+  // GSTIN's state first, then the stored code, then the name; legacy codes mapped (28 -> 37). Never
+  // assumed to be "the seller's": that filed an inter-state sale to a party with no state code as
+  // CGST + SGST. A stored code that disagrees with the GSTIN is refused: the IRP checks the GSTIN.
+  const seller = resolveState({ gstin: business.gstin, stateCode: business.stateCode, state: business.state });
+  if (seller.conflict) {
+    throw new EInvoiceNotEligibleError(
+      `The business state code ${seller.conflict.storedCode} does not match its GSTIN, which starts with ${seller.conflict.gstinCode} (${GST_STATE_NAMES[seller.conflict.gstinCode]}); correct one of them in Settings.`,
+    );
+  }
+  if (!seller.code) {
     throw new EInvoiceNotEligibleError("The business has no state code; set the business state in Settings before generating an e-invoice.");
   }
-  const buyerStateCode = resolveStateCode(party.stateCode, party.gstin);
-  if (!buyerStateCode) {
+  const buyer = resolveState({ gstin: party.gstin, stateCode: party.stateCode, state: party.state });
+  if (buyer.conflict) {
+    throw new EInvoiceNotEligibleError(
+      `Customer "${party.name}" has state code ${buyer.conflict.storedCode} but its GSTIN starts with ${buyer.conflict.gstinCode} (${GST_STATE_NAMES[buyer.conflict.gstinCode]}); correct one of them before generating an e-invoice.`,
+    );
+  }
+  if (!buyer.code) {
     throw new EInvoiceNotEligibleError(`Customer "${party.name}" has no state code; set the customer's state before generating an e-invoice.`);
   }
-  const isInterState = sellerStateCode !== buyerStateCode;
+  // What goes to the IRP is the code the GSTIN / record carries (it checks Stcd against the GSTIN's first two digits);
+  // the comparison above used the canonical one, so legacy 28 and 37 are one state.
+  const sellerStateCode = seller.rawCode!;
+  const buyerStateCode = buyer.rawCode!;
+  const isInterState = supplyKind(
+    { gstin: business.gstin, stateCode: business.stateCode, state: business.state },
+    { gstin: party.gstin, stateCode: party.stateCode, state: party.state },
+  ) === "inter";
 
   // Always B2B (see the header): the IRP wants EXPWP for an export with payment, not
   // for an inter-state domestic sale.
