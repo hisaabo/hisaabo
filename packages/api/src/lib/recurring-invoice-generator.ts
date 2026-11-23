@@ -48,7 +48,7 @@ export interface TemplateRow {
   maxRuns: number | null;
   endDate: Date | null;
   createdByUserId: string | null;
-  /** Together they say whether the template has an anchor day (see `templateAnchor`). */
+  /** With `createdAt`, `nextRunDate` and `frequency` they say whether the template has an anchor day (see `templateAnchor`). */
   startDate?: Date;
   createdAt?: Date;
 }
@@ -58,14 +58,47 @@ const MONTHS_PER_PERIOD: Record<string, number> = { monthly: 1, quarterly: 3, ha
 const DAYS_PER_PERIOD: Record<string, number> = { weekly: 7, biweekly: 14 };
 
 /**
- * The instant of the template's first occurrence when it was created with a start date in the future
- * (`startDate` after `createdAt`): the anchor every later monthly / quarterly / half-yearly / yearly
- * occurrence is counted from, so a template due "on the 1st" or "on the 31st" keeps that day. A
- * template whose start date was today or in the past has no anchor (its first run was computed from
- * the creation time), and each run is counted from the previous one.
+ * Is `instant` an occurrence of the schedule that counts `months` months at a time from `anchor`, on the
+ * business calendar: the same IST time of day, a whole number of periods after the anchor's month, on the
+ * anchor's day or the last day of a shorter month.
  */
-export function templateAnchor(t: { startDate?: Date | null; createdAt?: Date | null }): Date | null {
-  return t.startDate && t.createdAt && t.startDate.getTime() > t.createdAt.getTime() ? t.startDate : null;
+function onAnchorSchedule(anchor: Date, instant: Date, months: number): boolean {
+  const a = businessDateParts(anchor);
+  const n = businessDateParts(instant);
+  const periods = (n.year - a.year) * 12 + (n.month - a.month);
+  if (periods < 0 || periods % months !== 0) return false;
+  return businessInstant(addMonthsClampedYmd(a, periods), businessTimeOfDayMs(anchor)).getTime() === instant.getTime();
+}
+
+/**
+ * The anchor of a template: the instant of its first occurrence, which every later monthly / quarterly /
+ * half-yearly / yearly occurrence is counted from, so a template due "on the 1st" keeps the 1st and one due
+ * "on the 31st" comes back to the 31st after a short month. Null when there is none: each run is then
+ * counted from the previous one (a clamped 28 Feb is followed by 28 Mar).
+ *
+ * A template is anchored only when BOTH hold:
+ *   - it was created with a start date in the future (`startDate` after `createdAt`), so its first run was
+ *     the start date itself and not "one period after creation"; and
+ *   - its next run date IS still on that start date's schedule.
+ * The second condition is what keeps templates written by an OLDER version (their run dates were advanced
+ * with the server's `setMonth`, so a "31 January" template drifted to 3 March, 3 April, ...) from being
+ * snapped onto a schedule they were never on: they carry on from their own next run date, now counted on the
+ * IST calendar, and nothing they have scheduled moves. A template of this version stays on its schedule by
+ * construction (run, skip and resume all land on it), so it is always anchored. A change of frequency
+ * puts the next run off the new schedule and so drops the anchor. Day-based frequencies have no anchor.
+ */
+export function templateAnchor(t: {
+  startDate?: Date | null;
+  createdAt?: Date | null;
+  nextRunDate?: Date | null;
+  frequency?: string | null;
+}): Date | null {
+  const { startDate, createdAt, nextRunDate, frequency } = t;
+  if (!startDate || !createdAt || !nextRunDate || !frequency) return null;
+  const months = MONTHS_PER_PERIOD[frequency];
+  if (months === undefined) return null;
+  if (startDate.getTime() <= createdAt.getTime()) return null;
+  return onAnchorSchedule(startDate, nextRunDate, months) ? startDate : null;
 }
 
 /**

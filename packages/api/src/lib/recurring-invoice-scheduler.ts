@@ -25,7 +25,7 @@ import {
 } from "@hisaabo/db";
 import { generateInvoiceInTx, toTemplateRow, computeNextRunDate, templateAnchor } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
-import { businessYearMonth, businessMonthStart } from "@hisaabo/shared";
+import { businessYearMonth, businessMonthStart, businessDateOf } from "@hisaabo/shared";
 
 const TICK_MS = 60_000; // 60 seconds
 const MAX_CATCHUP = 12; // Max invoices per template per tick to prevent runaway loops
@@ -149,14 +149,13 @@ async function processOccurrence(db: SchedulerDb, templateId: string): Promise<b
     });
   } catch (err) {
     if (isOccurrenceConflict(err)) {
-      // The transaction rolled back, so nothing was generated twice; the other
-      // runner's run record stands. Say so, because with the row lock in place
-      // this should not happen.
-      console.warn(
-        `[recurring-scheduler] template ${templateId}: occurrence ${claimed.tpl?.nextRunDate.toISOString() ?? "?"} ` +
-          `was already consumed by another run (${OCCURRENCE_INDEX}); skipped`,
-      );
-      return false;
+      // The transaction rolled back, so nothing was generated twice; the run record that is
+      // already there stands. Whose is it? Another runner that consumed the occurrence just
+      // now advanced the template, and there is nothing to do. But a record from earlier (a
+      // "Run now", or a skip, on an occurrence the template was later moved back onto) leaves
+      // the template due on it with nothing to advance it: it would conflict on every tick for
+      // ever. Advance it past the occurrence.
+      return resolveOccurrenceConflict(db, templateId, claimed.tpl?.nextRunDate);
     }
 
     const message = err instanceof Error ? err.message : String(err);
@@ -180,6 +179,45 @@ async function processOccurrence(db: SchedulerDb, templateId: string): Promise<b
       }).catch(() => {}); // Don't let logging failure crash the loop
     }
     return false; // Stop catch-up on error to avoid cascading failures
+  }
+}
+
+/**
+ * The occurrence `claimedOccurrence` of a template could not be consumed because a run for it is already
+ * recorded (`recurring_run_occurrence_uniq`). Looks at the template again under its row lock (waiting for
+ * a concurrent runner to commit): if it has moved on, that runner consumed the occurrence and all is well;
+ * if it is still due on that very occurrence, nothing will ever advance it, so advance it past the
+ * occurrence without billing it again. Returns true when the template is due again right away (catch-up).
+ */
+export async function resolveOccurrenceConflict(db: SchedulerDb, templateId: string, claimedOccurrence: Date | undefined): Promise<boolean> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [tpl] = await tx.select()
+        .from(recurringInvoiceTemplates)
+        .where(eq(recurringInvoiceTemplates.id, templateId))
+        .for("update");
+      if (!tpl || tpl.status !== "active") return false;
+      if (!claimedOccurrence || tpl.nextRunDate.getTime() !== claimedOccurrence.getTime()) {
+        console.warn(
+          `[recurring-scheduler] template ${templateId}: occurrence ${claimedOccurrence?.toISOString() ?? "?"} ` +
+            `was consumed by another run (${OCCURRENCE_INDEX}); skipped`,
+        );
+        return false;
+      }
+      const next = computeNextRunDate(tpl.nextRunDate, tpl.frequency, tpl.customIntervalDays, templateAnchor(tpl));
+      const finished = !!tpl.endDate && businessDateOf(next) > businessDateOf(tpl.endDate);
+      await tx.update(recurringInvoiceTemplates)
+        .set({ nextRunDate: next, status: finished ? "completed" : undefined, updatedAt: new Date() })
+        .where(eq(recurringInvoiceTemplates.id, templateId));
+      console.warn(
+        `[recurring-scheduler] template ${templateId}: occurrence ${tpl.nextRunDate.toISOString()} already has a run recorded ` +
+          `(${OCCURRENCE_INDEX}) and nothing had advanced the template; advanced it to ${next.toISOString()} without billing it again`,
+      );
+      return !finished && next.getTime() <= Date.now();
+    });
+  } catch (err) {
+    console.error(`[recurring-scheduler] template ${templateId}: could not resolve the occurrence conflict:`, err);
+    return false;
   }
 }
 

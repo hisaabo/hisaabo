@@ -23,9 +23,21 @@
  *        next 28 Feb 01:30 IST (2026-02-27T20:00Z); the old UTC arithmetic gave 1 Mar 01:30 IST.
  *   E  the end date is a calendar day and an occurrence ON it still runs: monthly at 20:00 IST from
  *        1 Feb, end date 1 Mar: runs 1 Feb and 1 Mar 20:00 IST, then completes.
+ *   F  "Run now" x3 then pause and resume: Run now consumes the next occurrence early and moves the
+ *        template on, so a resume must NOT move it back (it used to recompute from "now", which handed
+ *        the consumed occurrences back to the scheduler: billed again, or refused by the one-run-per-
+ *        occurrence index and the template stuck). A template paused past its run date resumes on the
+ *        first occurrence after now ON ITS SCHEDULE (1 Apr), with no burst of the missed runs.
+ *   G  a template due on an occurrence that already has a run recorded (not a concurrent runner: nothing
+ *        advanced it) is advanced past it, without billing it again, instead of conflicting on every tick.
+ *
+ * Which templates are anchored: only one created with a start date in the future AND still on that
+ * start date's schedule (see `templateAnchor`). A template written by an older version drifted off its
+ * schedule (31 Jan -> 3 Mar, 3 Apr, ...) and is not snapped onto one it was never on: it carries on from
+ * its own next run date, counted on the IST calendar.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { eq, asc } from "drizzle-orm";
+import { eq, and, asc } from "drizzle-orm";
 import { getTenantDb, invoices, recurringInvoiceTemplates, recurringInvoiceRuns } from "@hisaabo/db";
 import { businessDateOf } from "@hisaabo/shared";
 import { getTenantTestDb } from "../../helpers/test-db.js";
@@ -51,7 +63,7 @@ async function createTemplate(
   partyId: string,
   over: { frequency?: "monthly" | "quarterly" | "yearly" | "weekly"; startDate: string; endDate?: string },
 ) {
-  return w.caller.recurringInvoice.create({
+  const t = await w.caller.recurringInvoice.create({
     partyId,
     name: "Retainer",
     type: "sale",
@@ -60,6 +72,10 @@ async function createTemplate(
     ...(over.endDate ? { endDate: over.endDate } : {}),
     lineItems: [{ itemName: "Retainer", quantity: "1", unitPrice: "1000.00", taxPercent: "0", discountPercent: "0" }],
   });
+  // The database stamps created_at with its real clock; the test clock is faked. Put it on the faked one so
+  // "created with a start date in the future" means what it does in production.
+  await getTenantTestDb().update(recurringInvoiceTemplates).set({ createdAt: new Date() }).where(eq(recurringInvoiceTemplates.id, t.id));
+  return t;
 }
 
 async function tick() {
@@ -122,9 +138,8 @@ describe("golden 23 A: monthly on the 1st runs on the 1st IST, once each, with n
 });
 
 describe("golden 23 B: month-end clamping on the IST calendar", () => {
-  const anchored = (start: string) => ({ startDate: new Date(start), createdAt: new Date("2025-01-01T00:00:00.000Z") });
   const chain = (start: string, frequency: string, steps: number, withAnchor: boolean) => {
-    const anchor = withAnchor ? templateAnchor(anchored(start)) : null;
+    const anchor = withAnchor ? new Date(start) : null;
     const out = [start];
     let cur = new Date(start);
     for (let i = 0; i < steps; i++) {
@@ -181,10 +196,47 @@ describe("golden 23 B: month-end clamping on the IST calendar", () => {
     expect(iso(computeNextRunDate(new Date("2026-03-30T20:15:00.000Z"), "custom", 10))).toBe("2026-04-09T20:15:00.000Z");
   });
 
-  it("an anchor exists only for a template created with a future start date", () => {
-    expect(templateAnchor({ startDate: new Date("2026-02-01T00:00:00Z"), createdAt: new Date("2026-01-01T00:00:00Z") })).toEqual(new Date("2026-02-01T00:00:00Z"));
-    expect(templateAnchor({ startDate: new Date("2026-01-01T00:00:00Z"), createdAt: new Date("2026-01-01T10:00:00Z") })).toBeNull();
-    expect(templateAnchor({})).toBeNull();
+  describe("templateAnchor: only a template created with a future start date AND still on its schedule is anchored", () => {
+    const start = new Date("2026-01-30T18:30:00.000Z"); // 31 Jan 2026 00:00 IST
+    const tpl = (over: Partial<Parameters<typeof templateAnchor>[0]> = {}) => ({
+      startDate: start,
+      createdAt: new Date("2026-01-10T10:00:00.000Z"),
+      nextRunDate: start,
+      frequency: "monthly",
+      ...over,
+    });
+
+    it("created with a future start date, next run on its schedule: anchored, on every occurrence (31 Jan, 28 Feb, 31 Mar)", () => {
+      for (const next of ["2026-01-30T18:30:00.000Z", "2026-02-27T18:30:00.000Z", "2026-03-30T18:30:00.000Z", "2027-01-30T18:30:00.000Z"]) {
+        expect(templateAnchor(tpl({ nextRunDate: new Date(next) })), next).toEqual(start);
+      }
+    });
+
+    it("a start date in the past (not after the creation time) is not anchored", () => {
+      expect(templateAnchor(tpl({ startDate: new Date("2026-01-01T00:00:00Z"), createdAt: new Date("2026-01-01T10:00:00Z"), nextRunDate: new Date("2026-01-01T00:00:00Z") }))).toBeNull();
+      expect(templateAnchor(tpl({ createdAt: start }))).toBeNull(); // created exactly at the start: not 'future'
+    });
+
+    it("an OLD template that drifted (start 31 Jan IST; the old setMonth chain gave 3 Mar, 3 Apr) is NOT anchored: it carries on from its own date", () => {
+      // startDate is after createdAt, which is all the previous rule asked for
+      for (const drifted of ["2026-03-02T18:30:00.000Z", "2026-04-02T18:30:00.000Z", "2026-03-30T18:31:00.000Z", "2026-03-30T20:00:00.000Z"]) {
+        expect(templateAnchor(tpl({ nextRunDate: new Date(drifted) })), drifted).toBeNull();
+      }
+      const drifted = new Date("2026-04-02T18:30:00.000Z"); // 3 Apr 00:00 IST
+      expect(iso(computeNextRunDate(drifted, "monthly", null, templateAnchor(tpl({ nextRunDate: drifted }))))).toBe("2026-05-02T18:30:00.000Z"); // 3 May, not 31 Mar-style snapping
+    });
+
+    it("a frequency change puts the next run off the new schedule and drops the anchor; a quarterly template stays anchored on 3-month steps", () => {
+      expect(templateAnchor(tpl({ frequency: "quarterly", nextRunDate: new Date("2026-02-27T18:30:00.000Z") }))).toBeNull(); // 28 Feb is 1 month on
+      expect(templateAnchor(tpl({ frequency: "quarterly", nextRunDate: new Date("2026-04-29T18:30:00.000Z") }))).toEqual(start); // 30 Apr is 3 months on
+      expect(templateAnchor(tpl({ frequency: "yearly", nextRunDate: new Date("2027-01-30T18:30:00.000Z") }))).toEqual(start);
+    });
+
+    it("day-based frequencies and a missing field have no anchor", () => {
+      for (const frequency of ["weekly", "biweekly", "custom"]) expect(templateAnchor(tpl({ frequency }))).toBeNull();
+      expect(templateAnchor({})).toBeNull();
+      expect(templateAnchor({ startDate: start, createdAt: new Date("2026-01-10T10:00:00Z") })).toBeNull();
+    });
   });
 
   it("a drifted run date (old code: 29 Mar IST) is pulled back onto the 1st at its next occurrence", () => {
@@ -238,5 +290,114 @@ describe("golden 23 E: the end date is a calendar day and the occurrence on it s
     at("2026-03-01T14:30:05.000Z"); // 1 Mar 20:00 IST: after the end date's midnight, on the end date's day
     await tick();
     expect(await state(t.id)).toMatchObject({ totalRuns: 2, status: "completed", invoiceDays: ["2026-02-01", "2026-03-01"] });
+  });
+});
+
+describe("golden 23 F: Run now, pause, resume", () => {
+  const run = (w: GoldenWorld, id: string) => w.caller.recurringInvoice.runNow({ id });
+
+  it("Run now x3 then pause and resume keeps the next run where Run now left it; nothing is billed twice", async () => {
+    const { w, partyId } = await newWorld();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    at("2026-01-10T10:00:00.000Z");
+    const t = await createTemplate(w, partyId, { startDate: "2026-01-31T18:30:00.000Z" }); // 1 Feb 00:00 IST
+
+    await run(w, t.id);
+    await run(w, t.id);
+    await run(w, t.id);
+    expect(await state(t.id)).toMatchObject({
+      totalRuns: 3,
+      scheduled: ["2026-01-31T18:30:00.000Z", "2026-02-28T18:30:00.000Z", "2026-03-31T18:30:00.000Z"], // 1 Feb, 1 Mar, 1 Apr consumed early
+      next: "2026-04-30T18:30:00.000Z", // 1 May 00:00 IST
+    });
+
+    await w.caller.recurringInvoice.pause({ id: t.id });
+    at("2026-01-15T10:00:00.000Z");
+    await w.caller.recurringInvoice.resume({ id: t.id });
+    // kept. (Recomputed from "now" it was 15 Feb: Feb billed a second time.)
+    expect(await state(t.id)).toMatchObject({ status: "active", totalRuns: 3, next: "2026-04-30T18:30:00.000Z" });
+
+    at("2026-02-20T10:00:00.000Z");
+    await tick();
+    await tick();
+    expect((await state(t.id)).totalRuns).toBe(3); // nothing due until 1 May
+
+    at("2026-04-30T18:30:05.000Z"); // 1 May 00:00:05 IST
+    await tick();
+    expect(await state(t.id)).toMatchObject({
+      totalRuns: 4,
+      scheduled: ["2026-01-31T18:30:00.000Z", "2026-02-28T18:30:00.000Z", "2026-03-31T18:30:00.000Z", "2026-04-30T18:30:00.000Z"],
+      next: "2026-05-31T18:30:00.000Z", // 1 Jun
+    });
+  });
+
+  it("paused past its run date: resume lands on the first occurrence after now on the 1st (1 Apr), with no burst of the missed runs", async () => {
+    const { w, partyId } = await newWorld();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    at("2026-01-10T10:00:00.000Z");
+    const t = await createTemplate(w, partyId, { startDate: "2026-01-31T18:30:00.000Z" }); // 1 Feb
+    await w.caller.recurringInvoice.pause({ id: t.id });
+
+    at("2026-03-20T10:00:00.000Z"); // 20 Mar IST: the 1 Feb and 1 Mar occurrences were missed while paused
+    await w.caller.recurringInvoice.resume({ id: t.id });
+    // old code: 20 Apr 10:00Z (a month from now, off the 1st)
+    expect(await state(t.id)).toMatchObject({ status: "active", totalRuns: 0, next: "2026-03-31T18:30:00.000Z" }); // 1 Apr 00:00 IST
+    await tick();
+    expect((await state(t.id)).totalRuns).toBe(0);
+
+    at("2026-03-31T18:30:05.000Z");
+    await tick();
+    expect(await state(t.id)).toMatchObject({ totalRuns: 1, invoiceDays: ["2026-04-01"], next: "2026-04-30T18:30:00.000Z" });
+  });
+});
+
+describe("golden 23 G: a due occurrence that already has a run recorded is advanced, not retried for ever", () => {
+  it("the template is moved to the next occurrence without a new invoice, then runs on schedule", async () => {
+    const { w, partyId } = await newWorld();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    at("2026-01-10T10:00:00.000Z");
+    const t = await createTemplate(w, partyId, { startDate: "2026-01-31T18:30:00.000Z" }); // 1 Feb
+    await w.caller.recurringInvoice.runNow({ id: t.id }); // consumes 1 Feb early; next 1 Mar
+    expect(await state(t.id)).toMatchObject({ totalRuns: 1, next: "2026-02-28T18:30:00.000Z" });
+
+    // the template is put back onto the occurrence Run now consumed (an old resume, a manual edit)
+    await getTenantTestDb().update(recurringInvoiceTemplates)
+      .set({ nextRunDate: new Date("2026-01-31T18:30:00.000Z") })
+      .where(eq(recurringInvoiceTemplates.id, t.id));
+
+    at("2026-02-02T10:00:00.000Z"); // 1 Feb is due
+    await tick();
+    // not billed again; moved on (it conflicted on every tick and never moved before)
+    expect(await state(t.id)).toMatchObject({ status: "active", totalRuns: 1, next: "2026-02-28T18:30:00.000Z" });
+    await tick();
+    expect(await state(t.id)).toMatchObject({ totalRuns: 1, next: "2026-02-28T18:30:00.000Z" });
+    const db = getTenantTestDb();
+    expect(await db.select().from(invoices).where(and(eq(invoices.businessId, w.businessId), eq(invoices.source, "recurring")))).toHaveLength(1);
+
+    at("2026-02-28T18:30:05.000Z"); // 1 Mar
+    await tick();
+    expect(await state(t.id)).toMatchObject({
+      totalRuns: 2,
+      scheduled: ["2026-01-31T18:30:00.000Z", "2026-02-28T18:30:00.000Z"],
+      next: "2026-03-31T18:30:00.000Z",
+    });
+  });
+
+  it("several consumed occurrences in a row are skipped in one tick (bounded catch-up), and the end date still completes the template", async () => {
+    const { w, partyId } = await newWorld();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    at("2026-01-10T10:00:00.000Z");
+    const t = await createTemplate(w, partyId, { startDate: "2026-01-31T18:30:00.000Z", endDate: "2026-03-31T18:30:00.000Z" }); // ends 1 Apr
+    for (let i = 0; i < 3; i++) await w.caller.recurringInvoice.runNow({ id: t.id }); // 1 Feb, 1 Mar, 1 Apr consumed; next 1 May
+    // moved back to 1 Feb with the end date 1 Apr
+    await getTenantTestDb().update(recurringInvoiceTemplates)
+      .set({ nextRunDate: new Date("2026-01-31T18:30:00.000Z"), status: "active" })
+      .where(eq(recurringInvoiceTemplates.id, t.id));
+
+    at("2026-05-10T10:00:00.000Z"); // 1 Feb, 1 Mar, 1 Apr and 1 May are all due
+    await tick();
+    // 1 Feb, 1 Mar, 1 Apr are consumed already; the advance past 1 Apr is after the end date: completed, nothing billed
+    expect(await state(t.id)).toMatchObject({ status: "completed", totalRuns: 3 });
+    expect(await getTenantTestDb().select().from(invoices).where(and(eq(invoices.businessId, w.businessId), eq(invoices.source, "recurring")))).toHaveLength(3);
   });
 });

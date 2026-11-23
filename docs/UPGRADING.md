@@ -453,11 +453,11 @@ A recurring template's next run date was worked out in the API server's time zon
 
 - the IST **day** moves and the IST **time of day** is kept; weekly, every two weeks and custom intervals add whole days;
 - monthly, quarterly, half-yearly and yearly runs add calendar months and **clamp to the month's last day** (31 Jan gives 28 Feb, or 29 Feb in a leap year; 30 Apr gives 30 May);
-- a template created with a **start date in the future** keeps its start day for good: runs are counted from the start date, so "the 1st" is always the 1st and "the 31st" comes back after a short month (31 Jan, 28 Feb, 31 Mar, 30 Apr, 31 May). A template created with a start date of today or earlier counts each run from the previous one, as before (31 Jan, 28 Feb, 28 Mar: the clamped day sticks);
+- a template **created in 0.10.1 or later with a start date in the future** keeps its start day for good: runs are counted from the start date, so "the 1st" is always the 1st and "the 31st" comes back after a short month (31 Jan, 28 Feb, 31 Mar, 30 Apr, 31 May). A template created with a start date of today or earlier counts each run from the previous one, as before (31 Jan, 28 Feb, 28 Mar: the clamped day sticks). **A template created by an earlier version is only kept on its start day if its next run is still exactly on that start day's schedule** (see below);
 - the **end date** is a calendar day, and a run ON that day still happens (before, a run later in the day than the end date's midnight was cut);
 - the scheduler's due check is unchanged (a run is due once its instant has passed, which does not depend on a time zone), a run is generated **once** and dated the day it runs, and **catch-up** is unchanged: each missed occurrence generates one invoice dated that day (never back-dated), up to 12 per template per minute.
 
-**Stored templates are not rewritten.** Every stored run date keeps its instant, and its IST day is the day it was due (dates from the web app are IST midnight; dates from the API, CLI or an import with a bare date are 05:30 IST on the same day), so no stored run shifts by a day. Only the arithmetic that produces the following dates changed. A template that had already drifted (for example a monthly template whose next run is 29 Mar) runs on that stored date; if it was created with a future start date it returns to its start day at the run after that, otherwise it keeps the day it drifted to. Find the templates worth a look:
+**Stored templates are not rewritten, and a template that had drifted is not pulled back.** Every stored run date keeps its instant, and its IST day is the day it was due (dates from the web app are IST midnight; dates from the API, CLI or an import with a bare date are 05:30 IST on the same day), so no stored run shifts by a day. Only the arithmetic that produces the following dates changed. A template that had already drifted under the old arithmetic (a monthly template started on 31 Jan whose runs were 3 Mar, 3 Apr, ...) **carries on from its own next run date** (3 May after 3 Apr), counted on the IST calendar: it is NOT snapped back onto its start day, so no stored schedule moves without anyone asking. A template whose next run is still on its start day's schedule (every template that never drifted, and every new one) keeps that schedule. Find the templates that drifted:
 
 ```sql
 SELECT id, name, frequency, start_date, next_run_date,
@@ -470,7 +470,17 @@ WHERE status IN ('active', 'paused')
   AND to_char(start_date AT TIME ZONE 'Asia/Kolkata', 'DD') <> to_char(next_run_date AT TIME ZONE 'Asia/Kolkata', 'DD');
 ```
 
-(a start day of 29, 30 or 31 legitimately differs from the next run's day in a short month). For a template without a future start date, pause and resume it on the day you want it to run: resuming counts from now.
+(a start day of 29, 30 or 31 legitimately differs from the next run's day in a short month). **What to do:** nothing is required. If a listed template should run on its start day again, create a new template with that start date (a start date in the future anchors it) and delete the old one; there is no field to edit a template's next run date.
+
+**Pause and resume no longer move a next run date that is still in the future.** "Run now" generates the next occurrence early and moves the template on to the one after. Resuming used to recompute the next run from now, which handed the occurrences "Run now" had consumed back to the scheduler: they were billed a second time, or refused by the one-run-per-occurrence index (`recurring_run_occurrence_uniq`), and a template refused that way **stayed due on that occurrence and conflicted on every tick for ever**, never generating again. Now a resume keeps a next run date that is later than now, and a template paused past its run date resumes on the first occurrence after now on its own schedule (no burst of the missed runs). **A template that was already stuck this way advances itself past the consumed occurrence on its next tick** (the log says `already has a run recorded ... advanced it`), without billing it again, and then runs on schedule; a template that was stuck on its last occurrence before its end date completes. To see whether any template is due on an occurrence that already has a run:
+
+```sql
+SELECT t.id, t.name, t.next_run_date
+FROM recurring_invoice_templates t
+WHERE t.status = 'active' AND t.next_run_date <= now()
+  AND EXISTS (SELECT 1 FROM recurring_invoice_runs r
+              WHERE r.template_id = t.id AND r.scheduled_for = t.next_run_date AND r.status IN ('success', 'skipped_limit'));
+```
 
 ### E-invoice cancellation now cancels the invoice
 
