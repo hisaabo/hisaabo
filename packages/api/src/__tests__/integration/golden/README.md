@@ -47,6 +47,8 @@ test itself.
 | `21-gstr1-hsn-missing` | GSTR-1 with a line that has no HSN: JSON export refused with the list to fix, report and CSV flag it; with an HSN everywhere the JSON carries `rt` and the real UQC | pass |
 | `22-date-ranges` | Date presets and custom ranges on the IST calendar end to end (invoice list, daybook, month / FY buckets, trial-balance year, Tally file name); documents at 23:59:59.500 IST and 00:00:00 IST either side of a month and of the FY | pass |
 | `23-recurring-ist` | Recurring run dates on the IST calendar: monthly on the 1st with no drift, month-end clamping (28/29/30/31, leap year), catch-up, anchored vs unanchored, end date inclusive | pass |
+| `24-gstr1-json-dates` | GSTR-1 portal JSON, CSV and statement dates are the IST day (IST-midnight inputs); period upper bound takes microseconds | pass |
+| `25-cmp08` | CMP-08 counts what GSTR-1 / 3B count: invoices only, net of credit notes and returns, no quotations / challans / deleted / cancelled; IST quarter edges | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation

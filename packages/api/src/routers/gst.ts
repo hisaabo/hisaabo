@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { and, eq, sql } from "drizzle-orm";
-import { invoices, businesses } from "@hisaabo/db";
+import { eq } from "drizzle-orm";
+import { businesses } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson, assertGstr1JsonExportable, Gstr1ExportBlockedError } from "../lib/gst-reports.js";
 import { TRPCError } from "@trpc/server";
 import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
-import { buildBusinessDateFilter } from "../lib/business-date.js";
-import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterWindow } from "../lib/gst-period.js";
+import { gstFinancialYearLabel, gstFilingPeriod, gstQuarterWindow, gstQuarterMonths } from "../lib/gst-period.js";
 import { money } from "@hisaabo/shared";
 
 export const gstRouter = router({
@@ -134,24 +133,26 @@ export const gstRouter = router({
       // Half-open window on the IST business calendar (see gst-period.ts)
       const { from: quarterStart, before: quarterBefore } = gstQuarterWindow(input.year, input.quarter);
 
-      const rows = await ctx.db.select({
-        totalAmount: invoices.totalAmount,
-        subtotal: invoices.subtotal,
-      }).from(invoices)
-        .where(and(
-          eq(invoices.businessId, ctx.businessId),
-          eq(invoices.type, "sale"),
-          sql`${invoices.status} != 'cancelled'`,
-          ...buildBusinessDateFilter(invoices, { from: quarterStart, before: quarterBefore }),
-        ));
-
-      // Exact paise arithmetic; never JS floats for money.
-      const taxableValue = money.sum(rows.map((row) => row.subtotal));
+      // Outward supplies of the quarter, counted exactly as GSTR-1 and GSTR-3B count them: sale
+      // INVOICES only (not quotations, proformas or delivery challans), not cancelled, not deleted,
+      // NET of the quarter's credit notes and sales returns and including its sale-side debit notes.
+      // CMP-08 used to sum every non-cancelled `type = 'sale'` row, which added credit notes and
+      // counted quotations, challans and deleted documents.
+      const q = gstQuarterMonths(input.year, input.quarter);
+      let taxableValue = "0.00";
+      for (let month = q.startMonth; month <= q.endMonth; month++) {
+        const gstr1 = await generateGSTR1(ctx.businessId, q.startYear, month, ctx.db);
+        const credits = money.sum(gstr1.creditNotes.map((n) => n.taxableAmount));
+        const debits = money.sum(gstr1.debitNotes.map((n) => n.taxableAmount));
+        taxableValue = money.add(taxableValue, money.add(money.sub(gstr1.totalTaxableValue, credits), debits));
+      }
 
       // Default composition rate for traders: 1%.
       // Businesses can override this; we default to the lowest rate.
       // 1% for traders/manufacturers, 5% for restaurants, 6% for services.
-      const taxPayable = money.percent(taxableValue, "1");
+      // Tax is not refunded through CMP-08: a quarter whose credit notes exceed its sales shows the
+      // negative net value and payable 0.00.
+      const taxPayable = money.compare(taxableValue, "0") > 0 ? money.percent(taxableValue, "1") : "0.00";
 
       return {
         taxableValue,

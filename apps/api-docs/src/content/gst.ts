@@ -385,7 +385,7 @@ with open(data["filename"], "w") as f:
       method: "query",
       path: "gst.cmp08",
       title: "Generate CMP-08 (Composition Scheme)",
-      description: "Generate CMP-08 quarterly return for composition scheme dealers. Composition dealers pay a flat tax rate on total outward supplies instead of collecting GST from customers. Calculates total taxable value from sale invoices in the quarter and applies the composition tax rate (default 1% for traders/manufacturers).",
+      description: "Generate CMP-08 quarterly return for composition scheme dealers. Composition dealers pay a flat tax rate on total outward supplies instead of collecting GST from customers. Calculates the quarter's taxable value exactly as GSTR-1 and GSTR-3B do (sale invoices only, not cancelled or deleted, net of credit notes and sales returns, plus sale-side debit notes) and applies the composition tax rate (default 1% for traders/manufacturers). Tax payable is 0.00 when the net value is not positive.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -397,8 +397,8 @@ with open(data["filename"], "w") as f:
         example: {
           taxableValue: "450000.00",
           taxPayable: "4500.00",
-          quarterStart: "2026-04-01T00:00:00.000Z",
-          quarterEnd: "2026-06-30T23:59:59.999Z",
+          quarterStart: "2026-03-31T18:30:00.000Z", // 1 April 00:00 IST
+          quarterEnd: "2026-06-30T18:29:59.999Z", // the last millisecond of 30 June IST
         },
       },
       codeExamples: {
@@ -430,7 +430,7 @@ print(f"Tax payable: Rs. {cmp['taxPayable']}")`,
         "CMP-08 is filed quarterly by the 18th of the month following the quarter (e.g. Q1 Apr-Jun is due by July 18).",
         "Quarters are the GST financial-year quarters (Q1 = Apr-Jun), and `year` is the start year of the financial year. Before 0.10.1 they were calendar quarters (Q1 = Jan-Mar of `year`); a stored call that passed `quarter: 1` now returns a different period.",
         "The GST financial year is always April to March; the business's own `financialYearStart` setting does not change it.",
-        "Only sale invoices with status != 'cancelled' are included in the taxable value calculation.",
+        "Quotations, proformas, delivery challans, cancelled and deleted documents and purchase-side documents are not counted; credit notes and sales returns are deducted and sale-side debit notes added, the same classification as GSTR-1 and GSTR-3B.",
       ],
       relatedEndpoints: ["gst-gstr1", "gst-gstr3b"],
     },
