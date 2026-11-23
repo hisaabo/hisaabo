@@ -269,3 +269,32 @@ describe("golden 21: the digit minimum by turnover blocks the file, exactly (wor
     });
   });
 });
+
+/**
+ * An all-zero HSN ("0000", "000000") is the stand-in for a missing code, not a code: the line is in
+ * `hsnMissing`, filed under 0000 and flagged, and the JSON export is refused.
+ */
+describe("golden 21: an item whose HSN is all zeros counts as missing", () => {
+  it("0000 and 000000 are missing; 0101 is a code", async () => {
+    const w = await createGoldenWorld();
+    const mk = async (name: string, hsn: string) => (await w.caller.item.create({ name, hsn, unit: "pcs", taxPercent: "0" })).id;
+    const z4 = await mk("Zero4", "0000");
+    const z6 = await mk("Zero6", "000000");
+    const ok = await mk("Fine", "0101");
+    const buyer = (await w.caller.party.create({
+      type: "customer", name: "B2B Maharashtra", state: "Maharashtra", stateCode: "27", gstin: "27AABCM0000R1ZM", openingBalance: "0",
+    })).id;
+    const inv = await addInvoice(w, "sale", buyer, [
+      { name: "Zero4", itemId: z4, qty: "1", price: "10.00", tax: "0" },
+      { name: "Zero6", itemId: z6, qty: "1", price: "20.00", tax: "0" },
+      { name: "Fine", itemId: ok, qty: "1", price: "30.00", tax: "0" },
+    ], { date: DATE("10") });
+
+    const r = await w.caller.gst.gstr1({ year: 2026, month: 1 });
+    expect(r.hsnMissing.map((m) => [m.invoiceNumber, m.line, m.itemName])).toEqual([[inv.invoiceNumber, 1, "Zero4"], [inv.invoiceNumber, 2, "Zero6"]]);
+    expect(r.hsnInvalid).toEqual([]);
+    expect(r.hsn.map((h) => [h.hsn, h.taxableValue, h.hsnFlag])).toEqual([["0000", 30, "missing"], ["0101", 30, null]]);
+    await expect(w.caller.gst.gstr1Json({ year: 2026, month: 1 })).rejects.toThrow("2 line(s) have no HSN code");
+  });
+});
+

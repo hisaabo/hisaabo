@@ -346,9 +346,9 @@ export async function generateGSTR1(
 
     // Table 12 (HSN summary): the item's HSN, the unit the quantity is in, and the GST rate.
     for (const [lineIdx, li] of lineItems.entries()) {
-      // "0000" is the stand-in for a missing code, never a real one
+      // 0000 (or any all-zero code) is the stand-in for a missing code, never a real one
       const itemRealHsn = li.itemId ? (itemHsnLookup.get(li.itemId) || "") : "";
-      const realHsn = itemRealHsn === "0000" ? "" : itemRealHsn;
+      const realHsn = /^0+$/.test(itemRealHsn) ? "" : itemRealHsn;
       const lineNo = (li.sortOrder ?? lineIdx) + 1;
       if (!realHsn) {
         hsnMissing.push({ invoiceNumber: inv.invoiceNumber, line: lineNo, itemName: li.itemName, itemId: li.itemId ?? null });

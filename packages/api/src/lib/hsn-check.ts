@@ -16,7 +16,7 @@ export interface HsnLine {
 /**
  * The HSN / SAC code of one line, or the reason it cannot be sent.
  *   - missing: `line N 'Name' has no HSN code; add it on the item`
- *   - 4 to 8 digits (spaces, dots and hyphens are dropped: "7306.90" is sent as "730690")
+ *   - 4 to 8 digits (spaces, dots and hyphens are dropped: "7306.90" is sent as "730690"), not all zeros
  *   - the digit minimum of the business's annual turnover: 4 digits up to and including
  *     ₹5,00,00,000, 6 above (validateHsnForTurnover, exact in paise)
  */
@@ -30,6 +30,10 @@ export function resolveHsn(
   if (!code) return { problem: `${label} has no HSN code; add it on the item` };
   if (!/^\d{4,8}$/.test(code)) {
     return { problem: `${label} has HSN code '${code}', which is not 4 to 8 digits; correct it on the item` };
+  }
+  // 0000 / 000000 are placeholders, not codes (GSTR-1 files a missing HSN under 0000)
+  if (/^0+$/.test(code)) {
+    return { problem: `${label} has HSN code '${code}', which is not a real HSN code (all zeros); correct it on the item` };
   }
   // TODO(0.11.0): `annualTurnover` has no input in the app yet, so it is unknown for almost every
   // business and only the 4-digit minimum applies. When 0.11.0 captures turnover, an unknown

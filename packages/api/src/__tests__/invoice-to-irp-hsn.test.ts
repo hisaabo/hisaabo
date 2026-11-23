@@ -166,3 +166,18 @@ describe("isValidHsn is an exact match against the master list, not a prefix mat
     expect(isValidHsn("01012100")).toBe(false); // starts with a listed code, is not itself listed
   });
 });
+
+describe("an all-zero HSN is not a real code (e-invoice, e-way bill and GSTR-1 agree)", () => {
+  it.each(["0000", "000000", "00000000", "00 00", "0.000"])("%s is refused", (hsn) => {
+    const code = hsn.replace(/[\s.-]/g, "");
+    expect(() => map([line({ itemHsn: hsn })])).toThrow(
+      `line 1 'Steel Rods' has HSN code '${code}', which is not a real HSN code (all zeros); correct it on the item`,
+    );
+  });
+
+  it("a code that merely contains zeros is fine", () => {
+    expect(map([line({ itemHsn: "0101" })]).ItemList[0]!.HsnCd).toBe("0101");
+    expect(map([line({ itemHsn: "10000" })]).ItemList[0]!.HsnCd).toBe("10000");
+  });
+});
+

@@ -121,3 +121,12 @@ describe("e-way bill HSN: refused per line, same rule as the e-invoice", () => {
     }
   });
 });
+
+describe("e-way bill: an all-zero HSN is not a real code", () => {
+  it.each(["0000", "000000", "00000000"])("%s is refused with the e-invoice's wording", (hsn) => {
+    expect(() => mapInvoiceToEWB(invoice("2026-01-15T10:00:00.000Z"), [{ ...line, hsn }], transport)).toThrow(
+      `Cannot generate the e-way bill: line 1 'Steel Rods' has HSN code '${hsn}', which is not a real HSN code (all zeros); correct it on the item.`,
+    );
+  });
+});
+
