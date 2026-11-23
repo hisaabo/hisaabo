@@ -154,7 +154,7 @@ Verify:
 
 ### Rolling back
 
-Rolling back to the 0.10.0 image needs no reverse SQL and no data change. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
+Rolling back to the 0.10.0 image needs no reverse SQL and no data change. This was rehearsed on a copy of a production 0.10.0 database: 0.10.0 booted on the migrated database, signed in, listed and opened invoices written by 0.10.1, created invoices and payments, and served the dashboard, GSTR-1, GSTR-3B and party reports; rolling forward again read everything 0.10.0 wrote. **Roll back the web app and the store together with the API**: some 0.10.1 responses changed shape (for example GSTR-1's B2C sections), so a 0.10.1 web app against a 0.10.0 API shows errors on those pages. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
 
 ### New
 
