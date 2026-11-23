@@ -1,4 +1,5 @@
 import { businessYearMonth } from "@hisaabo/shared";
+import { usePersistedTab } from "@/hooks/usePersistedTab";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
@@ -23,7 +24,8 @@ const months = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-type G2BTab = "upload" | "reconciliation" | "missing-books" | "missing-2b" | "history";
+const G2B_TABS = ["upload", "reconciliation", "missing-books", "missing-2b", "history"] as const;
+type G2BTab = (typeof G2B_TABS)[number];
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -665,17 +667,10 @@ function GSTR2BPage() {
   const now = businessYearMonth(new Date());
   const [year, setYear]   = useState(now.year);
   const [month, setMonth] = useState(now.month);
-  const [storedTab, setActiveTabRaw] = useState<G2BTab>(
-    () => (localStorage.getItem("hisaabo_gstr2b_tab") as G2BTab) || "upload",
-  );
+  const [storedTab, setActiveTab] = usePersistedTab<G2BTab>("hisaabo_gstr2b_tab", G2B_TABS, "upload");
   // Uploading needs create:GstReport — without it the Upload tab is hidden.
   const canUpload = useCan("create", "GstReport");
   const activeTab: G2BTab = !canUpload && storedTab === "upload" ? "reconciliation" : storedTab;
-
-  const setActiveTab = (tab: G2BTab) => {
-    setActiveTabRaw(tab);
-    localStorage.setItem("hisaabo_gstr2b_tab", tab);
-  };
 
   const years = Array.from({ length: 5 }, (_, i) => now.year - i);
 
