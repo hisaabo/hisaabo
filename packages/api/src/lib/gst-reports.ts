@@ -1,7 +1,7 @@
 import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
-import { csvCell, csvRow, money, splitDocumentGst, BUSINESS_TIME_ZONE } from "@hisaabo/shared";
+import { csvCell, csvRow, money, splitDocumentGst, BUSINESS_TIME_ZONE, formatBusinessDateSlashes } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { gstMonthWindow } from "./gst-period.js";
 import { classifyLedgerDocument } from "./ledger-documents.js";
@@ -715,11 +715,13 @@ export function toUqc(unit?: string | null): string {
   return UQC_MAP[unit.toLowerCase()] ?? "NOS";
 }
 
-/** Convert ISO date string "YYYY-MM-DDTXX:XX:XX..." to portal "DD-MM-YYYY" */
+/**
+ * An instant (ISO string) as the portal's "DD-MM-YYYY": the IST calendar day (the business calendar),
+ * never the UTC date. An invoice dated 1 April is stored as 2026-03-31T18:30Z and must read 01-04-2026,
+ * the same date the IRN was registered under.
+ */
 function isoToPortalDate(isoDate: string): string {
-  const datePart = isoDate.split("T")[0];
-  const [year, month, day] = datePart.split("-");
-  return `${day}-${month}-${year}`;
+  return formatBusinessDateSlashes(new Date(isoDate)).replace(/\//g, "-");
 }
 
 /**

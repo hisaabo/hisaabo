@@ -29,6 +29,7 @@ import { getTenantRole, hasRole, OWNER_ROLES } from "../lib/tenant-access.js";
 import { tenantBusinessScope } from "../lib/tenant-businesses.js";
 import { logger } from "../lib/logger.js";
 import { APP_VERSION, SCHEMA_CHECKSUM } from "../lib/exportManifest.js";
+import { businessToday } from "@hisaabo/shared";
 
 // ── Snake → camel column map ──────────────────────────────────────────────────
 /**
@@ -186,7 +187,7 @@ export function registerExportRoute(app: Hono): void {
     }
 
     const tenantSlug = tenant.slug;
-    const exportDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const exportDate = businessToday(); // YYYY-MM-DD, the IST date
     const filename = `hisaabo-${tenantSlug}-${exportDate}.tar.gz`;
 
     logger.info(

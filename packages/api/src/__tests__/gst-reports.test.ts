@@ -1754,3 +1754,35 @@ describe("a GSTR-1 JSON export is refused while a line has an HSN that cannot be
     ]);
   });
 });
+
+describe("gstr1ToPortalJson prints the IST day of an instant (IST-midnight inputs, not UTC midnight)", () => {
+  const b2b = (invoiceDate: string) => ({
+    partyGstin: "27AABCM0000R1ZM", partyName: "Buyer", invoiceNumber: "INV-1", invoiceDate,
+    invoiceType: "Regular", taxableValue: 100, cgst: 9, sgst: 9, igst: 0, totalInvoiceValue: 118,
+  });
+  const note = (invoiceDate: string) => ({
+    invoiceNumber: "CN-1", invoiceDate, partyName: "Buyer", partyGstin: "27AABCM0000R1ZM",
+    totalAmount: "118.00", taxableAmount: "100.00", taxAmount: "18.00", cgst: 9, sgst: 9, igst: 0,
+  });
+
+  it.each([
+    ["2026-03-31T18:30:00.000Z", "01-04-2026"], // 1 April 00:00 IST: the NEW financial year
+    ["2026-03-31T18:29:59.500Z", "31-03-2026"], // 31 March 23:59:59.500 IST
+    ["2026-10-31T18:30:00.000Z", "01-11-2026"],
+    ["2025-12-31T18:30:00.000Z", "01-01-2026"],
+    ["2026-04-01T00:00:00.000Z", "01-04-2026"], // UTC midnight is 05:30 IST on the same day
+  ])("invoice %s -> idt %s", (instant, expected) => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2b: [b2b(instant)] }), "27AABCA0000R1ZM", "2025-26", "042026");
+    const rows = json.b2b as Array<{ inv: Array<{ idt: string }> }>;
+    expect(rows[0]!.inv[0]!.idt).toBe(expected);
+  });
+
+  it.each([
+    ["2026-03-31T18:30:00.000Z", "01-04-2026"],
+    ["2026-10-31T18:30:00.000Z", "01-11-2026"],
+  ])("credit note %s -> nt_dt %s", (instant, expected) => {
+    const json = gstr1ToPortalJson(makePortalReport({ creditNotes: [note(instant)] }), "27AABCA0000R1ZM", "2025-26", "042026");
+    const rows = json.cdnr as Array<{ nt: Array<{ nt_dt: string }> }>;
+    expect(rows[0]!.nt[0]!.nt_dt).toBe(expected);
+  });
+});

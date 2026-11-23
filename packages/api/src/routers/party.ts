@@ -1,7 +1,7 @@
 import { eq, and, ilike, or, sql, desc, asc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
-import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow, formatBusinessDateSlashes } from "@hisaabo/shared";
+import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow, formatBusinessDateSlashes, businessDateOf } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -628,8 +628,9 @@ export const partyRouter = router({
       const header = "Date,Description,Document #,Debit,Credit,Balance";
       const csv = [header, ...rows].join("\n");
       const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+      // the IST day of the range start (a range starting 1 April 00:00 IST is 31 March in UTC)
       const dateSuffix = input.fromDate
-        ? `_${input.fromDate.slice(0, 10)}`
+        ? `_${businessDateOf(new Date(input.fromDate))}`
         : "";
 
       return {
@@ -786,7 +787,7 @@ export const partyRouter = router({
       );
       const csv = [header, ...rows].join("\n");
 
-      const dateSuffix = input.fromDate ? `_${input.fromDate.slice(0, 10)}` : "_all";
+      const dateSuffix = input.fromDate ? `_${businessDateOf(new Date(input.fromDate))}` : "_all";
       return {
         csv,
         filename: `tally-export${dateSuffix}.csv`,

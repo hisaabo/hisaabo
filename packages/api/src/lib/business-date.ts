@@ -56,7 +56,14 @@ export function buildBusinessDateFilter(
   const b = coerce(range.before);
   const out: SQL[] = [];
   if (f !== undefined) out.push(gte(col, f));
-  if (t !== undefined) out.push(lte(col, t));
+  if (t !== undefined) {
+    // An inclusive end at millisecond precision ("... 23:59:59.999") is the half-open "< the next
+    // millisecond". `<= 23:59:59.999` would drop a stored timestamp with microseconds
+    // (23:59:59.999500), which the next period (`>= 00:00:00.000`) does not take either.
+    // (The "unbounded" sentinel 9999-12-31T23:59:59.999Z has no next millisecond Postgres accepts.)
+    const next = t instanceof Date ? new Date(t.getTime() + 1) : null;
+    out.push(next && next.getUTCFullYear() <= 9999 ? lt(col, next) : lte(col, t));
+  }
   if (b !== undefined) out.push(lt(col, b));
   return out;
 }
