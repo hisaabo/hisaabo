@@ -263,6 +263,13 @@ export const storeRouter = router({
       search: z.string().nullish(),
       category: z.string().nullish(),
       storeEnabled: z.boolean().nullish(),
+      /**
+       * Items already on the store first, then the rest, each group in the usual
+       * order (storeSortOrder, name, id). Sorted here, not in the client, because
+       * the list is paged: selected items past the first page must still come first.
+       * Reflects what is SAVED, so a manager's unsaved ticks never reorder the list.
+       */
+      selectedFirst: z.boolean().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -304,7 +311,10 @@ export const storeRouter = router({
           storeDescription: items.storeDescription,
         }).from(items)
           .where(and(...conditions))
-          .orderBy(items.storeSortOrder, items.name, items.id)
+          .orderBy(
+            ...(input.selectedFirst ? [desc(items.storeEnabled)] : []),
+            items.storeSortOrder, items.name, items.id,
+          )
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(items)

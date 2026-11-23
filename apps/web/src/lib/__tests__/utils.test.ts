@@ -223,7 +223,8 @@ describe("toISOString() — YYYY-MM-DD → ISO for z.string().datetime() inputs"
     // Must be a full ISO timestamp (20 or more chars, with T and Z)
     expect(result).toBeDefined();
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-    expect(new Date(result!).getDate()).toBe(31);
+    // a picked day is stored as 00:00 IST (the business calendar), whatever the browser's zone
+    expect(result).toBe("2025-03-30T18:30:00.000Z");
   });
 
   it("accepts a Date object", () => {
@@ -247,9 +248,8 @@ describe("toISOStringEndOfDay() — upper-bound range filters include the whole 
   it("pushes to 23:59:59.999 before serialising", () => {
     const result = toISOStringEndOfDay("2025-03-31");
     expect(result).toBeDefined();
-    // dayjs endOf("day") → 23:59:59.999 in local tz, then .toISOString()
-    // Exact time depends on tz but must end with ":59.999Z" after conversion to UTC.
-    expect(result).toMatch(/\.999Z$/);
+    // the last millisecond of 31 Mar on the business calendar: 23:59:59.999 IST
+    expect(result).toBe("2025-03-31T18:29:59.999Z");
   });
 
   it("returns undefined for null/undefined/empty/invalid", () => {

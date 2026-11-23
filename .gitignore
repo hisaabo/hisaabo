@@ -27,6 +27,7 @@ coverage/
 e2e/.auth/
 e2e/test-results/
 e2e/playwright-report/
+apps/store/e2e/.results/
 
 # Build artifacts
 *.tsbuildinfo

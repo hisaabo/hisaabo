@@ -26,9 +26,10 @@ import { TABLE_REGISTRY } from "../lib/tableRegistry.js";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import { verifyExportToken } from "../lib/exportToken.js";
 import { getTenantRole, hasRole, OWNER_ROLES } from "../lib/tenant-access.js";
-import { getTenantMemberUserIds, businessTenantScope } from "../lib/tenant-businesses.js";
+import { tenantBusinessScope } from "../lib/tenant-businesses.js";
 import { logger } from "../lib/logger.js";
 import { APP_VERSION, SCHEMA_CHECKSUM } from "../lib/exportManifest.js";
+import { businessToday } from "@hisaabo/shared";
 
 // ── Snake → camel column map ──────────────────────────────────────────────────
 /**
@@ -186,7 +187,7 @@ export function registerExportRoute(app: Hono): void {
     }
 
     const tenantSlug = tenant.slug;
-    const exportDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const exportDate = businessToday(); // YYYY-MM-DD, the IST date
     const filename = `hisaabo-${tenantSlug}-${exportDate}.tar.gz`;
 
     logger.info(
@@ -214,12 +215,12 @@ export function registerExportRoute(app: Hono): void {
     }
 
     // ── Get business IDs for this tenant ──────────────────────────────────────
-    // Scoped by creator-membership: in self-hosted mode all tenants share one
-    // database, so an unfiltered select would export other tenants' businesses.
-    const memberIds = await getTenantMemberUserIds(tenantId);
-    const bizRows = memberIds.length === 0
-      ? []
-      : await db.select({ id: businesses.id }).from(businesses).where(businessTenantScope(memberIds));
+    // Scoped by creator-membership on a self-hosted install with several
+    // organisations (they share one database, so an unfiltered select would
+    // export other tenants' businesses); unscoped where the database is the
+    // tenant boundary. See tenantBusinessScope.
+    const bizScope = await tenantBusinessScope(tenantId);
+    const bizRows = await db.select({ id: businesses.id }).from(businesses).where(bizScope);
     const businessIds = bizRows.map((b) => b.id);
 
     // ── Page through each table and write NDJSON files ─────────────────────────

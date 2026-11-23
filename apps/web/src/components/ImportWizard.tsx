@@ -1,3 +1,4 @@
+import { pickedDateToISO } from "@hisaabo/shared";
 import { useState, useRef, useCallback } from "react";
 import Papa from "papaparse";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -6,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { useCan } from "@/hooks/useCan";
+import { IMPORT_SOURCES, type ImportSource } from "@/lib/import-sources";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,7 +16,7 @@ interface ImportWizardProps {
   onClose: () => void;
 }
 
-type Source = "mybillbook" | "tally" | "generic";
+type Source = ImportSource;
 type EntityKey = "parties" | "items" | "invoices" | "payments" | "cashBank";
 
 interface ParsedFile {
@@ -1942,8 +1944,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             if (dateStr) {
               const parts = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
               if (parts) {
-                const d = new Date(+parts[3], +parts[2] - 1, +parts[1]);
-                if (!isNaN(d.getTime())) expenseDate = d.toISOString();
+                // a DD/MM/YYYY cell is that calendar day on the business calendar (00:00 IST)
+                const ymd = `${parts[3]}-${parts[2]!.padStart(2, "0")}-${parts[1]!.padStart(2, "0")}`;
+                expenseDate = pickedDateToISO(ymd);
               } else {
                 const iso = new Date(dateStr);
                 if (!isNaN(iso.getTime())) expenseDate = iso.toISOString();
@@ -2109,11 +2112,8 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   function renderStepContent() {
     // Step 1: Select source
     if (step === 1) {
-      const sources: Array<{ key: Source; label: string; subtitle: string; recommended?: boolean }> = [
-        { key: "mybillbook", label: "myBillBook", subtitle: "Auto-detects all column names", recommended: true },
-        { key: "tally", label: "Tally", subtitle: "Tally ERP / Prime CSV exports" },
-        { key: "generic", label: "Generic CSV", subtitle: "Custom column mapping for any CSV" },
-      ];
+      // Only sources with a registered server adapter (see lib/import-sources.ts).
+      const sources = IMPORT_SOURCES;
 
       return (
         <div className="space-y-3">
@@ -2937,7 +2937,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
       open={open && canImport}
       onClose={handleClose}
       title="Import Data"
-      description="Migrate from myBillBook, Tally, or any CSV source"
+      description="Migrate your parties, items and invoices from myBillBook"
       footer={renderFooter()}
     >
       <StepIndicator current={step} total={5} />

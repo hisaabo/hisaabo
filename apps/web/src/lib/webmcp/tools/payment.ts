@@ -6,9 +6,14 @@
  * invoice before deciding how to split a payment.
  */
 
+import { money as decimal } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
+  assertIdempotencyKey,
+  describeCreateResult,
+  idempotencyKeyOf,
+  idempotencyKeyProp,
   MONEY_PATTERN,
   UUID_PATTERN,
   enumOf,
@@ -24,6 +29,7 @@ import {
   uuid,
   withPaginationMeta,
 } from "./shared";
+import { day, lookupInvoice, lookupParty, rupees, shortId } from "./summary";
 
 const PAYMENT_MODES = [
   "cash",
@@ -132,6 +138,7 @@ const paymentCreate: WebMcpToolDefinition = {
     "Record money received from a customer or paid to a supplier. This moves real balances: the party's ledger, the invoice's amountPaid, and the invoice status, which Hisaabo recalculates to 'paid' or 'partial' by itself. Confirm the party, the amount and the date with the user before calling, and never use invoice_update_status to fake a payment.",
     "Three ways to apply the money. One invoice: set invoiceId. Several invoices: leave invoiceId out and pass 'allocations', where the amounts should add up to 'amount' (call payment_unpaid_invoices first to get the per-invoice balances). Neither: an advance or on-account payment that sits against the party's balance until it is applied.",
     "'amount' and 'discount' are decimal strings with 2 decimals and no currency symbol ('5000.00'); amount must be greater than zero. For a TDS payment, 'amount' is the net cash received and each allocation amount is the gross invoice settlement, with gross settlement = net cash received + TDS deducted. Provide tdsAmount, tdsSectionCode and tdsRate on the allocation when TDS is deducted. 'discount' is a write-off settled alongside the payment, not a deduction from what was received. paymentDate defaults to today.",
+    "Retrying safely: pass a fresh idempotencyKey (for example a new UUID) for every payment you intend to record, and reuse that same key only to retry that same request after a timeout. A retry with the same key within 15 minutes returns the payment the first call recorded (same number, flagged idempotentReplay, money not applied again) instead of recording it twice. Without a key every call records a payment, so two identical payments are two payments.",
     "Example: { partyId: '3f1c…', amount: '12700.00', mode: 'upi', referenceNumber: '432198765432', allocations: [{ invoiceId: '8a2d…', amount: '12700.00' }] }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -156,18 +163,84 @@ const paymentCreate: WebMcpToolDefinition = {
       referenceNumber: { type: "string", maxLength: 100, description: "UTR, cheque number or transaction reference." },
       paymentDate: isoDate("When the money actually moved. Defaults to today."),
       notes: { type: "string", maxLength: 500, description: "Internal note about this payment. Not printed for the customer." },
+      idempotencyKey: idempotencyKeyProp(),
     },
     ["partyId", "amount", "mode"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Payment", action: "create" },
-  execute: async (input, ctx) => {
-    const partyId = str(input.partyId);
+  summarize: async (input, ctx) => {
     const amount = str(input.amount);
+    const partyId = str(input.partyId);
+    if (!amount || !partyId) return null;
+    const party = await lookupParty(ctx, partyId);
+    const who = party?.name ?? `party ${shortId(partyId)}`;
+    const headline =
+      party?.type === "supplier"
+        ? `Record ${rupees(amount)} paid to ${who}`
+        : party?.type === "customer"
+          ? `Record ${rupees(amount)} received from ${who}`
+          : `Record a payment of ${rupees(amount)} with ${who}`;
+
+    const details: string[] = [];
     const mode = enumOf(input.mode, PAYMENT_MODES);
-    if (!partyId) throw new Error("partyId is required — find it with party_list.");
-    if (!amount) throw new Error("amount is required, as a decimal string such as '5000.00'.");
-    if (!mode) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+    if (mode) details.push(`Mode: ${mode.replace(/_/g, " ")}`);
+    if (str(input.referenceNumber)) details.push(`Reference: ${str(input.referenceNumber)}`);
+    const paidOn = day(input.paymentDate);
+    if (paidOn) details.push(`Date: ${paidOn}`);
+
+    const invoiceId = str(input.invoiceId);
+    const allocations = objectArray(input.allocations) ?? [];
+    if (invoiceId) {
+      const invoice = await lookupInvoice(ctx, invoiceId);
+      if (invoice?.total && invoice.paid) {
+        let line = `Applied to ${invoice.number} (balance ${rupees(decimal.sub(invoice.total, invoice.paid))}`;
+        try {
+          line += ` → ${rupees(decimal.sub(decimal.sub(invoice.total, invoice.paid), amount))}`;
+        } catch {
+          // an unparseable amount: leave the "after" out rather than guess
+        }
+        details.push(`${line})`);
+      } else {
+        details.push(`Applied to ${invoice?.number ?? `invoice ${shortId(invoiceId)}`}`);
+      }
+    } else if (allocations.length > 0) {
+      const shown = await Promise.all(
+        allocations.slice(0, 3).map(async (a) => {
+          const invoice = await lookupInvoice(ctx, str(a.invoiceId));
+          return `${invoice?.number ?? `invoice ${shortId(str(a.invoiceId))}`} ${rupees(a.amount)}`;
+        }),
+      );
+      const more = allocations.length - shown.length;
+      details.push(`Split across ${allocations.length} invoice${allocations.length === 1 ? "" : "s"}: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}`);
+    } else {
+      details.push("Not applied to an invoice: recorded as an advance on the party's account");
+    }
+
+    const tds = allocations.map((a) => str(a.tdsAmount)).filter((v): v is string => !!v);
+    if (tds.length > 0) {
+      try {
+        details.push(`TDS withheld: ${rupees(decimal.sum(tds))}`);
+      } catch {
+        // malformed TDS amount: the server will reject it
+      }
+    }
+    if (str(input.discount) && Number(str(input.discount)) !== 0) {
+      details.push(`Discount settled: ${rupees(str(input.discount))}`);
+    }
+    return { headline, details };
+  },
+  validate: (input) => {
+    if (!str(input.partyId)) throw new Error("partyId is required — find it with party_list.");
+    if (!str(input.amount)) throw new Error("amount is required, as a decimal string such as '5000.00'.");
+    if (!enumOf(input.mode, PAYMENT_MODES)) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+    assertIdempotencyKey(input);
+  },
+  execute: async (input, ctx) => {
+    paymentCreate.validate!(input, ctx);
+    const partyId = str(input.partyId)!;
+    const amount = str(input.amount)!;
+    const mode = enumOf(input.mode, PAYMENT_MODES)!;
 
     const allocations = objectArray(input.allocations)?.map((a) => ({
       invoiceId: str(a.invoiceId) ?? "",
@@ -177,7 +250,7 @@ const paymentCreate: WebMcpToolDefinition = {
       ...(str(a.tdsRate) !== undefined ? { tdsRate: str(a.tdsRate) } : {}),
     }));
 
-    return await ctx.client.payment.create.mutate({
+    const created = await ctx.client.payment.create.mutate({
       partyId,
       amount,
       mode,
@@ -187,7 +260,10 @@ const paymentCreate: WebMcpToolDefinition = {
       referenceNumber: str(input.referenceNumber),
       paymentDate: str(input.paymentDate),
       notes: str(input.notes),
+      // Only when the agent chose one: a retry with it returns the first payment instead of recording the money twice.
+      idempotencyKey: idempotencyKeyOf(input),
     });
+    return describeCreateResult(created);
   },
 };
 

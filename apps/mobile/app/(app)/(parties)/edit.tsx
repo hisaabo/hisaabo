@@ -19,6 +19,8 @@ import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
 import { PermissionGate } from "../../../src/components/PermissionGate";
+import { OpeningBalanceField } from "../../../src/components/OpeningBalanceField";
+import { composeOpeningBalance, splitOpeningBalance, type OpeningBalanceDirection } from "@hisaabo/shared";
 
 type PartyType = "customer" | "supplier";
 
@@ -50,6 +52,10 @@ function EditPartyScreenContent() {
   const [billingAddress, setBillingAddress] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
+  // Unsigned amount + direction; the stored value is signed (positive: they owe you, negative:
+  // you owe them), so editing shows the existing sign as the toggle.
+  const [openingAmount, setOpeningAmount] = useState("");
+  const [openingDirection, setOpeningDirection] = useState<OpeningBalanceDirection>("receive");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [initialized, setInitialized] = useState(false);
 
@@ -63,6 +69,9 @@ function EditPartyScreenContent() {
       setBillingAddress(party.billingAddress ?? "");
       setCity(party.city ?? "");
       setState(party.state ?? "");
+      const opening = splitOpeningBalance(party.openingBalance);
+      setOpeningAmount(opening.amount);
+      setOpeningDirection(opening.direction);
       setInitialized(true);
     }
   }, [party, initialized]);
@@ -110,6 +119,7 @@ function EditPartyScreenContent() {
         billingAddress: billingAddress.trim() || undefined,
         city: city.trim() || undefined,
         state: state.trim() || undefined,
+        openingBalance: composeOpeningBalance(openingAmount, openingDirection),
       },
     });
   };
@@ -287,6 +297,20 @@ function EditPartyScreenContent() {
                   <Text style={styles.errorText}>{errors.email}</Text>
                 )}
               </View>
+            </View>
+          </View>
+
+          {/* Opening Balance */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Balance</Text>
+            <View style={styles.card}>
+              <OpeningBalanceField
+                amount={openingAmount}
+                direction={openingDirection}
+                partyType={type}
+                onAmountChange={setOpeningAmount}
+                onDirectionChange={setOpeningDirection}
+              />
             </View>
           </View>
 

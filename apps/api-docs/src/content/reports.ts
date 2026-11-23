@@ -754,7 +754,7 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.balanceSheet?input={p
       method: "query",
       path: "reports.profitAndLoss",
       title: "Profit & Loss",
-      description: "Income statement (P&L) for a date range, based on the Chart of Accounts. Returns income and expense line items with gross profit and net profit calculations. Gross profit is calculated as Sales (4000) minus direct costs (5000 Purchases + 5100 Direct Expenses).",
+      description: "Income statement (P&L) for a date range, based on the Chart of Accounts. Returns income and expense line items with gross profit and net profit calculations. Gross profit is net sales (4000 Sales + 4010 Sales Returns) minus net direct costs (5000 Purchases + 5010 Purchase Returns + 5100 Direct Expenses). Invoice-level round-off, discount and additional charges post to 5030 Round Off, 5020 Discount Allowed / 4200 Discount Received and 4020 Other Charges / 5100 Direct Expenses.",
       auth: "business",
       input: [
         { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
@@ -790,7 +790,7 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.profitAndLoss?input={
       },
       gotchas: [
         "Income accounts: `amount = credit - debit` (credit-normal). Expense accounts: `amount = debit - credit` (debit-normal).",
-        "`grossProfit = Sales (4000) - Sales Returns (4010) - Purchases (5000) - Direct Expenses (5100)`.",
+        "`grossProfit = (Sales 4000 + Sales Returns 4010) - (Purchases 5000 + Purchase Returns 5010 + Direct Expenses 5100)`; 4010 and 5010 amounts are negative on their own accounts, so returns reduce the totals.",
         "`netProfit = totalIncome - totalExpenses`.",
       ],
       relatedEndpoints: ["reports-balance-sheet"],
@@ -1015,8 +1015,11 @@ with open(data["filename"], "w") as f:
     f.write(data["xml"])`,
       },
       gotchas: [
-        "This produces XML format for Tally Prime import \u2014 not CSV. For CSV format, use `party.tallyExport`.",
-        "Manual journal entries are included alongside derived vouchers.",
+        "This is the Tally export to use: it produces the XML Tally Prime imports (Gateway of Tally > Import > Data). The web Reports > Tally Export tab downloads it. The older CSV endpoint, `party.tallyExport`, is deprecated because Tally cannot import CSV.",
+        "Both `fromDate` and `toDate` are required (ISO datetimes). For an open-ended export send a very early `fromDate` and a very late `toDate`: the web app's \"All\" preset sends 1900-01-01T00:00:00.000Z to 9999-12-31T23:59:59.999Z, which cuts nothing off (future-dated vouchers included), and saves the file as `tally-export-all.xml`.",
+        "There is no row limit. `party.tallyExport` capped the export at 1,000 rows per voucher type by default.",
+        "Manual journal entries are included alongside derived vouchers. Voided entries are included together with their reversing entries, so they net to zero in Tally.",
+        "Withheld customer TDS is a ledger line of the receipt voucher (Dr TDS Receivable, account 1600).",
         "The business name is used as the Tally Company name in the XML.",
       ],
       relatedEndpoints: ["party-tally-export"],

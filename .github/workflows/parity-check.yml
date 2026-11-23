@@ -60,6 +60,12 @@ jobs:
             echo "touches_exceptions=$(grep -c 'parity-exceptions.yaml' "$RUNNER_TEMP/changed-files.txt" || true)"
           } >> "$GITHUB_OUTPUT"
 
+      # The WebMCP catalog rules (every browser tool is in the catalog, every
+      # catalog entry has a status) run inside --validate below; this tests
+      # the rules themselves.
+      - name: Test WebMCP catalog checker
+        run: node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --test scripts/check-webmcp-catalog.test.ts
+
       - name: Validate exceptions file
         id: validate
         run: |

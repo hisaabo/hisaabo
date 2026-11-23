@@ -29,7 +29,7 @@ export function registerEInvoiceCommands(program: Command): void {
 
   einvoice
     .command("cancel <invoiceId>")
-    .description("Cancel an e-invoice")
+    .description("Cancel an e-invoice (IRN) and its invoice; stock and returns are adjusted, issue a new invoice if needed")
     .option("--json", "JSON output")
     .option("--reason <code>", "Cancel reason code (1-4)")
     .option("--yes", "Skip confirmation prompt")

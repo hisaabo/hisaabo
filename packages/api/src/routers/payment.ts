@@ -2,10 +2,11 @@ import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
-import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
+import { createPaymentSchema, idempotencyInputSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
@@ -138,6 +139,9 @@ async function assertBankAccountUsable(tx: PaymentTx, ability: AppAbility, busin
     .limit(1);
   if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
 }
+
+/** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
+type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -322,9 +326,15 @@ export const paymentRouter = router({
       return account ?? null;
     }),
 
-  create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createPaymentSchema.and(idempotencyInputSchema)).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Payment");
-    const payment = await ctx.db.transaction(async (tx) => {
+    const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "payment.create", key: input.idempotencyKey, input };
+    const created = await ctx.db.transaction(async (tx) => {
+      // An idempotency key that was already used with this exact input is a replay:
+      // recognised here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, resourceId: claim.resourceId };
+
       // Security: validate that partyId belongs to the current business.
       const [partyCheck] = await tx.select({ id: parties.id, name: parties.name, type: parties.type })
         .from(parties)
@@ -508,8 +518,21 @@ export const paymentRouter = router({
         }
       }
 
-      return payment;
+      await completeIdempotencyKey(tx, claim, payment.id);
+      return { replayed: false as const, payment };
     });
+    if (created.replayed) {
+      // Answer with the LIVE payment, flagged as a replay; if it was deleted since, say so.
+      const [live] = await ctx.db
+        .select()
+        .from(payments)
+        .where(and(eq(payments.id, created.resourceId), eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)))
+        .limit(1);
+      if (!live) throw replayedRecordGone("payment");
+      const replay: WithReplayFlag<typeof live> = { ...live, idempotentReplay: true };
+      return replay;
+    }
+    const payment = created.payment;
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,
@@ -519,9 +542,12 @@ export const paymentRouter = router({
       entityId: payment.id,
       metadata: { paymentNumber: payment.paymentNumber, amount: payment.amount, mode: payment.mode },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
-    return payment;
+    // A caller that sent a key is told this call really created the record.
+    const response: WithReplayFlag<typeof payment> = input.idempotencyKey ? { ...payment, idempotentReplay: false } : payment;
+    return response;
   }),
 
   getById: viewerProcedure
@@ -876,6 +902,7 @@ export const paymentRouter = router({
       entityId: updated.id,
       metadata: { paymentNumber: updated.paymentNumber },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return updated;
@@ -997,6 +1024,7 @@ export const paymentRouter = router({
           entityId: input.id,
           metadata: { paymentNumber: result.payment.paymentNumber, amount: result.payment.amount },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 
@@ -1191,6 +1219,7 @@ export const paymentRouter = router({
           entityId: result.paymentIds[0],
           metadata: { paymentId: result.paymentIds[0], bankAccountId: input.bankAccountId, totalAssigned: result.assigned },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
       }
 

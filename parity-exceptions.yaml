@@ -77,10 +77,6 @@ exceptions:
       - selfExport.request
       - selfImport.request
 
-      # --- Parties ---
-      # Tally integration is an accounting workflow built for the web app.
-      - party.tallyExport
-
       # --- Document Types ---
       # Debit Notes — rare document type; intentionally omitted from mobile.
       - debitNote.list
@@ -185,6 +181,12 @@ exceptions:
       - tenant.myInvitations
       - tenant.acceptById
       - tenant.peekInvitation
+
+      # --- Browser AI agents (WebMCP) ---
+      # The owner's organization-wide switch for WebMCP, the browser's built-in AI
+      # agent API. It is a web-only feature (the desktop shell and the mobile app do
+      # not register WebMCP tools), so there is nothing for mobile to switch.
+      - tenant.setWebMcpDisabled
 
       # --- Chart of Accounts ---
       # Accounting management is a web-app/CA workflow.
@@ -355,6 +357,10 @@ exceptions:
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
+      # [security] The owner's organization-wide switch for browser AI agents
+      # (WebMCP, a web-only feature): an owner decision made in Settings, and a
+      # guardrail that automation holding a key should not be able to flip.
+      - tenant.setWebMcpDisabled
 
       # --- Business ---
       # Plan limit check — CLI doesn't create businesses.
@@ -382,10 +388,6 @@ exceptions:
       # workflows. Standard import (parties/items/invoices/payments) is covered.
       - import.importTransfers
       - import.reconcileDirectPayments
-
-      # --- Parties ---
-      # Tally accounting integration — Tally-specific export format.
-      - party.tallyExport
 
       # --- Bank Reconciliation ---
       # Interactive CSV upload + review workflow — not suited for CLI.
@@ -468,6 +470,10 @@ exceptions:
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
+      # [security] The owner's organization-wide switch for browser AI agents
+      # (WebMCP, a web-only feature): an agent must not be able to switch agent
+      # access, its own guardrail, off or on.
+      - tenant.setWebMcpDisabled
 
       # --- Backup & Restore ---
       # [security] Whole-tenant export/import: an agent (or a prompt injected into
@@ -516,9 +522,13 @@ exceptions:
       - import.importTransfers
       - import.reconcileDirectPayments
 
-      # --- Parties ---
-      # Tally accounting integration — Tally-specific export format.
-      - party.tallyExport
+      # --- Tally export ---
+      # Tally Prime XML for a whole period (ledger masters plus every voucher) is a
+      # file hand-off to the accountant's Tally, and can run to megabytes; returned
+      # inline it would flood the agent's context. MCP agents read the structured
+      # reports instead (trial balance, general ledger, day book).
+      # (party.tallyExport, the deprecated CSV, is used by no platform any more.)
+      - reports.tallyExport
 
       # --- Bank Reconciliation ---
       # Interactive CSV upload flow — MCP agents use structured data.

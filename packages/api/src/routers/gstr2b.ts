@@ -14,18 +14,21 @@
  */
 
 import { z } from "zod";
-import { eq, and, sql, desc, isNull, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, inArray, gte, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { gstr2bUploads, gstr2bRecords, invoices, parties } from "@hisaabo/db";
+import { gstr2bUploads, gstr2bRecords, invoices, parties, businesses } from "@hisaabo/db";
 import {
   gstr2bUploadSchema,
   gstr2bRecordsInputSchema,
   gstr2bSummaryInputSchema,
   gstr2bLinkInvoiceSchema,
   gstr2bIgnoreRecordSchema,
+  money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { documentGstSplit, isIntraStateSupply, loadLineGstSplits } from "../lib/gst-split.js";
+import { gstMonthWindow } from "../lib/gst-period.js";
 import {
   parseGSTR2BJSON,
   parseGSTR2BCSV,
@@ -72,46 +75,56 @@ export const gstr2bRouter = router({
         });
       }
 
-      // Load purchase invoices for this business with GSTIN info
-      const purchaseRows = await ctx.db
-        .select({
-          id: invoices.id,
-          invoiceNumber: invoices.invoiceNumber,
-          invoiceDate: invoices.invoiceDate,
-          subtotal: invoices.subtotal,
-          taxAmount: invoices.taxAmount,
-          partyGstin: parties.gstin,
-          partyStateCode: parties.stateCode,
-          businessId: invoices.businessId,
-        })
-        .from(invoices)
-        .leftJoin(parties, eq(invoices.partyId, parties.id))
-        .where(
-          and(
-            eq(invoices.businessId, ctx.businessId),
-            eq(invoices.type, "purchase"),
-            sql`${invoices.status} != 'cancelled'`,
-            isNull(invoices.deletedAt),
-          ),
-        );
+      // Load purchase INVOICES for this business with GSTIN info. Only the bills a supplier's
+      // GSTR-2B can contain: purchase returns, credit / debit notes and purchase quotations,
+      // proformas and challans are not purchases (the same classification the ledger and
+      // GSTR-3B use).
+      const purchaseInvoiceConditions = [
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.type, "purchase"),
+        eq(invoices.documentType, "invoice"),
+        sql`${invoices.status} != 'cancelled'`,
+        isNull(invoices.deletedAt),
+      ];
+      const [purchaseRows, [biz], lineSplits] = await Promise.all([
+        ctx.db
+          .select({
+            id: invoices.id,
+            invoiceNumber: invoices.invoiceNumber,
+            invoiceDate: invoices.invoiceDate,
+            subtotal: invoices.subtotal,
+            taxAmount: invoices.taxAmount,
+            partyGstin: parties.gstin,
+            partyStateCode: parties.stateCode,
+            partyState: parties.state,
+            businessId: invoices.businessId,
+          })
+          .from(invoices)
+          .leftJoin(parties, eq(invoices.partyId, parties.id))
+          .where(and(...purchaseInvoiceConditions)),
+        ctx.db
+          .select({ gstin: businesses.gstin, stateCode: businesses.stateCode, state: businesses.state })
+          .from(businesses)
+          .where(eq(businesses.id, ctx.businessId))
+          .limit(1),
+        loadLineGstSplits(ctx.db, ctx.businessId, purchaseInvoiceConditions.slice(1)),
+      ]);
 
-      // For each purchase invoice, derive tax split.
-      // We use a simple heuristic: if IGST > 0 in the invoice taxAmount and no
-      // CGST/SGST recorded at invoice level we treat full tax as IGST.
-      // This is approximate — for exact matching the router stores CGST/SGST/IGST
-      // per invoice item but for reconciliation purposes this is sufficient.
+      // Tax heads of each purchase invoice, with the rule the returns use: intra-state is split
+      // line by line (CGST gets the odd paisa), inter-state is IGST in one piece.
       const purchaseInvoices: PurchaseInvoice[] = purchaseRows.map((r) => {
-        const taxAmt = parseFloat(r.taxAmount ?? "0");
-        const half = (taxAmt / 2).toFixed(2);
+        const intraState = isIntraStateSupply(biz, { gstin: r.partyGstin, stateCode: r.partyStateCode, state: r.partyState });
+        const tax = r.taxAmount ?? ZERO;
+        const [cgst, sgst] = intraState ? documentGstSplit(tax, lineSplits.get(r.id)) : [ZERO, ZERO];
         return {
           id: r.id,
           invoiceNumber: r.invoiceNumber,
           invoiceDate: r.invoiceDate,
           partyGstin: r.partyGstin ?? null,
           subtotal: r.subtotal,
-          cgst: half,
-          sgst: half,
-          igst: ZERO,
+          cgst,
+          sgst,
+          igst: intraState ? ZERO : money.add(tax, "0"),
           cess: ZERO,
         };
       });
@@ -486,8 +499,7 @@ export const gstr2bRouter = router({
 
       // Determine period date range
       const [year, month] = input.returnPeriod.split("-").map(Number);
-      const periodStart = new Date(year!, month! - 1, 1);
-      const periodEnd   = new Date(year!, month!, 0, 23, 59, 59);
+      const { from: periodStart, before: periodBefore } = gstMonthWindow(year!, month!);
 
       const purchaseRows = await ctx.db
         .select({
@@ -506,10 +518,11 @@ export const gstr2bRouter = router({
           and(
             eq(invoices.businessId, ctx.businessId),
             eq(invoices.type, "purchase"),
+            eq(invoices.documentType, "invoice"),
             sql`${invoices.status} != 'cancelled'`,
             isNull(invoices.deletedAt),
-            sql`${invoices.invoiceDate} >= ${periodStart}`,
-            sql`${invoices.invoiceDate} <= ${periodEnd}`,
+            gte(invoices.invoiceDate, periodStart),
+            lt(invoices.invoiceDate, periodBefore),
             sql`${parties.gstin} IS NOT NULL`,
           ),
         );
@@ -558,12 +571,12 @@ export const gstr2bRouter = router({
 
       // Verify invoice belongs to this business and is a purchase
       const [inv] = await ctx.db
-        .select({ id: invoices.id, type: invoices.type, businessId: invoices.businessId })
+        .select({ id: invoices.id, type: invoices.type, documentType: invoices.documentType, businessId: invoices.businessId })
         .from(invoices)
         .where(eq(invoices.id, input.invoiceId))
         .limit(1);
 
-      if (!inv || inv.businessId !== ctx.businessId || inv.type !== "purchase") {
+      if (!inv || inv.businessId !== ctx.businessId || inv.type !== "purchase" || inv.documentType !== "invoice") {
         throw new TRPCError({ code: "NOT_FOUND", message: "Purchase invoice not found" });
       }
 

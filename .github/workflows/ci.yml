@@ -81,6 +81,29 @@ jobs:
       - name: Check ownership scoping
         run: tsx scripts/check-ownership-scoping.ts --scan
 
+  # The release gates run only on a tag, so their scripts are exercised here
+  # against a fake API and a fake `gh`: the production API wait (scripts/
+  # wait-for-api-version.sh), the one-release-per-tag helpers and the
+  # release-exists guard in scripts/release-tag.sh. release-workflow.test.ts
+  # pins the ordering invariants of the workflows themselves (frontends need
+  # wait-for-api, production only from a tag, one job creates the release).
+  release-scripts:
+    name: Release Scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NODE_TS: node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # --experimental-strip-types needs Node >= 22.6
+          node-version: 22
+
+      - name: Test the release scripts
+        run: $NODE_TS --test scripts/wait-for-api-version.test.ts scripts/release-scripts.test.ts scripts/release-workflow.test.ts
+
   migration-safety:
     name: Migration Safety
     runs-on: ubuntu-latest
@@ -165,6 +188,109 @@ jobs:
           files: packages/api/coverage/lcov.info
           fail_ci_if_error: false
 
+  # Everything about dates is on the business calendar (IST, no daylight saving), so no result may depend
+  # on the zone of the machine. The jobs above run in UTC (the default of every runner, and of the shipped
+  # images). This one runs the date-sensitive suites under two other server zones, one with the offset of
+  # the business (Asia/Kolkata) and one with DST (America/Los_Angeles: 8 Mar and 1 Nov 2026 are the
+  # edges the DST tests use), and puts the DATABASE session in the same zone, so SQL that leans on the
+  # session zone (date_trunc, ::date, to_char) is caught too. node-postgres-style PGTZ is not read by
+  # the postgres.js driver the API uses, so the zone is set on the database itself.
+  # Subset on a pull request (a few minutes, in parallel); the whole API suite on a push to main.
+  time-zones:
+    name: Time zones (${{ matrix.tz }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: typecheck-lint
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [Asia/Kolkata, America/Los_Angeles]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: hisaabo_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d hisaabo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+
+    env:
+      TZ: ${{ matrix.tz }}
+      PGTZ: ${{ matrix.tz }}
+      TEST_DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+      DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+      # one worker: a worker database is cloned from the template and would not carry its session zone
+      API_TEST_WORKERS: 1
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push schema to test DB
+        run: pnpm db:push
+
+      - name: Put the database session in the same time zone
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h localhost -p 5433 -U test -d hisaabo_test -c "ALTER DATABASE hisaabo_test SET timezone TO '${{ matrix.tz }}'"
+          psql -h localhost -p 5433 -U test -d hisaabo_test -Atc "SELECT 'new sessions run in ' || current_setting('TimeZone')"
+
+      - name: Shared (business calendar, DST edges, state and UQC tables)
+        run: pnpm --filter @hisaabo/shared exec vitest run
+
+      - name: Web date helpers and date pickers
+        run: pnpm --filter @hisaabo/web exec vitest run src/hooks src/lib src/components/ui src/components/settings
+
+      - name: Mobile date helpers (picked days across DST edges)
+        run: pnpm --filter @hisaabo/mobile exec jest src/lib
+
+      - name: CLI and MCP date arguments
+        run: |
+          pnpm --filter @hisaabo/cli test
+          pnpm --filter @hisaabo/mcp exec vitest run
+
+      # The golden suites (dates, GST months, recurring, GSTR-1 JSON, CMP-08, intra / inter-state) and the unit
+      # and integration tests that touch a date.
+      - name: API date-sensitive suites
+        run: >-
+          pnpm --filter @hisaabo/api exec vitest run
+          src/__tests__/integration/golden
+          src/__tests__/integration/recurring-invoice
+          src/__tests__/integration/dashboard
+          src/__tests__/integration/gst
+          src/__tests__/integration/itc
+          src/__tests__/integration/reports
+          src/__tests__/integration/tally-export
+          src/__tests__/gst
+          src/__tests__/uqc-maps
+          src/__tests__/import-dates-ist
+          src/__tests__/invoice-to
+          src/__tests__/invoice-pdf-same-state
+          src/__tests__/tally-xml-export
+          src/__tests__/tds-sections
+
+      - name: Whole API suite (push to main)
+        if: github.event_name == 'push'
+        run: pnpm --filter @hisaabo/api exec vitest run
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -241,6 +367,62 @@ jobs:
         with:
           name: playwright-traces
           path: e2e/test-results/
+          retention-days: 7
+
+  # Browser tests for the public storefront (apps/store/e2e). The API is served
+  # from fixtures (apps/store/e2e/mockStore.ts) and the Vite dev server is
+  # started by Playwright itself, so this job needs no database and no API.
+  # It does not set STORE_SHOTS_DIR: the screenshot-capture spec skips itself.
+  store-e2e:
+    name: Store E2E (fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [typecheck-lint]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(pnpm --filter @hisaabo/store exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      # The browser download is the slow part. Keyed on the Playwright version,
+      # so a version bump fetches a fresh one.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @hisaabo/store exec playwright install --with-deps chromium
+
+      # The cache holds the browser, not the OS libraries it needs.
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @hisaabo/store exec playwright install-deps chromium
+
+      - name: Run store E2E tests
+        run: pnpm --filter @hisaabo/store test:e2e
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: store-playwright-traces
+          path: apps/store/e2e/.results/
           retention-days: 7
 
   # Both release images are built (single-arch, no push) so a Dockerfile or

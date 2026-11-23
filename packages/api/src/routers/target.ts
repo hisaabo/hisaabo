@@ -197,6 +197,7 @@ export const targetRouter = router({
       entityId: target.id,
       metadata: { period: input.periodType },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return target;
@@ -325,6 +326,7 @@ export const targetRouter = router({
       entityId: id,
       metadata: { targetId: id },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     return updated;
@@ -361,6 +363,7 @@ export const targetRouter = router({
         entityId: input.id,
         metadata: { targetId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

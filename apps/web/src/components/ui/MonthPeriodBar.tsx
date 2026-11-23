@@ -1,5 +1,5 @@
 import { useState } from "react";
-import dayjs from "dayjs";
+import { businessYearMonth } from "@hisaabo/shared";
 import { cn } from "@/lib/utils";
 
 const MONTH_NAMES = [
@@ -22,16 +22,18 @@ interface MonthPeriodBarProps {
  * "Custom" pill that reveals month + year selectors for any other period.
  */
 export function MonthPeriodBar({ year, month, onChange, className }: MonthPeriodBarProps) {
-  const now = dayjs();
-  const last = now.subtract(1, "month");
-  const isThis = year === now.year() && month === now.month() + 1;
-  const isLast = year === last.year() && month === last.month() + 1;
+  // "This month" is the current month on the business calendar (IST), not the browser's.
+  const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+  const now = { year: nowYear, month: nowMonth };
+  const last = nowMonth === 1 ? { year: nowYear - 1, month: 12 } : { year: nowYear, month: nowMonth - 1 };
+  const isThis = year === now.year && month === now.month;
+  const isLast = year === last.year && month === last.month;
 
   const [customOpen, setCustomOpen] = useState(!isThis && !isLast);
   const active: "this-month" | "last-month" | "custom" =
     customOpen ? "custom" : isThis ? "this-month" : isLast ? "last-month" : "custom";
 
-  const years = Array.from({ length: 5 }, (_, i) => now.year() - i);
+  const years = Array.from({ length: 5 }, (_, i) => now.year - i);
   if (!years.includes(year)) years.push(year);
 
   const pills = [
@@ -47,7 +49,7 @@ export function MonthPeriodBar({ year, month, onChange, className }: MonthPeriod
     }
     setCustomOpen(false);
     const target = value === "this-month" ? now : last;
-    onChange(target.year(), target.month() + 1);
+    onChange(target.year, target.month);
   }
 
   return (

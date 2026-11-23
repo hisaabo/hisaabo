@@ -1,9 +1,46 @@
-import type { StoreConfig, CartItem } from "../types";
+import { useState } from "react";
+import type { StoreConfig } from "../types";
 import { assetUrl } from "../api";
+import { formatMoney, toPaise } from "../money";
+import { BagIcon, CloseIcon, SearchIcon } from "./Icons";
+
+type Business = StoreConfig["business"];
+
+/**
+ * The store's name, tagline and mark. Used at the top of every screen, the
+ * browse page and checkout alike, so the store looks like one place.
+ * `heading` makes the name the page's h1; checkout has its own.
+ */
+export function Masthead({ business, heading = true }: { business: Business; heading?: boolean }) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  const logo = assetUrl(business.logoUrl);
+  const Name = heading ? "h1" : "p";
+  const minOrder = toPaise(business.minOrderAmount);
+
+  return (
+    <div className="masthead">
+      {/* Always a 56-64px square, so the page does not shift when the logo arrives. */}
+      {logo && !logoFailed ? (
+        <img src={logo} alt="" width={64} height={64} className="brand-mark" onError={() => setLogoFailed(true)} />
+      ) : (
+        <span className="brand-mark brand-mark-initial" aria-hidden="true">
+          {Array.from(business.name.trim())[0]?.toUpperCase() ?? ""}
+        </span>
+      )}
+      <div className="min-w-0">
+        <Name className="brand-name">{business.name}</Name>
+        {business.tagline && <p className="brand-tag">{business.tagline}</p>}
+        {heading && minOrder > 0 && (
+          <p className="brand-meta">Minimum order {formatMoney(business.minOrderAmount, business.currency)}</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface HeaderProps {
   config: StoreConfig;
-  cart: CartItem[];
+  cartCount: number;
   search: string;
   onSearchChange: (v: string) => void;
   activeCategory: string;
@@ -13,7 +50,7 @@ interface HeaderProps {
 
 export function Header({
   config,
-  cart,
+  cartCount,
   search,
   onSearchChange,
   activeCategory,
@@ -21,200 +58,73 @@ export function Header({
   onCartClick,
 }: HeaderProps) {
   const { business, categories } = config;
-  const cartCount = cart.reduce((s, c) => s + c.quantity, 0);
-  const accent = business.accentColor || "var(--store-accent)";
 
   return (
-    <header className="sticky top-0 z-20">
-      {/* Accent top line */}
-      <div className="h-[3px]" style={{ background: accent }} />
+    <>
+      <div className="accent-rule" />
+      <header className="wrap">
+        <Masthead business={business} />
+      </header>
 
-      {/* Main header area */}
-      <div
-        className="px-4 sm:px-6 pt-5 pb-4"
-        style={{ background: "var(--store-bg)" }}
-      >
-        {/* Business name + Cart row */}
-        <div className="flex items-start justify-between gap-4 mb-4">
-          {business.logoUrl && (
-            <img
-              src={assetUrl(business.logoUrl)}
-              alt={`${business.name} logo`}
-              className="flex-shrink-0 rounded"
-              style={{
-                // Fixed max height; width scales proportionally via
-                // object-contain so tall and wide logos both render cleanly.
-                maxHeight: 56,
-                maxWidth: 160,
-                objectFit: "contain",
-              }}
-              onError={(e) => {
-                // Defense-in-depth: if the logo endpoint returns the 1x1
-                // placeholder (e.g. race condition right after delete) the
-                // <img> will still decode; but if something fails outright
-                // we hide the element rather than showing a broken icon.
-                (e.currentTarget as HTMLImageElement).style.display = "none";
-              }}
-            />
-          )}
-          <div className="min-w-0 flex-1">
-            <h1
-              className="text-[22px] sm:text-[26px] font-bold leading-tight truncate"
-              style={{ color: "var(--store-text)", letterSpacing: "-0.03em" }}
+      {/* Sticks to the top while the grid scrolls. */}
+      <div className="toolbar">
+        <div className="wrap">
+          <div className="toolbar-row">
+            <form className="search" role="search" onSubmit={(e) => e.preventDefault()}>
+              <span className="search-icon">
+                <SearchIcon size={18} />
+              </span>
+              <input
+                type="search"
+                className="search-input"
+                placeholder="Search items"
+                aria-label={`Search in ${business.name}`}
+                value={search}
+                onChange={(e) => onSearchChange(e.target.value)}
+                enterKeyHint="search"
+                autoComplete="off"
+              />
+              {search && (
+                <button type="button" className="search-clear" aria-label="Clear search" onClick={() => onSearchChange("")}>
+                  <CloseIcon size={18} />
+                </button>
+              )}
+            </form>
+
+            <button
+              type="button"
+              className="cart-btn"
+              onClick={onCartClick}
+              aria-label={cartCount === 0 ? "Open cart, empty" : `Open cart, ${cartCount} ${cartCount === 1 ? "item" : "items"}`}
             >
-              {business.name}
-            </h1>
-            {business.tagline && (
-              <p
-                className="text-[13px] mt-0.5 truncate"
-                style={{ color: "var(--store-muted)" }}
-              >
-                {business.tagline}
-              </p>
-            )}
+              <BagIcon size={20} />
+              <span className="cart-btn-label">Cart</span>
+              <span className="cart-count" data-empty={cartCount === 0} aria-hidden="true">
+                {cartCount > 99 ? "99+" : cartCount}
+              </span>
+            </button>
           </div>
 
-          {/* Cart button - mobile/tablet only */}
-          <button
-            onClick={onCartClick}
-            className="relative flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full lg:hidden"
-            style={{ background: "var(--store-bg-secondary)" }}
-            aria-label={`Cart with ${cartCount} items`}
-          >
-            <CartIcon />
-            {cartCount > 0 && (
-              <span
-                className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold text-white px-1 animate-scale-in"
-                style={{ background: accent }}
-              >
-                {cartCount}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {/* Search */}
-        <div className="relative">
-          <span
-            className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-            style={{ color: "var(--store-muted)" }}
-          >
-            <SearchIcon />
-          </span>
-          <input
-            type="search"
-            placeholder={`Search in ${business.name}...`}
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="store-input pl-9 pr-4 py-2.5 text-[13px]"
-            style={{
-              borderRadius: "var(--store-radius)",
-              background: "var(--store-bg-secondary)",
-              borderColor: "transparent",
-            }}
-          />
+          {categories.length > 0 && (
+            <div className="chips scrollbar-hide" role="group" aria-label="Categories">
+              <button type="button" className="chip" aria-pressed={activeCategory === ""} onClick={() => onCategoryChange("")}>
+                All
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  className="chip"
+                  aria-pressed={activeCategory === cat}
+                  onClick={() => onCategoryChange(cat)}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Category pills */}
-      {categories.length > 0 && (
-        <div style={{ background: "var(--store-bg)" }}>
-          <div className="flex gap-2 overflow-x-auto px-4 sm:px-6 pb-3 scrollbar-hide">
-            <CategoryPill
-              label="All"
-              active={activeCategory === ""}
-              onClick={() => onCategoryChange("")}
-              accent={accent}
-            />
-            {categories.map((cat) => (
-              <CategoryPill
-                key={cat}
-                label={cat}
-                active={activeCategory === cat}
-                onClick={() => onCategoryChange(cat)}
-                accent={accent}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Bottom border */}
-      <div
-        className="h-px"
-        style={{ background: "var(--store-border)" }}
-      />
-    </header>
-  );
-}
-
-function CategoryPill({
-  label,
-  active,
-  onClick,
-  accent,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  accent: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex-shrink-0 px-3.5 py-1.5 rounded-full text-[12.5px] font-medium transition-all whitespace-nowrap"
-      style={
-        active
-          ? {
-              background: accent,
-              color: "white",
-            }
-          : {
-              background: "var(--store-bg-secondary)",
-              color: "var(--store-text-secondary)",
-            }
-      }
-    >
-      {label}
-    </button>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      width="16"
-      height="16"
-    >
-      <path
-        fillRule="evenodd"
-        d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function CartIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      width="20"
-      height="20"
-      style={{ color: "var(--store-text)" }}
-    >
-      <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
-      <line x1="3" y1="6" x2="21" y2="6" />
-      <path d="M16 10a4 4 0 01-8 0" />
-    </svg>
+    </>
   );
 }

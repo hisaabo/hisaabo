@@ -33,6 +33,13 @@ type CancelReason = (typeof CANCEL_REASONS)[number]["value"];
 
 const PAGE_SIZE = 25;
 
+// Which step of "Test Connection" failed (see eInvoice.testConnection).
+const TEST_STEP_LABELS = {
+  public_key: "Server setup: the NIC public key is missing or invalid (ask whoever runs this server)",
+  network: "Network: the IRP could not be reached",
+  authentication: "Sign-in: the IRP rejected the credentials",
+} as const;
+
 // ── Helpers ───────────────────────────────────────────────────
 
 function statusColor(status: string | null | undefined): string {
@@ -62,6 +69,8 @@ function DashboardTab() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [cancelId, setCancelId] = useState<string | null>(null);
+  // The IRN is already cancelled at the IRP but the invoice is still active: only the invoice is left to cancel.
+  const [cancelInvoiceOnly, setCancelInvoiceOnly] = useState(false);
   const [cancelReason, setCancelReason] = useState<CancelReason>("1");
   const [cancelRemarks, setCancelRemarks] = useState("");
   const canManage = useCan("manage", "EInvoice");
@@ -85,7 +94,7 @@ function DashboardTab() {
 
   const cancelMutation = trpc.eInvoice.cancel.useMutation({
     onSuccess: () => {
-      toast.success("IRN cancelled");
+      toast.success(cancelInvoiceOnly ? "Invoice cancelled" : "IRN and invoice cancelled");
       setCancelId(null);
       utils.eInvoice.dashboard.invalidate();
     },
@@ -113,9 +122,32 @@ function DashboardTab() {
   ];
 
   const hasFailed = (counts.failed + counts.pending) > 0;
+  const unfinishedCancellations = data?.unfinishedCancellations ?? 0;
 
   return (
     <div className="space-y-5">
+      {/* Cancelled IRN, invoice still active: the cancel was never finished */}
+      {unfinishedCancellations > 0 && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 flex-wrap rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+        >
+          <span>
+            {unfinishedCancellations === 1
+              ? "1 invoice has a cancelled IRN but is still active"
+              : `${unfinishedCancellations} invoices have a cancelled IRN but are still active`}
+            . They still count in your GST returns, ledger and stock. Finish cancelling them.
+          </span>
+          <button
+            type="button"
+            className="ml-auto text-xs font-medium underline"
+            onClick={() => { setTab("cancelled"); setPage(1); }}
+          >
+            Show them
+          </button>
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
@@ -232,12 +264,27 @@ function DashboardTab() {
                           <button
                             onClick={() => {
                               setCancelId(inv.id);
+                              setCancelInvoiceOnly(false);
                               setCancelReason("1");
                               setCancelRemarks("");
                             }}
                             className="text-[11px] px-2 py-0.5 rounded bg-red-600/[0.08] text-red-600 dark:text-red-400 hover:bg-red-600/[0.14] transition-colors"
                           >
                             Cancel
+                          </button>
+                        )}
+                        {canManage && inv.eInvoiceStatus === "cancelled" && inv.invoiceStatus !== "cancelled" && (
+                          <button
+                            onClick={() => {
+                              setCancelId(inv.id);
+                              setCancelInvoiceOnly(true);
+                              setCancelReason("1");
+                              setCancelRemarks("");
+                            }}
+                            className="text-[11px] px-2 py-0.5 rounded bg-red-600/[0.08] text-red-600 dark:text-red-400 hover:bg-red-600/[0.14] transition-colors"
+                            title="The IRN is cancelled but the invoice is still active"
+                          >
+                            Cancel invoice
                           </button>
                         )}
                       </div>
@@ -274,36 +321,54 @@ function DashboardTab() {
         )}
       </div>
 
-      {/* Cancel IRN modal */}
+      {/* Cancel IRN (and the invoice) modal */}
       <Modal open={cancelId !== null} onClose={() => setCancelId(null)} className="max-w-md">
-        <p className="text-sm font-semibold text-text-primary">Cancel IRN</p>
-        <p className="text-sm text-text-secondary mt-2">
-          This will cancel the IRN on the NIC portal. Cancellation is only allowed within 24 hours
-          of generation. This action cannot be undone.
+        <p className="text-sm font-semibold text-text-primary">
+          {cancelInvoiceOnly ? "Cancel invoice" : "Cancel IRN and invoice"}
         </p>
-        <div className="mt-4 space-y-3">
-          <div>
-            <label className="text-xs font-medium text-text-secondary block mb-1">
-              Cancel Reason
-            </label>
-            <select
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value as CancelReason)}
-              className="input w-full text-sm"
-            >
-              {CANCEL_REASONS.map((r) => (
-                <option key={r.value} value={r.value}>{r.label}</option>
-              ))}
-            </select>
+        {cancelInvoiceOnly ? (
+          <p className="text-sm text-text-secondary mt-2">
+            The IRN is already cancelled on the NIC portal, but the invoice is still active. This
+            cancels the invoice now: its stock and returns are adjusted, and it drops out of GST
+            returns, the ledger and party balances. Issue a new invoice if you still need to bill
+            the customer. It cannot be done while payments are allocated to the invoice: remove
+            them first.
+          </p>
+        ) : (
+          <p className="text-sm text-text-secondary mt-2">
+            This cancels the IRN on the NIC portal and also cancels the invoice: its stock and
+            returns are adjusted, and it drops out of GST returns, the ledger and party balances.
+            A cancelled e-invoice cannot be amended, so issue a new invoice (with a new number) if
+            you still need to bill the customer. Cancellation is only allowed within 24 hours of
+            generation, and not while payments are allocated to the invoice: remove them first.
+            This action cannot be undone.
+          </p>
+        )}
+        {!cancelInvoiceOnly && (
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="text-xs font-medium text-text-secondary block mb-1">
+                Cancel Reason
+              </label>
+              <select
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value as CancelReason)}
+                className="input w-full text-sm"
+              >
+                {CANCEL_REASONS.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+            </div>
+            <InputField
+              label="Remarks (optional)"
+              value={cancelRemarks}
+              onChange={(e) => setCancelRemarks(e.target.value)}
+              maxLength={100}
+              placeholder="Additional details..."
+            />
           </div>
-          <InputField
-            label="Remarks (optional)"
-            value={cancelRemarks}
-            onChange={(e) => setCancelRemarks(e.target.value)}
-            maxLength={100}
-            placeholder="Additional details..."
-          />
-        </div>
+        )}
         <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-border-light">
           <button
             type="button"
@@ -327,7 +392,7 @@ function DashboardTab() {
             disabled={cancelMutation.isPending}
           >
             {cancelMutation.isPending && <Spinner size="sm" />}
-            Cancel IRN
+            {cancelInvoiceOnly ? "Cancel invoice" : "Cancel IRN and invoice"}
           </button>
         </div>
       </Modal>
@@ -362,7 +427,11 @@ const EMPTY_CONFIG: ConfigForm = {
 function SettingsTab() {
   const [form, setForm] = useState<ConfigForm>(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+    failedStep?: "public_key" | "network" | "authentication";
+  } | null>(null);
   const canManage = useCan("manage", "EInvoice");
 
   const { isLoading, data: configData } = trpc.eInvoice.getConfig.useQuery(undefined);
@@ -537,7 +606,12 @@ function SettingsTab() {
               : "bg-red-600/[0.08] text-red-700 dark:text-red-400",
           )}>
             <span>{testResult.success ? "✓" : "✗"}</span>
-            <span>{testResult.message}</span>
+            <span>
+              {testResult.failedStep && (
+                <strong className="block">{TEST_STEP_LABELS[testResult.failedStep]}</strong>
+              )}
+              {testResult.message}
+            </span>
           </div>
         )}
 

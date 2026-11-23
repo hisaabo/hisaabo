@@ -73,6 +73,10 @@ export interface GenerateEWBPayload {
   sgstValue: number;
   igstValue: number;
   cessValue: number;
+  /** Additional charges + round-off - invoice-level discount, as stored (may be negative). */
+  otherValue: number;
+  /** The invoice total: totalValue + cgstValue + sgstValue + igstValue + cessValue + otherValue. */
+  totInvValue: number;
   transMode: string;    // "1" = road, "2" = rail, "3" = air, "4" = ship
   transDistance: number;
   transporterId?: string;

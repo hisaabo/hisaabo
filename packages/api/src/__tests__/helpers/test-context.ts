@@ -18,6 +18,7 @@
 import type { Context } from "../../context.js";
 import type { TenantDatabase } from "@hisaabo/db";
 import type { AppAbility } from "../../lib/permissions.js";
+import { auditSourceFromHeaders } from "../../lib/audit-source.js";
 
 /**
  * Options for building a fake tRPC context.
@@ -84,6 +85,8 @@ export function createTestContext(opts: TestContextOptions = {}): Context {
     req,
     resHeaders,
     ipAddress: null,
+    // Same derivation as createContext, so tests can exercise audit attribution.
+    source: auditSourceFromHeaders(headers),
     authTokenKind: opts.authTokenKind ?? null,
   };
 

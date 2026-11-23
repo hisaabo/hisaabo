@@ -71,6 +71,34 @@
       "when": 1795204052504,
       "tag": "0009_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795337183729,
+      "tag": "0010_recurring_run_occurrence",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795339530590,
+      "tag": "0011_ledger_adjustment_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795350855653,
+      "tag": "0012_webmcp_audit_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795350858600,
+      "tag": "0013_idempotency_keys",
+      "breakpoints": true
     }
   ]
 }

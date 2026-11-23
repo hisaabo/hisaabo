@@ -13,6 +13,7 @@ import { z } from "zod";
 import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import { pickedDateToISO, pickedDateToEndISO } from "@hisaabo/shared";
 
 export function registerJournalTools(server: ToolServer, client: HisaaboClient) {
 
@@ -31,10 +32,10 @@ export function registerJournalTools(server: ToolServer, client: HisaaboClient) 
         .describe("End date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
-      // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day.
+      // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day on the business calendar (IST).
       const result = await client.journal.list({
-        fromDate: input.from_date ? `${input.from_date}T00:00:00.000Z` : undefined,
-        toDate: input.to_date ? `${input.to_date}T23:59:59.999Z` : undefined,
+        fromDate: pickedDateToISO(input.from_date),
+        toDate: pickedDateToEndISO(input.to_date),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -83,7 +84,7 @@ export function registerJournalTools(server: ToolServer, client: HisaaboClient) 
     },
     wrapTool(async (input) => {
       const result = await client.journal.create({
-        entryDate: `${input.date}T00:00:00.000Z`,
+        entryDate: pickedDateToISO(input.date)!,
         narration: input.narration,
         lines: input.lines.map((l) => ({
           accountId: l.accountId,
@@ -102,7 +103,9 @@ export function registerJournalTools(server: ToolServer, client: HisaaboClient) 
     "journal_void",
     [
       "Void a journal entry, reversing its accounting effect.",
-      "A voided entry cannot be edited. Use this to correct mistakes.",
+      "Posts a reversing entry (debits and credits swapped) and flags the original as voided; both stay on record, journal entries are never deleted.",
+      "A voided entry cannot be edited, and a reversal entry (the one a void posted) cannot itself be voided: to correct a wrong void, post a new entry.",
+      "Use this to correct mistakes.",
     ].join(" "),
     {
       id: z.string().uuid()

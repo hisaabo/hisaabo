@@ -6,6 +6,7 @@ import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, lt, inArray, isNull, sql } from "drizzle-orm";
 import { parseCatalogIds, storeCatalogConditions } from "./lib/store-catalog-query.js";
+import { toPublicCatalogItems } from "./lib/store-catalog-items.js";
 import { buildPartyLedgerStatement } from "./lib/party-ledger.js";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -16,11 +17,12 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/authz.js";
+import { warnIfMultiOrgSelfHosted } from "./lib/tenant-businesses.js";
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
+import { priceStoreOrderLines } from "./lib/store-order-pricing.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
+import { controlDb, getTenantDb, withDedicatedTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -37,10 +39,14 @@ import { createSmsService, isSmsConfigured } from "./lib/sms.js";
 import { sendStoreOtp, verifyStoreOtp, verifyOtpToken } from "./lib/store-otp.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
+import { registerVersionRoute } from "./http/version.js";
 import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
-import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, chargeRateLimits, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { isAgentRequest } from "./lib/audit-source.js";
+import { sweepIdempotencyKeysEverywhere } from "./lib/idempotency-sweep.js";
+import { agentKillSwitch } from "./lib/webmcp-policy.js";
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
@@ -198,6 +204,8 @@ function isSameOrigin(c: Context): boolean {
 // Same-origin unauthenticated: 60 (login attempts, public pages)
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
+// Browser AI agent (x-hisaabo-agent: webmcp, authenticated): also capped at 120 in
+//   a bucket of its own, on top of its ordinary tier (see AGENT_LIMIT_PER_MIN)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 
 // @trpc/server has no server-side batch cap, so enforce one here: a batch URL
@@ -249,6 +257,12 @@ const rateLimitDisabled =
   process.env.DISABLE_RATE_LIMIT === "1" &&
   process.env.NODE_ENV !== "production";
 
+// Operator kill switch (WEBMCP_DISABLED=true): calls that identify themselves as
+// browser-agent calls are refused (403) before anything runs. A second layer behind
+// the web app not registering tools at all; see lib/webmcp-policy.ts for why it is
+// not the permission boundary.
+app.use("/api/trpc/*", agentKillSwitch());
+
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   if (rateLimitDisabled) {
     await next();
@@ -278,18 +292,19 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
     authorization: c.req.header("authorization"),
     cookie: c.req.header("cookie"),
   });
-  const { tier, limit } = pickRateTier({ sameOrigin: isSameOrigin(c), hasCredential });
-
-  const key = `${tier}:${ip}`;
-  const entry = rateMap.get(key);
-  if (!entry || now > entry.reset) {
-    rateMap.set(key, { count: 1, reset: now + 60_000 });
-  } else if (entry.count >= limit) {
+  // Browser-agent calls (x-hisaabo-agent: webmcp) are charged against their own cap
+  // AND the ordinary tier: an agent loop is cut off at its cap, and the marker can
+  // never add throughput. See lib/rate-limit-tier.ts.
+  const charge = chargeRateLimits(
+    rateMap,
+    ip,
+    { sameOrigin: isSameOrigin(c), hasCredential, agent: isAgentRequest(c.req.raw.headers) },
+    now,
+  );
+  if (!charge.ok) {
     c.header("Retry-After", "60");
-    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: tier });
+    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: charge.tier });
     return c.json({ error: "Too many requests" }, 429);
-  } else {
-    entry.count++;
   }
   await next();
 });
@@ -501,8 +516,11 @@ async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): 
 
 // ── Shared business access check for non-tRPC endpoints ─────────
 // Mirrors the hasBusinessAccess middleware in trpc.ts: verifies the business
-// exists in the tenant DB AND (for self-hosted shared-DB mode) that the
-// business creator is a member of the caller's tenant.
+// exists in the tenant DB AND, only where one database holds several
+// organisations (a self-hosted install with more than one tenant, now or ever),
+// that the business creator is a member of the caller's tenant. On cloud and on
+// a single-organisation install the database is the boundary and the creator
+// check is skipped (lib/tenant-businesses.ts creatorRuleApplies).
 async function verifyBusinessAccess(
   db: Awaited<ReturnType<typeof getTenantDb>>,
   businessId: string,
@@ -1297,6 +1315,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
       taxInclusive: items.taxInclusive,
       inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
       stockQty: items.stockQuantity,
+      // Read only to derive `runningLow`; never sent (see lib/store-stock.ts).
+      lowStockAlert: items.lowStockAlert,
+      itemType: items.itemType,
       sortOrder: items.storeSortOrder,
       itemMode: items.itemMode,
       unitVariants: items.unitVariants,
@@ -1330,6 +1351,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
         salePrice: itemVariants.salePrice,
         storePrice: itemVariants.storePrice,
         stockQuantity: itemVariants.stockQuantity,
+        lowStockAlert: itemVariants.lowStockAlert,
         storeEnabled: itemVariants.storeEnabled,
       }).from(itemVariants)
         .where(and(
@@ -1396,67 +1418,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
 
   const categories = categoryRows.map((r) => r.category).filter(Boolean) as string[];
 
-  // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
-  const allowNeg = biz.storeAllowNegativeStock;
-  const transformedItems = catalog
-    .filter((item) => {
-      // Variant items must have at least one store-enabled variant to appear
-      if (item.itemMode === "variants") {
-        const variants = variantsByItem.get(item.id);
-        return variants && variants.length > 0;
-      }
-      return true;
-    })
-    .map(({ stockQty: _stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
-      const images = imagesByItem.get(rest.id) ?? [];
-      const primary = images.find((im) => im.isPrimary) ?? images[0];
-      const base = {
-        ...rest,
-        inStock: rest.inStock || allowNeg,
-        lowStock: allowNeg && !rest.inStock,
-        images,
-        // Convenience thumbnail for the catalog grid + share/OG fallback.
-        primaryImageUrl: primary?.url ?? null,
-      };
-
-      if (rest.itemMode === "alt_units" && rawUnitVariants) {
-        // Expose unit variants with store-safe prices only
-        return {
-          ...base,
-          unitVariants: rawUnitVariants.map((uv) => ({
-            unit: uv.unit,
-            conversionFactor: uv.conversionFactor,
-            price: uv.salePrice,
-          })),
-        };
-      }
-
-      if (rest.itemMode === "variants") {
-        const variants = variantsByItem.get(rest.id) || [];
-        const variantData = variants.map((v) => ({
-          id: v.id,
-          attributes: v.attributeValues,
-          price: v.storePrice ?? v.salePrice ?? "0",
-          inStock: parseFloat(v.stockQuantity) > 0 || allowNeg,
-        }));
-        // Price = lowest variant price (for display/sorting)
-        const prices = variantData.map((v) => parseFloat(v.price));
-        const lowestPrice = prices.length > 0 ? Math.min(...prices).toFixed(2) : base.price;
-        // inStock = true if ANY variant is in stock
-        const anyInStock = variantData.some((v) => v.inStock);
-
-        return {
-          ...base,
-          price: lowestPrice,
-          inStock: anyInStock,
-          lowStock: allowNeg && !anyInStock,
-          variantAttributes: rawVarAttrs || [],
-          variants: variantData,
-        };
-      }
-
-      return base;
-    });
+  // What a customer may see of each item (and what is dropped): lib/store-catalog-items.ts.
+  // When allowNegativeStock is on, out-of-stock items stay orderable (inStock + lowStock).
+  const transformedItems = toPublicCatalogItems(catalog, {
+    allowNegativeStock: biz.storeAllowNegativeStock,
+    variantsByItem,
+    imagesByItem,
+  });
 
   return c.json(
     {
@@ -1889,16 +1857,8 @@ app.post("/store/:slug/order", async (c) => {
     });
   }
 
-  // Calculate totals using shared library
-  const totals = calcInvoiceTotals({
-    lineItems: lineItemInputs.map((li) => ({
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-      taxPercent: li.taxPercent,
-      discountPercent: li.discountPercent,
-      taxInclusive: li.taxInclusive,
-    })),
-  });
+  // Totals on the saved (possibly tax-inclusive) prices, plus the invoice rows (tax-exclusive rate per line)
+  const { totals, rows: invoiceLineRows } = priceStoreOrderLines(lineItemInputs);
 
   // Check minimum order amount
   if (biz.storeMinOrderAmount) {
@@ -1979,35 +1939,8 @@ app.post("/store/:slug/order", async (c) => {
         source: "online_store",
       }).returning();
 
-      // Create invoice line items
-      const processedLineItems = lineItemInputs.map((li, idx) => {
-        const calc = calcLineItem({
-          quantity: li.quantity,
-          unitPrice: li.unitPrice,
-          taxPercent: li.taxPercent,
-          discountPercent: li.discountPercent,
-          taxInclusive: li.taxInclusive,
-        });
-        return {
-          invoiceId: invoice.id,
-          itemId: li.itemId,
-          // Online store orders: snapshot the item name into the required
-          // itemName column. Notes column stays null — store customers
-          // don't submit per-line comments through the ordering UI.
-          itemName: li.name,
-          description: null,
-          quantity: li.quantity,
-          unitPrice: li.unitPrice,
-          taxPercent: li.taxPercent,
-          taxAmount: calc.taxAmount,
-          discountPercent: "0",
-          totalAmount: calc.total,
-          sortOrder: idx,
-          conversionFactor: li.conversionFactor ?? "1",
-          selectedUnit: li.selectedUnit ?? null,
-          variantId: li.variantId ?? null,
-        };
-      });
+      // Create invoice line items (the tax-exclusive rate per line; the totals are the order's, unchanged)
+      const processedLineItems = invoiceLineRows.map((row, idx) => ({ ...row, invoiceId: invoice.id, sortOrder: idx }));
 
       await tx.insert(invoiceItems).values(processedLineItems);
 
@@ -2113,6 +2046,9 @@ app.post("/store/:slug/order", async (c) => {
 // Off unless QUEUE_DASHBOARD_ENABLED=true; see docs/architecture/queue.md §7.2.
 registerOpsRoutes(app, { notFound: notFoundResponse, clientIp: getClientIp });
 
+// ── Release version (public; polled by release.yml's wait-for-api) ──
+registerVersionRoute(app);
+
 // ── Self-export download endpoint ─────────────────────────────
 registerExportRoute(app);
 
@@ -2144,6 +2080,13 @@ const cleanupTimer = setInterval(async () => {
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
     logger.error({ err: e }, "[session-cleanup] Failed");
+  }
+  // Expired idempotency claims (tenant databases) are swept on the same hourly tick.
+  try {
+    const removed = await sweepIdempotencyKeysEverywhere();
+    if (removed > 0) logger.info({ removed }, "[idempotency-sweep] removed expired claims");
+  } catch (e) {
+    logger.error({ err: e }, "[idempotency-sweep] Failed");
   }
 }, 60 * 60 * 1000);
 cleanupTimer.unref();
@@ -2240,23 +2183,28 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
       .from(tenants)
       .where(eq(tenants.status, "active"));
 
-    let resolvedDb: Awaited<ReturnType<typeof getTenantDb>> | undefined;
+    // The scan touches every tenant, so each probe uses its own one-connection
+    // client (closed straight away) rather than cycling every tenant through the
+    // shared pool cache. Only the owning tenant then gets a cached pool.
+    let ownerTenantId: string | undefined;
     for (const t of activeTenants) {
-      const tdb = await getTenantDb(t.id);
-      const [biz] = await tdb
-        .select({ id: businesses.id })
-        .from(businesses)
-        .where(eq(businesses.id, businessId))
-        .limit(1);
-      if (biz) {
-        resolvedDb = tdb;
+      const found = await withDedicatedTenantDb(t.id, async (tdb) => {
+        const [biz] = await tdb
+          .select({ id: businesses.id })
+          .from(businesses)
+          .where(eq(businesses.id, businessId))
+          .limit(1);
+        return Boolean(biz);
+      });
+      if (found) {
+        ownerTenantId = t.id;
         break;
       }
     }
-    if (!resolvedDb) {
+    if (!ownerTenantId) {
       return c.json({ error: "Business not found" }, 404);
     }
-    db = resolvedDb;
+    db = await getTenantDb(ownerTenantId);
   }
 
   let eventTime = new Date();
@@ -2345,6 +2293,12 @@ function notFoundResponse(c: Context) {
     logger.fatal("Refusing to start — fix the bundle/deploy layout and retry");
     process.exit(1);
   }
+}
+
+// A self-hosted database holding more than one organisation isolates them by
+// business-creator membership only (until businesses.tenant_id exists, 0.11.0).
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  void warnIfMultiOrgSelfHosted((msg, data) => logger.warn(data ?? {}, msg));
 }
 
 // ── Cross-process cache invalidation ─────────────────────────

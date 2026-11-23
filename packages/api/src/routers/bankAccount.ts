@@ -95,6 +95,7 @@ export const bankAccountRouter = router({
         entityId: account.id,
         metadata: { accountName: account.accountName },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return account;
@@ -156,6 +157,7 @@ export const bankAccountRouter = router({
         entityId: account.id,
         metadata: { accountName: account.accountName },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return account;
@@ -214,6 +216,7 @@ export const bankAccountRouter = router({
         entityId: input.id,
         metadata: { accountId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return result;
@@ -379,6 +382,7 @@ export const bankAccountRouter = router({
         entityId: txn.id,
         metadata: { amount: txn.amount, type: txn.type },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return txn;
@@ -496,6 +500,7 @@ export const bankAccountRouter = router({
         entityId: transferResult.withdrawal.id,
         metadata: { amount: input.amount, fromAccountId: input.fromAccountId, toAccountId: input.toAccountId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return transferResult;
@@ -616,6 +621,7 @@ export const bankAccountRouter = router({
         entityId: config.id,
         metadata: { bankAccountId: input.bankAccountId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return config;
@@ -658,6 +664,7 @@ export const bankAccountRouter = router({
         entityId: existing.id,
         metadata: { bankAccountId: input.bankAccountId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

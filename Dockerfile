@@ -51,14 +51,37 @@ RUN if grep -q 'Dynamic require of' packages/db/dist/migrate.mjs; then \
       echo "FATAL: migrate.mjs bundles a CommonJS dependency; add it to --external" >&2; exit 1; \
     fi
 
-# ── Stage 2: Production runtime ────────────────────────────────
-FROM node:22-alpine AS runtime
+# ── Stage 2: Production dependencies ───────────────────────────
+# Installed in their own stage so pnpm/corepack never enter a runtime layer
+# (deleting them in a later layer would leave their bytes in the image).
+FROM node:22-alpine AS deps
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
-# Copy workspace scaffolding
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY packages/api/package.json packages/api/
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+
+# Production deps only (no tsup, vitest, etc.). argon2 builds its native addon here,
+# on the same base image as the runtime.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
+
+# @trpc/server declares `typescript` as a required peer, so pnpm installs the whole
+# compiler (~23 MB). It is a type-level peer only: nothing imports it at runtime
+# (the build-time smoke test below proves the server still loads without it).
+RUN rm -rf node_modules/.pnpm/typescript@* \
+           node_modules/.pnpm/node_modules/typescript \
+           node_modules/.pnpm/*/node_modules/typescript
+
+# ── Stage 3: Production runtime ────────────────────────────────
+FROM node:22-alpine AS runtime
+WORKDIR /app
+
+# Workspace scaffolding + production node_modules (symlinks preserved)
+COPY --from=deps /app/ ./
 
 # -- API package: built output + fonts
 COPY --from=builder /app/packages/api/package.json packages/api/
@@ -72,15 +95,9 @@ COPY packages/db/drizzle/ packages/db/drizzle/
 COPY packages/db/drizzle-control/ packages/db/drizzle-control/
 COPY packages/db/drizzle-tenant/ packages/db/drizzle-tenant/
 
-# -- Shared package: package.json only (code is inlined by tsup)
-COPY packages/shared/package.json packages/shared/
-
-# Install production deps only — keeps the image lean (no tsup, vitest, etc.)
-# argon2 needs a rebuild on alpine (native addon).
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod
-
-# npm/corepack/pnpm are build-time only: the base image's global copies (and the corepack-prepared pnpm) carry unfixable CVEs and the runtime only needs `node`.
+# npm/corepack are build-time only: the base image's global copies carry unfixable CVEs
+# and the runtime only needs `node` (this removes them from the scanned filesystem; the
+# bytes stay in the base layer).
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
            /usr/local/bin/pnpm /usr/local/bin/pnpx \
@@ -92,8 +109,8 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack 
 # esbuild/drizzle-kit/tsx ship Go/native binaries that Trivy flags and that the
 # runtime never needs (migrations run from the pre-bundled dist/migrate.mjs).
 # They are devDependencies of @hisaabo/db; fail the build if they sneak back in.
-RUN if find /app -path '*/node_modules/*' \( -name esbuild -o -name '@esbuild' -o -name tsx -o -name drizzle-kit \) | grep -q .; then \
-      echo "FATAL: build tooling (esbuild/tsx/drizzle-kit) present in runtime image" >&2; exit 1; \
+RUN if find /app -path '*/node_modules/*' \( -name esbuild -o -name '@esbuild' -o -name tsx -o -name drizzle-kit -o -name typescript \) | grep -q .; then \
+      echo "FATAL: build tooling (esbuild/tsx/drizzle-kit/typescript) present in runtime image" >&2; exit 1; \
     fi
 
 # ── Smoke test: catch module resolution errors at build time ──

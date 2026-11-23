@@ -9,39 +9,34 @@ import { z } from "zod";
 import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import {
+  resolveDatePreset,
+  windowToQuery,
+  businessYearMonth,
+  businessMonthStart,
+  businessFinancialYearWindow,
+  businessFinancialYearStartYear,
+} from "@hisaabo/shared";
 
-/** Resolve a named period to ISO 8601 date strings for the API. */
-function resolvePeriod(period: string | undefined): { fromDate?: string; toDate?: string } {
-  const now = new Date();
+/**
+ * Resolve a named period to ISO 8601 instants for the API, on the business calendar (IST): periods are
+ * IST days, not the host's or UTC's, so the answer does not depend on where the MCP server runs.
+ *   this-fy (default)  1 April of the current Indian financial year through the end of today
+ *   this-year          the whole current Indian financial year (April-March): "year" for an Indian
+ *                      business is the financial year, not January-December
+ *   this-month / last-month / this-quarter   whole calendar periods
+ * `this-fy` used to send no dates, which the API reads as ALL TIME.
+ */
+export function resolvePeriod(period: string | undefined, now: Date = new Date()): { fromDate?: string; toDate?: string } {
+  const { year, month } = businessYearMonth(now);
 
-  if (!period || period === "this-fy") {
-    // Financial year logic: April-start default. API computes FY dates server-side when no date range given.
-    return {};
-  }
-
-  if (period === "this-month") {
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    return { fromDate: from.toISOString(), toDate: to.toISOString() };
-  }
-
-  if (period === "last-month") {
-    const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const to = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-    return { fromDate: from.toISOString(), toDate: to.toISOString() };
-  }
-
+  if (!period || period === "this-fy") return windowToQuery(resolveDatePreset("this-fy", now));
+  if (period === "this-year") return windowToQuery(businessFinancialYearWindow(businessFinancialYearStartYear(now)));
+  if (period === "this-month") return windowToQuery(resolveDatePreset("this-month", now));
+  if (period === "last-month") return windowToQuery(resolveDatePreset("last-month", now));
   if (period === "this-quarter") {
-    const quarter = Math.floor(now.getMonth() / 3);
-    const from = new Date(now.getFullYear(), quarter * 3, 1);
-    const to = new Date(now.getFullYear(), (quarter + 1) * 3, 0, 23, 59, 59, 999);
-    return { fromDate: from.toISOString(), toDate: to.toISOString() };
-  }
-
-  if (period === "this-year") {
-    const from = new Date(now.getFullYear(), 0, 1);
-    const to = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
-    return { fromDate: from.toISOString(), toDate: to.toISOString() };
+    const first = Math.floor((month - 1) / 3) * 3 + 1;
+    return windowToQuery({ from: businessMonthStart(year, first), before: businessMonthStart(year, first + 3) });
   }
 
   // "all" — no date filter
@@ -63,11 +58,11 @@ export function registerDashboardTools(server: ToolServer, client: HisaaboClient
     {
       period: z.enum(["this-fy", "this-month", "last-month", "this-quarter", "this-year", "custom"]).optional()
         .describe(
-          "'this-fy' = current financial year (default). " +
+          "'this-fy' = current financial year to date (default). " +
           "'this-month' = current calendar month. " +
           "'last-month' = previous calendar month. " +
           "'this-quarter' = current calendar quarter. " +
-          "'this-year' = current calendar year. " +
+          "'this-year' = the whole current financial year (April-March). " +
           "'custom' = use from_date and to_date."
         ),
       from_date: z.string().datetime().optional()

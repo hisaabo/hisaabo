@@ -191,6 +191,7 @@ export const shipmentRouter = router({
         entityId: shipment.id,
         metadata: { trackingNumber: input.trackingNumber || null },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return shipment;
@@ -276,6 +277,7 @@ export const shipmentRouter = router({
         entityId: input.id,
         metadata: { shipmentId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return shipment;
@@ -312,6 +314,7 @@ export const shipmentRouter = router({
         entityId: input.id,
         metadata: { shipmentId: input.id },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

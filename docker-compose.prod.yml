@@ -122,6 +122,10 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # 200 leaves room for the API's tenant pools ((TENANT_POOL_MAX +
+    # TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX), the worker, the
+    # queue and operator tools. Takes effect when the container restarts.
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     # Only the variables postgres needs — no API secrets (ENCRYPTION_KEY,

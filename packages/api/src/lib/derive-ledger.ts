@@ -25,6 +25,10 @@
  *   Credit Note / Sales Return  → Dr 4010 Sales Returns + Dr Output GST / Cr 1100 Receivable
  *   Debit Note (sale-side)      → Dr 1100 Receivable / Cr 4000 Sales + Cr Output GST
  *   Debit Note / Purchase Return → Dr 2000 Payable / Cr 5010 Purchase Returns + Cr Input GST
+ *
+ * Invoice-level discount, additional charges and round-off are posted to their
+ * own accounts so every document balances at its stored total. The per-document
+ * rules (and the account each adjustment uses) live in ledger-documents.ts.
  */
 
 import { eq, and, isNull } from "drizzle-orm";
@@ -40,6 +44,16 @@ import {
 } from "@hisaabo/db";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { paymentSettlement, paymentTdsSql } from "./payment-settlement.js";
+import { loadLineGstSplits, isIntraStateSupply } from "./gst-split.js";
+import { logger } from "./logger.js";
+import {
+  buildDocumentLines,
+  creditLine,
+  debitLine,
+  getAccount,
+  ledgerDocumentLabel,
+  type CoaMap,
+} from "./ledger-documents.js";
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -66,77 +80,31 @@ export interface DerivedEntry {
 // ── Internal helpers ────────────────────────────────────────────
 
 /**
- * Split a tax amount into two equal halves using integer (paise) arithmetic
- * to avoid floating-point rounding errors on odd amounts (e.g. ₹1.01).
- * Returns the two halves as money strings that sum exactly to the input.
+ * A document whose stored total is more than a round-off away from what its columns explain is
+ * parked in the Suspense account. Say so once per document per process (reports re-derive the
+ * ledger on every call), with the document id so it can be found and fixed.
  */
-function splitTax(amount: string): [string, string] {
-  // Work in paise to avoid floating-point drift
-  const totalPaise = Math.round(parseFloat(amount) * 100);
-  const half = Math.floor(totalPaise / 2);
-  const remainder = totalPaise - half; // handles odd paise (e.g. 101 → 50 + 51)
-  return [
-    (half / 100).toFixed(2),
-    (remainder / 100).toFixed(2),
-  ];
+const warnedSuspense = new Set<string>();
+function warnUnexplainedDifference(doc: { id?: string; invoiceNumber?: string }, amount: string): void {
+  const key = doc.id ?? doc.invoiceNumber ?? amount;
+  if (warnedSuspense.has(key)) return;
+  if (warnedSuspense.size >= 5000) warnedSuspense.clear();
+  warnedSuspense.add(key);
+  logger.warn(
+    { documentId: doc.id, invoiceNumber: doc.invoiceNumber, unexplained: amount },
+    "ledger: document total differs from its parts by more than a round-off; posted to Suspense / Unreconciled (2900)",
+  );
 }
 
-/** Determine whether two state codes represent the same state. */
+/**
+ * Is this supply intra-state (CGST + SGST)? The shared decision (GSTIN state, stored code, state name;
+ * undecidable is intra-state), the same one the GST returns, the PDF, the e-invoice and the e-way bill use.
+ */
 function isSameState(
-  bizStateCode: string | null | undefined,
-  partyStateCode: string | null | undefined,
-  bizState: string | null | undefined,
-  partyState: string | null | undefined,
+  biz: { gstin?: string | null; stateCode?: string | null; state?: string | null } | undefined,
+  party: { gstin?: string | null; stateCode?: string | null; state?: string | null },
 ): boolean {
-  if (bizStateCode && partyStateCode) {
-    return bizStateCode === partyStateCode;
-  }
-  if (bizState && partyState) {
-    return bizState.toLowerCase() === partyState.toLowerCase();
-  }
-  // Cannot determine — treat as intra-state (conservative, avoids wrong IGST split)
-  return true;
-}
-
-/** Build a DerivedEntryLine for the debit side. */
-function debitLine(
-  account: { id: string; code: string; name: string },
-  amount: string,
-): DerivedEntryLine {
-  return {
-    accountId: account.id,
-    accountCode: account.code,
-    accountName: account.name,
-    debit: amount,
-    credit: "0.00",
-  };
-}
-
-/** Build a DerivedEntryLine for the credit side. */
-function creditLine(
-  account: { id: string; code: string; name: string },
-  amount: string,
-): DerivedEntryLine {
-  return {
-    accountId: account.id,
-    accountCode: account.code,
-    accountName: account.name,
-    debit: "0.00",
-    credit: amount,
-  };
-}
-
-// ── CoA lookup helper ───────────────────────────────────────────
-
-type CoaMap = Map<string, { id: string; code: string; name: string }>;
-
-/** Look up an account by code; throws if missing (indicates seed data problem). */
-function getAccount(coa: CoaMap, code: string): { id: string; code: string; name: string } {
-  const acct = coa.get(code);
-  if (!acct) {
-    throw new Error(`Chart of Accounts is missing required account code "${code}". Run the CoA seed first.`);
-  }
-  return acct;
+  return isIntraStateSupply(biz, party);
 }
 
 // ── Category → CoA code mapping ─────────────────────────────────
@@ -200,6 +168,7 @@ export async function deriveLedger(
   // ── 1. Fetch business state info for GST split ──────────────────
   const [biz] = await db
     .select({
+      gstin: businesses.gstin,
       stateCode: businesses.stateCode,
       state: businesses.state,
     })
@@ -238,6 +207,10 @@ export async function deriveLedger(
     subtotal: string;
     taxAmount: string;
     totalAmount: string;
+    discountAmount: string;
+    additionalCharges: string;
+    roundOff: string;
+    partyGstin: string | null;
     partyState: string | null;
     partyStateCode: string | null;
     status: string;
@@ -252,6 +225,10 @@ export async function deriveLedger(
       subtotal: invoices.subtotal,
       taxAmount: invoices.taxAmount,
       totalAmount: invoices.totalAmount,
+      discountAmount: invoices.discountAmount,
+      additionalCharges: invoices.additionalCharges,
+      roundOff: invoices.roundOff,
+      partyGstin: parties.gstin,
       partyState: parties.state,
       partyStateCode: parties.stateCode,
     })
@@ -268,179 +245,30 @@ export async function deriveLedger(
   // Exclude cancelled invoices in JS (avoids sql`` template in shared code)
   const activeInvRows = properInvRows.filter((r) => r.status !== "cancelled");
 
+  // Per-line CGST / SGST sums for the intra-state split (the e-invoice rule), one row per invoice.
+  const lineGstSplits = await loadLineGstSplits(db, businessId, [
+    isNull(invoices.deletedAt),
+    ...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }),
+  ]);
+
   for (const inv of activeInvRows) {
-    const lines: DerivedEntryLine[] = [];
-
-    const subtotal = inv.subtotal;
-    const taxStr = inv.taxAmount;
-    const sameState = isSameState(
-      biz?.stateCode,
-      inv.partyStateCode,
-      biz?.state,
-      inv.partyState,
-    );
-
-    if (inv.type === "sale" && inv.documentType === "invoice") {
-      // ── Sale Invoice ────────────────────────────────────────────
-      // Debit Receivable (1100), Credit Sales (4000) for subtotal
-      const receivable = getAccount(coa, "1100");
-      const sales = getAccount(coa, "4000");
-
-      // Total debit on receivable = totalAmount (subtotal + tax)
-      const totalAmt = inv.totalAmount;
-
-      lines.push(debitLine(receivable, totalAmt));
-      lines.push(creditLine(sales, subtotal));
-
-      // Tax split
-      if (parseFloat(taxStr) > 0) {
-        if (sameState) {
-          const [cgstAmt, sgstAmt] = splitTax(taxStr);
-          const cgst = getAccount(coa, "2100");
-          const sgst = getAccount(coa, "2101");
-          lines.push(creditLine(cgst, cgstAmt));
-          lines.push(creditLine(sgst, sgstAmt));
-        } else {
-          const igst = getAccount(coa, "2102");
-          lines.push(creditLine(igst, taxStr));
-        }
-      }
-
-      entries.push({
-        date: inv.invoiceDate,
-        narration: `Sale Invoice ${inv.invoiceNumber}`,
-        sourceType: "invoice",
-        sourceId: inv.id,
-        sourceNumber: inv.invoiceNumber,
-        lines,
-      });
-    } else if (inv.type === "purchase" && inv.documentType === "invoice") {
-      // ── Purchase Invoice ────────────────────────────────────────
-      // Debit Purchases (5000), Cr Payable (2000) for subtotal
-      // Debit Input GST accounts, Cr Payable (2000) for tax
-      const purchases = getAccount(coa, "5000");
-      const payable = getAccount(coa, "2000");
-      const totalAmt = inv.totalAmount;
-
-      lines.push(debitLine(purchases, subtotal));
-
-      if (parseFloat(taxStr) > 0) {
-        if (sameState) {
-          const [cgstAmt, sgstAmt] = splitTax(taxStr);
-          const inputCgst = getAccount(coa, "1510");
-          const inputSgst = getAccount(coa, "1511");
-          lines.push(debitLine(inputCgst, cgstAmt));
-          lines.push(debitLine(inputSgst, sgstAmt));
-        } else {
-          const inputIgst = getAccount(coa, "1512");
-          lines.push(debitLine(inputIgst, taxStr));
-        }
-      }
-
-      lines.push(creditLine(payable, totalAmt));
-
-      entries.push({
-        date: inv.invoiceDate,
-        narration: `Purchase Invoice ${inv.invoiceNumber}`,
-        sourceType: "invoice",
-        sourceId: inv.id,
-        sourceNumber: inv.invoiceNumber,
-        lines,
-      });
-    } else if (inv.documentType === "credit_note" || inv.documentType === "sales_return") {
-      // ── Credit Note / Sales Return (sale-side return) ────────────
-      // Reverses original sale: Dr Sales Returns (subtotal) + Dr Output GST (tax), Cr Receivable (total)
-      const salesReturns = getAccount(coa, "4010");
-      const receivable = getAccount(coa, "1100");
-      const taxStr = inv.taxAmount;
-
-      lines.push(debitLine(salesReturns, inv.subtotal));
-      // Reverse GST liability
-      if (parseFloat(taxStr) > 0) {
-        const sameState = isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState);
-        if (sameState) {
-          const [cgstAmt, sgstAmt] = splitTax(taxStr);
-          lines.push(debitLine(getAccount(coa, "2100"), cgstAmt));
-          lines.push(debitLine(getAccount(coa, "2101"), sgstAmt));
-        } else {
-          lines.push(debitLine(getAccount(coa, "2102"), taxStr));
-        }
-      }
-      lines.push(creditLine(receivable, inv.totalAmount));
-
-      const cnLabel = inv.documentType === "sales_return" ? "Sales Return" : "Credit Note";
-      entries.push({
-        date: inv.invoiceDate,
-        narration: `${cnLabel} ${inv.invoiceNumber}`,
-        sourceType: "invoice",
-        sourceId: inv.id,
-        sourceNumber: inv.invoiceNumber,
-        lines,
-      });
-    } else if (inv.documentType === "debit_note" && inv.type === "sale") {
-      // ── Debit Note (sale-side) ───────────────────────────────────
-      // Issued by seller to increase what the buyer owes (e.g. price correction upward).
-      // Mirrors a sale invoice: Dr Receivable (total) / Cr Sales (subtotal) + Cr Output GST (tax)
-      const receivable = getAccount(coa, "1100");
-      const sales = getAccount(coa, "4000");
-      const taxStr = inv.taxAmount;
-
-      lines.push(debitLine(receivable, inv.totalAmount));
-      lines.push(creditLine(sales, inv.subtotal));
-      if (parseFloat(taxStr) > 0) {
-        const sameState = isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState);
-        if (sameState) {
-          const [cgstAmt, sgstAmt] = splitTax(taxStr);
-          lines.push(creditLine(getAccount(coa, "2100"), cgstAmt));
-          lines.push(creditLine(getAccount(coa, "2101"), sgstAmt));
-        } else {
-          lines.push(creditLine(getAccount(coa, "2102"), taxStr));
-        }
-      }
-
-      entries.push({
-        date: inv.invoiceDate,
-        narration: `Debit Note ${inv.invoiceNumber}`,
-        sourceType: "invoice",
-        sourceId: inv.id,
-        sourceNumber: inv.invoiceNumber,
-        lines,
-      });
-    } else if (
-      (inv.documentType === "debit_note" && inv.type === "purchase") ||
-      inv.documentType === "purchase_return"
-    ) {
-      // ── Debit Note (purchase-side) / Purchase Return ─────────────
-      // Reverses original purchase: Dr Payable (total), Cr Purchase Returns (subtotal) + Cr Input GST (tax)
-      const payable = getAccount(coa, "2000");
-      const purchaseReturns = getAccount(coa, "5010");
-      const taxStr = inv.taxAmount;
-
-      lines.push(debitLine(payable, inv.totalAmount));
-      lines.push(creditLine(purchaseReturns, inv.subtotal));
-      // Reverse input GST
-      if (parseFloat(taxStr) > 0) {
-        const sameState = isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState);
-        if (sameState) {
-          const [cgstAmt, sgstAmt] = splitTax(taxStr);
-          lines.push(creditLine(getAccount(coa, "1510"), cgstAmt));
-          lines.push(creditLine(getAccount(coa, "1511"), sgstAmt));
-        } else {
-          lines.push(creditLine(getAccount(coa, "1512"), taxStr));
-        }
-      }
-
-      const dnLabel = inv.documentType === "purchase_return" ? "Purchase Return" : "Debit Note";
-      entries.push({
-        date: inv.invoiceDate,
-        narration: `${dnLabel} ${inv.invoiceNumber}`,
-        sourceType: "invoice",
-        sourceId: inv.id,
-        sourceNumber: inv.invoiceNumber,
-        lines,
-      });
-    }
+    const lines = buildDocumentLines({ ...inv, lineGstSplit: lineGstSplits.get(inv.id) }, {
+      coa,
+      systemCodes,
+      sameState: isSameState(biz, { gstin: inv.partyGstin, stateCode: inv.partyStateCode, state: inv.partyState }),
+      onSuspense: warnUnexplainedDifference,
+    });
     // Quotations, proformas, delivery challans etc. are non-financial — skip
+    if (!lines) continue;
+
+    entries.push({
+      date: inv.invoiceDate,
+      narration: `${ledgerDocumentLabel(inv.documentType, inv.type)} ${inv.invoiceNumber}`,
+      sourceType: "invoice",
+      sourceId: inv.id,
+      sourceNumber: inv.invoiceNumber,
+      lines,
+    });
   }
 
   // ── 4. Payments ─────────────────────────────────────────────────

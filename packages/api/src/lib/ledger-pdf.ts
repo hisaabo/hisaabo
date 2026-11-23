@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
@@ -53,6 +54,7 @@ function fmtDate(d: Date | string): string {
     day: "2-digit",
     month: "short",
     year: "numeric",
+    timeZone: BUSINESS_TIME_ZONE, // the business-calendar (IST) date, not the server's
   }).format(date);
 }
 
@@ -215,7 +217,18 @@ function generateLedgerPDFDoc(doc: InstanceType<typeof PDFDocument>, data: Ledge
   });
 
   // ── Closing balance row ───────────────────────────────────────
+  // The closing row, the UPI QR (when shown) and the footer line stay together: if they don't
+  // all fit above the bottom margin they move to a new page as a group. The row loop above only
+  // reserves 80pt, which is not enough for the QR block; without this the QR was drawn off the
+  // page and its caption and the footer each spilled onto a page of their own.
   const cbRowH = 22;
+  const qrSize = 72;
+  const showQr = !!data.upiQrDataUrl && parseFloat(data.summary.closingBalance) > 0;
+  const closingBlockH = cbRowH + 12 + (showQr ? qrSize + 16 : 0) + 8 + 9; // 9 = the footer line
+  if (y + closingBlockH > doc.page.height - margin) {
+    doc.addPage();
+    y = margin;
+  }
   doc.rect(margin, y, contentW, cbRowH).fill(colorPrimary);
   doc.fontSize(8).fillColor("#ffffff").font("NotoSans-Bold");
   doc.text("Closing Balance",    col.desc.x + 4, y + 7, { width: col.desc.w - 4 });
@@ -225,8 +238,7 @@ function generateLedgerPDFDoc(doc: InstanceType<typeof PDFDocument>, data: Ledge
   y += cbRowH + 12;
 
   // ── UPI QR code (if receivable balance exists) ────────────────
-  if (data.upiQrDataUrl && parseFloat(data.summary.closingBalance) > 0) {
-    const qrSize = 72;
+  if (showQr && data.upiQrDataUrl) {
     try {
       const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
       doc.image(qrBuffer, margin, y, { width: qrSize, height: qrSize });

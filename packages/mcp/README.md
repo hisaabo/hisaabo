@@ -96,9 +96,9 @@ An AI agent reads free text from your books (party names, notes, store orders) t
 | Tool | What it does |
 |---|---|
 | `invoice_list` | List invoices with filters (status, party, date range) |
-| `invoice_create` | Create a sale or purchase invoice |
+| `invoice_create` | Create a sale or purchase invoice. `unit_price` is tax-exclusive. Optional `update_item_prices: true` also updates the saved price of every linked item whose `unit_price` differs (invoices only; the invoice is saved either way and the result carries `itemPriceUpdate`) |
 | `invoice_get` | Get a single invoice with all line items and payment history |
-| `invoice_update` | Edit an existing invoice (line items, dates, notes, discount) |
+| `invoice_update` | Edit an existing invoice (line items, dates, notes, discount). Optional `update_item_prices: true` (with `line_items`) updates the saved item prices like `invoice_create`; a line you resend at the rate it already had on the saved invoice is not counted as a price change (the saved lines are read first) |
 | `invoice_update_status` | Change invoice status (draft → sent → paid → cancelled) |
 | `invoice_pdf_url` | Get URL to download invoice PDF (A4 or thermal) |
 | `invoice_delete` | Soft-delete a draft or unpaid invoice |
@@ -311,7 +311,7 @@ For a customer receipt where TDS was withheld, `payment_create` takes `amount` a
 | `itc_dashboard` / `itc_ledger` / `itc_aging_alerts` / `itc_gstr3b_table4` | Input Tax Credit summary, ledger, reversal-risk alerts and the GSTR-3B Table 4 breakdown |
 | `itc_mark_blocked` / `itc_mark_eligible` | Mark ITC on a purchase invoice as blocked or eligible |
 | `einvoice_status` / `einvoice_dashboard` | E-invoice status for an invoice, and the generation summary |
-| `einvoice_generate` / `einvoice_cancel` / `einvoice_retry` | Generate, cancel or retry an e-invoice on the IRP (destructive, need `confirm`) |
+| `einvoice_generate` / `einvoice_cancel` / `einvoice_retry` | Generate, cancel or retry an e-invoice on the IRP (destructive, need `confirm`). `einvoice_cancel` also cancels the invoice (stock and returns adjusted) and is refused while payments are allocated to it |
 | `eway_bill_dashboard` / `eway_bill_expiring` | E-way bill summary, and bills expiring within 24 hours |
 | `eway_bill_generate` / `eway_bill_cancel` / `eway_bill_update_vehicle` | Generate, cancel or update the vehicle on an e-way bill (destructive, need `confirm`) |
 | `bank_account_gateway_config` / `bank_account_update_gateway` | Read or change a payment gateway account's charge configuration (the change needs `confirm`) |

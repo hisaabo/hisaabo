@@ -23,13 +23,35 @@ import { ThemeProvider } from "../contexts/ThemeContext";
 
 export const stub = {
   data: {} as Record<string, unknown>,
+  /** Input of every `useQuery` call (one entry per render), keyed by tRPC path. */
+  queries: {} as Record<string, unknown[]>,
   session: { role: null as string | null, isLoading: false },
   mutations: {} as Record<string, unknown[]>,
+  /**
+   * Result handed to a mutation's `onSuccess`, keyed "<router>.<proc>". A mutation
+   * with no entry never calls `onSuccess` (the historic behaviour of this stub).
+   */
+  mutationResults: {} as Record<string, unknown>,
+  /** What `mutateAsync` resolves to (or throws), keyed "<router>.<proc>"; absent = resolves `undefined`. */
+  mutationHandlers: {} as Record<string, (input: unknown) => unknown>,
+  /**
+   * Answers for `useUtils()` calls, keyed "<router>.<proc>" for `utils.<router>.<proc>.fetch(...)`
+   * and "client.<router>.<proc>" for the vanilla client (`utils.client.<router>.<proc>.mutate/query(...)`).
+   * No handler resolves `undefined`.
+   */
+  handlers: {} as Record<string, (input: unknown) => unknown>,
+  /** Inputs of the `useUtils()` calls above, by the same keys. */
+  utilCalls: {} as Record<string, unknown[]>,
   router: { push: jest.fn(), back: jest.fn(), replace: jest.fn(), canGoBack: jest.fn(() => true) },
   params: {} as Record<string, string>,
   reset() {
     for (const k of Object.keys(this.data)) delete this.data[k];
+    for (const k of Object.keys(this.queries)) delete this.queries[k];
     for (const k of Object.keys(this.mutations)) delete this.mutations[k];
+    for (const k of Object.keys(this.mutationResults)) delete this.mutationResults[k];
+    for (const k of Object.keys(this.mutationHandlers)) delete this.mutationHandlers[k];
+    for (const k of Object.keys(this.handlers)) delete this.handlers[k];
+    for (const k of Object.keys(this.utilCalls)) delete this.utilCalls[k];
     for (const k of Object.keys(this.params)) delete this.params[k];
     this.session.role = null;
     this.session.isLoading = false;
@@ -40,11 +62,21 @@ export const stub = {
 };
 
 const noop = () => Promise.resolve(undefined);
-const utils = (): unknown =>
+const utilsNode = (path: string[]): unknown =>
   new Proxy(noop, {
-    get: (_t, prop) => (prop === "then" ? undefined : utils()),
-    apply: () => Promise.resolve(undefined),
+    get: (_t, prop) => (prop === "then" ? undefined : utilsNode([...path, String(prop)])),
+    apply: (_t, _this, args: unknown[]) => {
+      const last = path[path.length - 1];
+      if (path[0] === "client" || last === "fetch") {
+        const key = path.slice(0, -1).join(".");
+        (stub.utilCalls[key] ??= []).push(args[0]);
+        const handler = stub.handlers[key];
+        return Promise.resolve(handler ? handler(args[0]) : undefined);
+      }
+      return Promise.resolve(undefined);
+    },
   });
+const utils = (): unknown => utilsNode([]);
 
 function record(key: string, args: unknown) {
   (stub.mutations[key] ??= []).push(args);
@@ -58,7 +90,7 @@ const node = (path: string[]): unknown =>
         if (prop === "then") return undefined;
         const key = path.join(".");
         if (prop === "useQuery" || prop === "useInfiniteQuery") {
-          return () => {
+          return (input?: unknown) => {
             useRef(null);
             if (key === "auth.me") {
               return {
@@ -66,8 +98,11 @@ const node = (path: string[]): unknown =>
                 isLoading: stub.session.isLoading,
               };
             }
+            (stub.queries[key] ??= []).push(input);
+            // a function is a tiny fake server: called with the query input
+            const canned = stub.data[key];
             return {
-              data: stub.data[key],
+              data: typeof canned === "function" ? (canned as (i: unknown) => unknown)(input) : canned,
               isLoading: false,
               isFetching: false,
               isRefetching: false,
@@ -78,13 +113,18 @@ const node = (path: string[]): unknown =>
           };
         }
         if (prop === "useMutation") {
-          return () => {
+          return (opts?: { onSuccess?: (data: unknown, vars: unknown, ctx: unknown) => void }) => {
             useRef(null);
             return {
-              mutate: (args: unknown) => record(key, args),
+              mutate: (args: unknown) => {
+                record(key, args);
+                if (key in stub.mutationResults) opts?.onSuccess?.(stub.mutationResults[key], args, undefined);
+              },
               mutateAsync: (args: unknown) => {
                 record(key, args);
-                return Promise.resolve(undefined);
+                // a handler may return a result or throw (-> a rejected promise)
+                const handler = stub.mutationHandlers[key];
+                return Promise.resolve().then(() => (handler ? handler(args) : undefined));
               },
               isPending: false,
             };

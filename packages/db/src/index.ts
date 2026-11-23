@@ -4,15 +4,24 @@ export * from "./tenant-schema.js";
 
 // DB client exports
 export { controlDb, type ControlDatabase, closeControlClient } from "./control-client.js";
-export { getTenantDb, type TenantDatabase, closeAllTenantPools } from "./tenant-pool.js";
+export { getTenantDb, withDedicatedTenantDb, type TenantDatabase, closeAllTenantPools } from "./tenant-pool.js";
 
 // Tenant provisioning
 export {
   provisionTenantDatabase,
   cleanupTenantDatabase,
   scramSha256Verifier,
+  generateTenantDbNames,
   type TenantDbConfig,
+  type TenantDbNames,
 } from "./provision-tenant.js";
+
+// Who may connect to a tenant database (PUBLIC revoked, tenant role granted)
+export {
+  restrictTenantDatabaseAccess,
+  restrictExistingTenantDatabases,
+  type TenantDbAccessReport,
+} from "./tenant-db-access.js";
 
 // Migration-layout startup sanity check (called from API server boot)
 export {

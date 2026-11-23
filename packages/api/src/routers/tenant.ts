@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { getSessionIdFromRequest } from "../context.js";
 import { cacheBus } from "../lib/cache/bus.js";
-import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
+import { requireTenantRole, ADMIN_ROLES, OWNER_ROLES } from "../lib/tenant-access.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
 import { lockSignup, isOpenSignupEnabled, hasPendingInvitation, SIGNUP_CLOSED_MESSAGE } from "../lib/signup-policy.js";
@@ -153,8 +153,9 @@ export const tenantRouter = router({
       // Phase 1 (outside any tx): provision the physical DB + role + schema.
       // CREATE DATABASE is non-transactional, so it MUST happen outside the
       // control-DB transaction. If it throws, provisionTenantDatabase's own
-      // internal catch already cleaned up.
-      const dbConfig = await provisionTenantDatabase(nanoid(), slug);
+      // internal catch already cleaned up. The database and role names are
+      // random, independent of the slug.
+      const dbConfig = await provisionTenantDatabase();
 
       // Phase 2 (inside tx): insert tenants row + owner membership atomically.
       // If this tx fails (constraint violation, connection drop, COMMIT
@@ -205,6 +206,7 @@ export const tenantRouter = router({
       // Self-hosted: join/create default tenant. Once the default tenant has
       // an owner this needs a pending invitation unless open signup is on.
       let touchedTenantId: string | undefined;
+      let insertedTenantId: string | undefined;
       const defaultTenantId = await controlDb.transaction(async (tx) => {
         await lockSignup(tx);
 
@@ -214,6 +216,7 @@ export const tenantRouter = router({
           [defaultTenant] = await tx.insert(tenants).values({
             name: "Default Organization", slug: "default",
           }).returning({ id: tenants.id });
+          insertedTenantId = defaultTenant.id;
         }
 
         const memberCount = await tx.select({ id: tenantMembers.id })
@@ -247,6 +250,9 @@ export const tenantRouter = router({
         if (touchedTenantId) {
           cacheBus.invalidate({ kind: "membership", tenantId: touchedTenantId, userId: ctx.user.id });
         }
+        // A new tenant row changes the "how many organisations" answer
+        // (tenant-businesses.ts creatorRuleApplies).
+        if (insertedTenantId) cacheBus.invalidate({ kind: "tenant", tenantId: insertedTenantId });
       });
 
       const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenantId);
@@ -716,6 +722,24 @@ export const tenantRouter = router({
       await revokeMemberAccess(ctx.tenantId, input.userId, removedUser?.email ?? null);
 
       return { success: true };
+    }),
+
+  // Owner-only: switch browser AI agent (WebMCP) access off (or back on) for the
+  // whole organization. The web app reads the flag through auth.me and never
+  // registers agent tools while it is set; the API also refuses agent-marked calls
+  // (trpc.ts hasTenantAccess), reading it from the cached membership entry, so the
+  // `tenant` event is emitted once the write settled (and the tenants cache
+  // trigger covers writers outside this process). See lib/webmcp-policy.ts.
+  setWebMcpDisabled: tenantProcedure
+    .input(z.object({ disabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantRole(ctx, OWNER_ROLES, "Only the organization owner can change this setting");
+      await cacheBus.afterWrite([{ kind: "tenant", tenantId: ctx.tenantId }], () =>
+        controlDb.update(tenants)
+          .set({ webmcpDisabled: input.disabled, updatedAt: new Date() })
+          .where(eq(tenants.id, ctx.tenantId)),
+      );
+      return { success: true, webmcpDisabled: input.disabled };
     }),
 
   // Update member role

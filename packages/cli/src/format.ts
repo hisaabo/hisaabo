@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { hasColor } from "./output.js";
+import { dateParts } from "./dates.js";
 
 // ── INR formatting ─────────────────────────────────────────────────────────
 
@@ -45,10 +46,11 @@ export function formatDate(date: string | Date | null | undefined): string {
   try {
     const d = new Date(date);
     if (isNaN(d.getTime())) return String(date);
-    const day = String(d.getDate()).padStart(2, "0");
-    const month = MONTHS[d.getMonth()];
-    const year = d.getFullYear();
-    return `${day} ${month} ${year}`;
+    // the calendar day in the business zone (IST by default), not the machine's
+    const p = dateParts(d);
+    const day = String(p.day).padStart(2, "0");
+    const month = MONTHS[p.month - 1];
+    return `${day} ${month} ${p.year}`;
   } catch {
     return String(date);
   }

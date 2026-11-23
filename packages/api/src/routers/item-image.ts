@@ -128,6 +128,7 @@ export const itemImageRouter = router({
         entityId: row.id,
         metadata: { itemId: input.itemId, variantId: input.variantId ?? null },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return row;
@@ -292,6 +293,7 @@ export const itemImageRouter = router({
         entityId: input.imageId,
         metadata: { itemId: existing.itemId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

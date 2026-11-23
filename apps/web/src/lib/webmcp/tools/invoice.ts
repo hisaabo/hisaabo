@@ -10,10 +10,14 @@
  * instructions.
  */
 
-import { canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE } from "@hisaabo/shared";
+import { calcInvoiceTotals, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
+  assertIdempotencyKey,
+  describeCreateResult,
+  idempotencyKeyOf,
+  idempotencyKeyProp,
   enumArray,
   enumOf,
   isoDate,
@@ -31,6 +35,7 @@ import {
   QTY_PATTERN,
   UUID_PATTERN,
 } from "./shared";
+import { day, lookupInvoice, lookupParty, rupees, shortId } from "./summary";
 
 const INVOICE_TYPES = ["sale", "purchase"] as const;
 
@@ -46,9 +51,9 @@ const DOCUMENT_TYPES = [
 ] as const;
 
 /**
- * Statuses accepted by `invoice.list` and `invoice.updateStatus`. The stored
- * enum also has "adjusted", but that one is computed from credit notes rather
- * than set by hand, so it is not offered as an input.
+ * Statuses accepted by `invoice.list`. The stored enum also has "adjusted", but
+ * that one is computed from credit notes rather than set by hand, so it is not
+ * offered as an input.
  */
 const INVOICE_STATUSES = [
   "draft",
@@ -59,6 +64,16 @@ const INVOICE_STATUSES = [
   "overdue",
   "cancelled",
 ] as const;
+
+/**
+ * Statuses a browser agent may SET with `invoice_update_status`. "cancelled"
+ * voids the document (removes it from receivables, hard to undo) and is a
+ * destructive tier in the MCP server, so the browser variant does not offer it:
+ * voiding stays a deliberate click in the Invoices page. That is what keeps this
+ * tool non-destructive, matching its annotations and the webmcpCatalog entry.
+ * Filtering a list BY "cancelled" is read-only and stays in INVOICE_STATUSES.
+ */
+const SETTABLE_STATUSES = INVOICE_STATUSES.filter((s) => s !== "cancelled");
 
 const DISCOUNT_TYPES = ["amount", "percent"] as const;
 
@@ -83,7 +98,8 @@ const lineItemSchema = objectSchema(
     unitPrice: {
       type: "string",
       pattern: MONEY_PATTERN,
-      description: "Price per unit as a decimal string, no currency symbol: '250.00', '15000.00'.",
+      description:
+        "TAX-EXCLUSIVE price per unit as a decimal string, no currency symbol: '250.00', '15000.00'. GST is added on top using taxPercent. If the linked item's sale price includes GST (item_get returns taxInclusive: true), send the price WITHOUT the GST, e.g. 118.00 at 18% is '100.00', or the customer is taxed twice.",
     },
     taxPercent: {
       type: "string",
@@ -123,6 +139,43 @@ function toLineItem(raw: Record<string, unknown>) {
     itemId: str(raw.itemId),
     description: str(raw.description),
   };
+}
+
+/**
+ * The total the server will compute, using the same shared calculator, so the
+ * confirmation shows a real number instead of echoing line items. Null when an
+ * input does not parse — the server is still the validator of record.
+ */
+function estimateTotals(
+  input: Record<string, unknown>,
+  lineItems: Record<string, unknown>[],
+): { total: string; taxTotal: string } | null {
+  // The decimal helpers turn garbage into 0.00 rather than failing, so refuse to
+  // estimate anything the schema itself would reject.
+  const validLines = lineItems.every((li) => {
+    const row = toLineItem(li);
+    return new RegExp(QTY_PATTERN).test(row.quantity) && new RegExp(MONEY_PATTERN).test(row.unitPrice);
+  });
+  if (!validLines) return null;
+  try {
+    const totals = calcInvoiceTotals({
+      lineItems: lineItems.map((li) => {
+        const row = toLineItem(li);
+        return {
+          quantity: row.quantity,
+          unitPrice: row.unitPrice,
+          taxPercent: row.taxPercent ?? "0",
+          discountPercent: row.discountPercent ?? "0",
+        };
+      }),
+      invoiceDiscount: str(input.invoiceDiscount),
+      invoiceDiscountType: enumOf(input.invoiceDiscountType, DISCOUNT_TYPES),
+      roundOff: str(input.roundOff),
+    });
+    return { total: totals.total, taxTotal: totals.taxTotal };
+  } catch {
+    return null;
+  }
 }
 
 const invoiceList: WebMcpToolDefinition = {
@@ -203,6 +256,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     "Set type='sale' for billing a customer and type='purchase' for recording a supplier's bill. partyId must come from party_list (create the party first if they are new); itemId on a line must come from item_list.",
     "Money and tax rates are decimal strings with 2 decimals ('15000.00', '18.00'); quantities allow 3 ('1.000'). Never send numbers or currency symbols. Totals, GST split and the invoice number are computed server-side — do not try to pass them.",
     "documentType defaults to 'invoice'; use 'quotation' to draft a quote instead, which creates no receivable.",
+    "Retrying safely: pass a fresh idempotencyKey (for example a new UUID) for every invoice you intend to create, and reuse that same key only to retry that same request after a timeout. A retry with the same key within 15 minutes returns the invoice the first call created (same number, flagged idempotentReplay, no new record) instead of booking a second one. Without a key every call creates an invoice, so two identical sales are two invoices.",
     "Example: { partyId: '3f1c…', type: 'sale', lineItems: [{ itemName: 'Web Design', quantity: '1.000', unitPrice: '15000.00', taxPercent: '18.00' }], dueDate: '2026-10-14T00:00:00.000Z' }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -223,24 +277,65 @@ const invoiceCreate: WebMcpToolDefinition = {
       invoiceDiscount: money("Invoice-level discount. A flat amount or a percentage depending on invoiceDiscountType. Defaults to '0'."),
       invoiceDiscountType: oneOf(DISCOUNT_TYPES, "Whether invoiceDiscount is a flat 'amount' or a 'percent'. Defaults to 'amount'.", "amount"),
       roundOff: money("Round-off adjustment to the grand total, e.g. '0.50' or '-0.25'. Defaults to '0'.", true),
+      idempotencyKey: idempotencyKeyProp(),
     },
     ["partyId", "type", "lineItems"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Invoice", action: "create" },
-  execute: async (input, ctx) => {
-    const partyId = str(input.partyId);
+  summarize: async (input, ctx) => {
     const type = enumOf(input.type, INVOICE_TYPES);
-    const lineItems = objectArray(input.lineItems);
-    if (!partyId) throw new Error("partyId is required — find it with party_list.");
+    const lineItems = objectArray(input.lineItems) ?? [];
+    if (!type || lineItems.length === 0) return null;
+    const partyId = str(input.partyId);
+    const party = await lookupParty(ctx, partyId);
+    const who = party?.name ?? `party ${shortId(partyId)}`;
+    const documentType = enumOf(input.documentType, DOCUMENT_TYPES) ?? "invoice";
+    const noun =
+      documentType === "invoice"
+        ? type === "sale" ? "sale invoice" : "purchase bill"
+        : documentType.replace(/_/g, " ");
+
+    const details: string[] = [];
+    const totals = estimateTotals(input, lineItems);
+    if (totals) {
+      details.push(`Total: ${rupees(totals.total)} (includes ${rupees(totals.taxTotal)} GST)`);
+    }
+    const shown = lineItems.slice(0, 3).map((li) => {
+      const row = toLineItem(li);
+      return `${row.itemName} × ${row.quantity} @ ${rupees(row.unitPrice)}`;
+    });
+    const more = lineItems.length - shown.length;
+    details.push(`${lineItems.length} line${lineItems.length === 1 ? "" : "s"}: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}`);
+    const dated = day(input.invoiceDate);
+    if (dated) details.push(`Dated ${dated}`);
+    const due = day(input.dueDate);
+    if (due) details.push(`Due ${due}`);
+    if (str(input.notes)) details.push(`Note: ${str(input.notes)}`);
+    return {
+      headline: type === "sale" ? `Create a ${noun} for ${who}` : `Record a ${noun} from ${who}`,
+      details,
+    };
+  },
+  validate: (input, ctx) => {
+    if (!str(input.partyId)) throw new Error("partyId is required — find it with party_list.");
+    const type = enumOf(input.type, INVOICE_TYPES);
     if (!type) throw new Error("type must be 'sale' or 'purchase'.");
     const documentType = enumOf(input.documentType, DOCUMENT_TYPES) ?? "invoice";
     if (!canCreateDocumentType(ctx.role, documentType, type)) {
       throw new Error(SELLER_PURCHASE_DENIED_MESSAGE);
     }
+    const lineItems = objectArray(input.lineItems);
     if (!lineItems || lineItems.length === 0) throw new Error("At least one line item is required.");
+    assertIdempotencyKey(input);
+  },
+  execute: async (input, ctx) => {
+    invoiceCreate.validate!(input, ctx);
+    const partyId = str(input.partyId)!;
+    const type = enumOf(input.type, INVOICE_TYPES)!;
+    const lineItems = objectArray(input.lineItems)!;
 
-    return await ctx.client.invoice.create.mutate({
+    const created = await ctx.client.invoice.create.mutate({
       partyId,
       type,
       documentType: enumOf(input.documentType, DOCUMENT_TYPES),
@@ -252,7 +347,10 @@ const invoiceCreate: WebMcpToolDefinition = {
       invoiceDiscount: str(input.invoiceDiscount),
       invoiceDiscountType: enumOf(input.invoiceDiscountType, DISCOUNT_TYPES),
       roundOff: str(input.roundOff),
+      // Only when the agent chose one: a retry with it returns the first invoice instead of a second.
+      idempotencyKey: idempotencyKeyOf(input),
     });
+    return describeCreateResult(created);
   },
 };
 
@@ -260,28 +358,52 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
   name: "invoice_update_status",
   title: "Change invoice status",
   description: [
-    "Move one invoice to a new status. Use it to mark an invoice 'sent' once it has gone to the customer, to put a mistaken invoice back to 'draft', or to void one with 'cancelled'.",
+    "Move one invoice to a new status. Use it to mark an invoice 'sent' once it has gone to the customer, or to put a mistaken invoice back to 'draft'.",
     "Do not use it to mark an invoice paid: record the money with payment_create, which sets 'paid' or 'partial' itself from the amounts. Forcing 'paid' here leaves the payment ledger wrong.",
-    "'cancelled' is hard to undo — it voids the document, removes it from receivables, and the usual accounting fix afterwards is a fresh invoice or a credit note rather than flipping the status back. Confirm with the user before cancelling.",
+    "This tool cannot cancel or void an invoice — that is deliberately not available to browser agents. If the user wants an invoice cancelled, open it with app_navigate and tell them to cancel it in the Invoices page.",
     "Example: { invoiceId: '3f1c…', status: 'sent' } → { id, invoiceNumber: 'INV-0042', status: 'sent' }",
   ].join(" "),
   inputSchema: objectSchema(
     {
       invoiceId: uuid("Invoice UUID from invoice_list or invoice_create."),
       status: oneOf(
-        INVOICE_STATUSES,
-        "New status. 'sent' = delivered to the customer. 'draft' = back to editable. 'cancelled' = voided (hard to undo). 'unfulfilled' = accepted but not yet delivered. Prefer payment_create over setting 'paid' or 'partial'.",
+        SETTABLE_STATUSES,
+        "New status. 'sent' = delivered to the customer. 'draft' = back to editable. 'unfulfilled' = accepted but not yet delivered. Prefer payment_create over setting 'paid' or 'partial'. Cancelling is not offered.",
       ),
     },
     ["invoiceId", "status"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Invoice", action: "update" },
-  execute: async (input, ctx) => {
+  summarize: async (input, ctx) => {
     const id = str(input.invoiceId);
-    const status = enumOf(input.status, INVOICE_STATUSES);
-    if (!id) throw new Error("invoiceId is required.");
-    if (!status) throw new Error(`status must be one of: ${INVOICE_STATUSES.join(", ")}.`);
+    const status = enumOf(input.status, SETTABLE_STATUSES);
+    if (!id || !status) return null;
+    const invoice = await lookupInvoice(ctx, id);
+    const label = invoice
+      ? `${invoice.number}${invoice.partyName ? ` for ${invoice.partyName}` : ""}`
+      : `invoice ${shortId(id)}`;
+    return {
+      headline: `Change the status of ${label}`,
+      details: invoice?.total ? [`Invoice total: ${rupees(invoice.total)}`] : [],
+      changes: [{ field: "Status", before: invoice?.status ?? "unknown", after: status }],
+    };
+  },
+  validate: (input) => {
+    if (!str(input.invoiceId)) throw new Error("invoiceId is required.");
+    if (input.status === "cancelled") {
+      throw new Error(
+        "Cancelling an invoice is not available to browser agents. Ask the user to cancel it from the Invoices page; app_navigate can open it for them.",
+      );
+    }
+    if (!enumOf(input.status, SETTABLE_STATUSES)) {
+      throw new Error(`status must be one of: ${SETTABLE_STATUSES.join(", ")}.`);
+    }
+  },
+  execute: async (input, ctx) => {
+    invoiceUpdateStatus.validate!(input, ctx);
+    const id = str(input.invoiceId)!;
+    const status = enumOf(input.status, SETTABLE_STATUSES)!;
     return await ctx.client.invoice.updateStatus.mutate({ id, status });
   },
 };

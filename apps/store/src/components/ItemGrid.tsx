@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import type { StoreItem, CartItem } from "../types";
-import { ItemCard } from "./ItemCard";
+import { ItemCard, type CardLayout } from "./ItemCard";
+import { Spinner, SearchIcon } from "./Icons";
 
 interface ItemGridProps {
   items: StoreItem[];
@@ -7,15 +9,28 @@ interface ItemGridProps {
   onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
   onRemoveFromCart: (key: string) => void;
   currency: string;
-  accentColor?: string;
   search: string;
   activeCategory: string;
-  onOpenDetail?: (item: StoreItem) => void;
+  onOpenDetail: (item: StoreItem) => void;
   /** A search/category fetch is in flight. */
   loading: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+}
+
+/**
+ * Photo cards when at least half of the catalog has a picture, text cards
+ * otherwise. Judged on the unfiltered catalog only: a search or category that
+ * happens to match photographed items must not re-flow the whole store.
+ */
+function useCardLayout(items: StoreItem[], filtered: boolean): CardLayout {
+  const layout = useRef<CardLayout>("compact");
+  if (!filtered && items.length > 0) {
+    const withPhoto = items.filter((i) => i.primaryImageUrl).length;
+    layout.current = withPhoto * 2 >= items.length ? "photo" : "compact";
+  }
+  return layout.current;
 }
 
 export function ItemGrid({
@@ -24,7 +39,6 @@ export function ItemGrid({
   onAddToCart,
   onRemoveFromCart,
   currency,
-  accentColor,
   search,
   activeCategory,
   onOpenDetail,
@@ -33,13 +47,12 @@ export function ItemGrid({
   loadingMore,
   onLoadMore,
 }: ItemGridProps) {
+  const layout = useCardLayout(items, Boolean(search || activeCategory));
+
   // Search and category are applied by the server, so `items` is already filtered.
   if (items.length === 0 && loading) {
     return (
-      <p
-        className="py-20 text-center text-sm font-medium"
-        style={{ color: "var(--store-muted)" }}
-      >
+      <p role="status" className="empty" style={{ color: "var(--store-muted)" }}>
         Loading items...
       </p>
     );
@@ -47,61 +60,31 @@ export function ItemGrid({
 
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 px-4 text-center">
-        <div
-          className="w-14 h-14 rounded-full flex items-center justify-center mb-4"
-          style={{ background: "var(--store-bg-alt)" }}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            width="24"
-            height="24"
-            style={{ color: "var(--store-muted)" }}
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+      <div className="empty">
+        <div className="empty-icon">
+          <SearchIcon size={24} />
         </div>
-        <p
-          className="text-[15px] font-semibold mb-1"
-          style={{ color: "var(--store-text)" }}
-        >
-          No items found
-        </p>
-        <p className="text-[13px]" style={{ color: "var(--store-muted)" }}>
-          {search
-            ? `No results for "${search}"`
-            : "No items in this category"}
+        <p className="font-semibold">No items found</p>
+        <p className="text-sm mt-1" style={{ color: "var(--store-muted)" }}>
+          {search ? `No results for "${search}"` : "No items in this category"}
         </p>
       </div>
     );
   }
 
   return (
-    <div className="px-4 sm:px-6 py-5">
-      {/* Category heading */}
-      {activeCategory && (
-        <div className="flex items-center justify-between mb-3">
-          <p
-            className="text-[11px] font-semibold uppercase tracking-wider"
-            style={{ color: "var(--store-muted)" }}
-          >
-            {activeCategory}
-          </p>
-          <p className="text-[11px]" style={{ color: "var(--store-muted)" }}>
-            {items.length}{hasMore ? "+" : ""} {items.length === 1 && !hasMore ? "item" : "items"}
+    <div className="pt-5">
+      {(activeCategory || search) && (
+        <div className="flex items-baseline justify-between gap-4 mb-4">
+          <h2 className="co-h">{activeCategory || `Results for "${search}"`}</h2>
+          <p className="text-sm" style={{ color: "var(--store-muted)" }}>
+            {items.length}
+            {hasMore ? "+" : ""} {items.length === 1 && !hasMore ? "item" : "items"}
           </p>
         </div>
       )}
 
-      {/* Product grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+      <div className="grid-products" data-layout={layout}>
         {items.map((item) => (
           <ItemCard
             key={item.id}
@@ -110,25 +93,22 @@ export function ItemGrid({
             onAddToCart={onAddToCart}
             onRemoveFromCart={onRemoveFromCart}
             currency={currency}
-            accentColor={accentColor}
+            layout={layout}
             onOpenDetail={onOpenDetail}
           />
         ))}
       </div>
 
       {hasMore && (
-        <div className="flex justify-center mt-6">
-          <button
-            onClick={onLoadMore}
-            disabled={loadingMore}
-            className="px-6 py-2.5 text-sm font-semibold rounded-xl border active:scale-[0.98] transition-transform disabled:opacity-60"
-            style={{
-              color: "var(--store-text)",
-              background: "var(--store-bg)",
-              borderColor: "var(--store-border)",
-            }}
-          >
-            {loadingMore ? "Loading..." : "Load more"}
+        <div className="flex justify-center mt-8">
+          <button type="button" onClick={onLoadMore} disabled={loadingMore} className="btn btn-outline">
+            {loadingMore ? (
+              <>
+                <Spinner size={16} /> Loading...
+              </>
+            ) : (
+              "Load more"
+            )}
           </button>
         </div>
       )}

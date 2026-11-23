@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import type {
   CanonicalParty,
   CanonicalItem,
@@ -25,8 +26,19 @@ export function registerAdapter(source: string, adapter: SourceAdapter): void {
 
 export function getAdapter(source: string): SourceAdapter {
   const adapter = adapters.get(source);
-  if (!adapter) throw new Error(`Unknown import source: "${source}"`);
+  if (!adapter) {
+    // A client error, not a server fault: report the sources that do work.
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown import source "${source}". Supported sources: ${listAdapterSources().join(", ")}`,
+    });
+  }
   return adapter;
+}
+
+/** Registered source names, sorted (for error messages and tests). */
+export function listAdapterSources(): string[] {
+  return [...adapters.keys()].sort();
 }
 
 export function hasAdapter(source: string): boolean {

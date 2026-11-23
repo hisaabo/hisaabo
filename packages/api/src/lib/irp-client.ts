@@ -12,32 +12,31 @@
  * Token caching: stored in eInvoiceConfigs to survive process restarts.
  */
 
-import { createHash, createCipheriv, createDecipheriv, publicEncrypt, constants, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, publicEncrypt, constants, randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { eInvoiceConfigs, encryptField } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "./irp-public-key.js";
 
 // ── NIC IRP endpoints ─────────────────────────────────────────────────────────
 
 const SANDBOX_BASE = "https://einv-apisandbox.nic.in";
 const PRODUCTION_BASE = "https://einvoice1.gst.gov.in";
 
-// NIC IRP sandbox RSA public key (PEM format) for encrypting AppKey
-// Source: https://einvoice1.gst.gov.in/Others/APIDOC
-const NIC_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3pMCDIFfrqFiTbAlPAtR
-zW2VFVFbQ4wjd8z3gqEnO2b6kf5kZjbRCJv7dO8BjPnJ/s7p8xfbUEuqtpDLIXX
-OFKAm6Qm7k5JknG0tkbwrEmEo7+h2MXk5W00x9vM77mZnFDKW8P8CaFPJLX1w5m
-pGH2CiMcYVN3SZIM0fzRZjjPuRnHTSwJjIHjAH0sFe4hHsS0sVIpCEn3tRl7b2K
-vHEiDLDfCZl2yPSTTW94XHQG3IJRJ0z0Hq7WQqQH3HXmn6PUPKBi4OSmqn9kGHa
-f4R9bImMnLKFYJdB7w1JwCO2M8CMrqLBOA9bGG5Q1u0FpNLGJj7tl9dMvr/k3i/
-MQIDAQAB
------END PUBLIC KEY-----`;
+// How long one IRP request may take before we give up on the answer. The IRP can
+// still have acted on it (a lost response), so callers that must not lose track of
+// the outcome (cancelling an IRN) confirm it with isIRNCancelled afterwards.
+export const IRP_REQUEST_TIMEOUT_MS = 30_000;
+
+// The NIC public key used to RSA-encrypt the credentials is operator configuration
+// (see irp-public-key.ts); none is bundled.
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+// NIC documents Status as 1 (success) / 0 (failure); some error samples use the strings
+// "1" / "0". Always compare with irpSucceeded().
 export interface IRPAuthResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     AuthToken: string;
     TokenExpiry: string; // "02/04/2026 15:30:00"
@@ -47,19 +46,21 @@ export interface IRPAuthResponse {
 }
 
 export interface IRPGenerateIRNResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     Irn: string;
     AckNo: string;
     AckDt: string; // "2026-04-02 12:00:00"
     SignedQRCode: string;
     SignedInvoice: string;
+    /** Only on the "get IRN details" response: "ACT" (active) or "CNL" (cancelled). */
+    Status?: string;
   };
   ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }>;
 }
 
 export interface IRPCancelIRNResponse {
-  Status: string;
+  Status: number | string;
   Data?: {
     Irn: string;
     CancelDate: string;
@@ -235,6 +236,26 @@ function aesDecrypt(encryptedBase64: string, keyBytes: Buffer): string {
   return decrypted.toString("utf8");
 }
 
+/** Did the IRP report success? Accepts the numeric 1 NIC documents as well as the string "1". */
+function irpSucceeded(status: number | string | undefined): boolean {
+  return String(status) === "1";
+}
+
+/** fetch with a hard timeout; timeouts and network failures surface as retryable IRPErrors. */
+async function irpFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(IRP_REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw new IRPError(
+      timedOut
+        ? `IRP did not answer within ${IRP_REQUEST_TIMEOUT_MS / 1000} seconds`
+        : `IRP network error: ${err instanceof Error ? err.message : String(err)}`,
+      "RETRYABLE",
+    );
+  }
+}
+
 // ── IRPClient ─────────────────────────────────────────────────────────────────
 
 export class IRPClient {
@@ -273,30 +294,44 @@ export class IRPClient {
   async authenticate(): Promise<void> {
     if (this.isTokenValid() && this.sek) return;
 
+    // The operator-configured NIC key for this environment. Loaded first, so a
+    // missing or invalid key is a clear IRPNotConfiguredError before anything else.
+    const publicKey = loadIrpPublicKey(this.config.isSandbox);
+
     // Generate fresh 32-byte AppKey
     this.appKey = randomBytes(32);
 
-    // RSA-encrypt AppKey with NIC public key (PKCS1 v1.5)
-    const encryptedAppKey = publicEncrypt(
-      {
-        key: NIC_PUBLIC_KEY_PEM,
-        padding: constants.RSA_PKCS1_PADDING,
-      },
-      this.appKey,
+    // NIC's authentication API (v1.04, "Payloads"): the credentials JSON (UserName, the
+    // password in plain text, AppKey = base64 of the random key, ForceRefreshAccessToken)
+    // is Base64-encoded, then RSA-encrypted with the e-invoice public key (PKCS#1 v1.5,
+    // as in NIC's sample code: "RSA/ECB/PKCS1PADDING"), and the Base64 of that goes
+    // out as the single field "Data". The password is NOT hashed.
+    const credentials = Buffer.from(
+      JSON.stringify({
+        UserName: this.config.username,
+        Password: this.config.password,
+        AppKey: this.appKey.toString("base64"),
+        ForceRefreshAccessToken: false,
+      }),
+      "utf8",
     ).toString("base64");
 
-    const body = {
-      Data: {
-        UserName: this.config.username,
-        Password: createHash("sha256").update(this.config.password).digest("base64"),
-        AppKey: encryptedAppKey,
-        ForceRefreshAccessToken: false,
-      },
-    };
+    let encryptedCredentials: string;
+    try {
+      encryptedCredentials = publicEncrypt(
+        { key: publicKey, padding: constants.RSA_PKCS1_PADDING },
+        Buffer.from(credentials, "utf8"),
+      ).toString("base64");
+    } catch {
+      // Too much data for the key size means this is not the 2048-bit RSA key NIC issues.
+      throw new IRPNotConfiguredError("the key cannot encrypt the sign-in request; an RSA key of 2048 bits or more is needed");
+    }
+
+    const body = { Data: encryptedCredentials };
 
     await globalRateLimiter.throttle();
 
-    const response = await fetch(`${this.baseUrl}/eivital/v1.04/auth`, {
+    const response = await irpFetch(`${this.baseUrl}/eivital/v1.04/auth`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -313,7 +348,7 @@ export class IRPClient {
 
     const result = await response.json() as IRPAuthResponse;
 
-    if (result.Status !== "1" || !result.Data) {
+    if (!irpSucceeded(result.Status) || !result.Data) {
       const errMsg = result.ErrorDetails?.[0]?.ErrorMessage ?? "Authentication failed";
       throw new IRPError(errMsg, "AUTH_FAILED");
     }
@@ -367,7 +402,7 @@ export class IRPClient {
       body = JSON.stringify({ Data: encrypted });
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await irpFetch(`${this.baseUrl}${path}`, {
       method,
       headers,
       ...(method !== "GET" && { body }),
@@ -382,9 +417,9 @@ export class IRPClient {
       );
     }
 
-    const result = await response.json() as { Status: string; Data?: string; ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }> };
+    const result = await response.json() as { Status: number | string; Data?: string; ErrorDetails?: Array<{ ErrorCode: string; ErrorMessage: string }> };
 
-    if (result.Status !== "1" || !result.Data) {
+    if (!irpSucceeded(result.Status) || !result.Data) {
       const errCode = result.ErrorDetails?.[0]?.ErrorCode ?? "UNKNOWN";
       const errMsg = result.ErrorDetails?.[0]?.ErrorMessage ?? "IRP API error";
       throw new IRPError(errMsg, errCode);
@@ -452,6 +487,21 @@ export class IRPClient {
       "GET",
       `/eicore/v1.03/Invoice/irn/${irn}`,
     );
+  }
+
+  /**
+   * Does the IRP itself say this IRN is cancelled? Used to recover when a cancel
+   * request may have succeeded without us seeing the answer (timeout, crash,
+   * double click). Any failure to find out counts as "not cancelled", so the
+   * caller's original error stands.
+   */
+  async isIRNCancelled(irn: string): Promise<boolean> {
+    try {
+      const details = await this.getIRNDetails(irn);
+      return details?.Status === "CNL";
+    } catch {
+      return false;
+    }
   }
 }
 

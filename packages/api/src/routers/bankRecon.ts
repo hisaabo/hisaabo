@@ -11,7 +11,7 @@
  * Permission checks use requireCan() from @casl-based permissions.
  */
 
-import { eq, and, sql, desc, isNull, or, ilike, asc } from "drizzle-orm";
+import { eq, ne, gte, lte, and, sql, desc, isNull, or, ilike, asc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -44,6 +44,7 @@ import {
   parseStatementLines,
   type ColumnMapping,
 } from "../lib/csv-parser.js";
+import { dedupWindow, splitDuplicateLines } from "../lib/bank-statement-dedup.js";
 import {
   matchStatementLines,
   applyCategorizationRules,
@@ -58,6 +59,9 @@ import {
 } from "../lib/bank-templates/index.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Most skipped duplicate lines confirmMapping lists back (the count is always complete). */
+const MAX_DUPLICATES_RETURNED = 500;
 
 function toColumnMapping(raw: z.infer<typeof bankReconColumnMappingSchema>): ColumnMapping {
   return {
@@ -190,6 +194,12 @@ export const bankReconRouter = router({
     .input(confirmBankMappingSchema.extend({
       csvContent: z.string().min(1).max(10_000_000),
       templateId: z.string().uuid().optional(),
+      // Skip lines already imported from another statement of this bank account
+      // (same day, debit, credit and reference/narration). Opt-in: clients that
+      // predate this flag (0.10.0 web/desktop) never send it and must keep
+      // importing every line rather than silently losing some. The 0.10.1 web
+      // app sends it explicitly (its checkbox is on by default).
+      skipDuplicates: z.boolean().default(false),
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "BankReconciliation");
@@ -248,14 +258,67 @@ export const bankReconRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No valid transaction rows found with this mapping" });
       }
 
-      // Dedup check: look for lines with same date/debit/credit/reference in this business
-      // We do a soft check — we insert all but flag dupes with a note in rawData
-      const _dedupChecks = parsedLines.map((l) => ({
-        date: l.transactionDate,
-        debit: l.debit,
-        credit: l.credit,
-        ref: l.referenceNumber ?? null,
-      }));
+      // Duplicate detection (overlapping statements, accidental re-uploads): a line
+      // is a duplicate when a *different* import of the *same bank account* already
+      // has the same day/debit/credit/reference (narration when there is no
+      // reference). One query for the statement's date window (served by
+      // bsl_date_idx / bsl_dedup_idx, business-scoped); comparison happens in
+      // memory. This import's own old lines are excluded: a re-confirm deletes
+      // and re-inserts them below, so they must not count as duplicates.
+      let newLines = parsedLines;
+      let duplicatesSkipped = 0;
+      // What was skipped, so the user can review it (no schema change: returned
+      // once, not stored). Capped; `duplicatesSkipped` is always the full count.
+      const duplicates: Array<{
+        lineNumber: number;
+        transactionDate: Date;
+        debit: string;
+        credit: string;
+        referenceNumber: string | null;
+        narration: string;
+        existingImportId: string;
+        existingImportFileName: string;
+      }> = [];
+      const dedupRange = input.skipDuplicates ? dedupWindow(parsedLines) : null;
+      if (dedupRange) {
+        const existingLines = await ctx.db
+          .select({
+            transactionDate: bankStatementLines.transactionDate,
+            debit: bankStatementLines.debit,
+            credit: bankStatementLines.credit,
+            referenceNumber: bankStatementLines.referenceNumber,
+            narration: bankStatementLines.narration,
+            importId: bankStatementLines.importId,
+            importFileName: bankStatementImports.fileName,
+          })
+          .from(bankStatementLines)
+          .innerJoin(bankStatementImports, eq(bankStatementImports.id, bankStatementLines.importId))
+          .where(and(
+            eq(bankStatementLines.businessId, ctx.businessId),
+            eq(bankStatementImports.businessId, ctx.businessId),
+            eq(bankStatementImports.bankAccountId, importRecord.bankAccountId),
+            ne(bankStatementLines.importId, input.importId),
+            gte(bankStatementLines.transactionDate, dedupRange.from),
+            lte(bankStatementLines.transactionDate, dedupRange.to),
+          ))
+          // Earliest import first, so which import "holds" a line is stable.
+          .orderBy(asc(bankStatementImports.createdAt), asc(bankStatementLines.lineNumber));
+        const split = splitDuplicateLines(parsedLines, existingLines);
+        newLines = split.fresh;
+        duplicatesSkipped = split.duplicates.length;
+        for (const { line, existing } of split.duplicates.slice(0, MAX_DUPLICATES_RETURNED)) {
+          duplicates.push({
+            lineNumber: line.lineNumber,
+            transactionDate: line.transactionDate,
+            debit: line.debit,
+            credit: line.credit,
+            referenceNumber: line.referenceNumber ?? null,
+            narration: line.narration,
+            existingImportId: existing.importId,
+            existingImportFileName: existing.importFileName,
+          });
+        }
+      }
 
       // Fetch categorization rules for auto-categorization
       const rules = await ctx.db
@@ -336,9 +399,9 @@ export const bankReconRouter = router({
           )),
       ]);
 
-      // Run matching
+      // Run matching (duplicates are not imported, so they are not matched either)
       const matchResults = matchStatementLines(
-        parsedLines,
+        newLines,
         dbPayments,
         dbExpenses,
         dbBankTxns,
@@ -355,7 +418,7 @@ export const bankReconRouter = router({
 
       // Insert all parsed lines with match results
       let matchedCount = 0;
-      const lineInserts = parsedLines.map((line) => {
+      const lineInserts = newLines.map((line) => {
         const match = matchByLine.get(line.lineNumber);
         const isMatched = match && match.matchedId !== null;
         if (isMatched) matchedCount++;
@@ -404,9 +467,9 @@ export const bankReconRouter = router({
           columnMapping: input.columnMapping,
           templateId: resolvedTemplateId,
           templateVersion: resolvedTemplateVersion,
-          totalLines: parsedLines.length,
+          totalLines: newLines.length,
           matchedLines: matchedCount,
-          unmatchedLines: parsedLines.length - matchedCount,
+          unmatchedLines: newLines.length - matchedCount,
           statementStartDate: statementStart,
           statementEndDate: statementEnd,
           closingBalance: closingBalance ?? null,
@@ -416,9 +479,12 @@ export const bankReconRouter = router({
 
       return {
         importId: input.importId,
-        totalLines: parsedLines.length,
+        // Lines actually imported; the file held totalLines + duplicatesSkipped.
+        totalLines: newLines.length,
         matchedLines: matchedCount,
-        unmatchedLines: parsedLines.length - matchedCount,
+        unmatchedLines: newLines.length - matchedCount,
+        duplicatesSkipped,
+        duplicates,
       };
     }),
 

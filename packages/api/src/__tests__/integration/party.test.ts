@@ -728,10 +728,10 @@ describe("party.getById — balance with CN/SR deductions", () => {
       { status: "sent", type: "purchase", documentType: "invoice" },
     );
 
-    // Before PR: balance = 600
+    // Before PR: balance = -600 (signed, positive = they owe you, negative = you owe them)
     const beforeResult = await callerRamesh.party.getById({ id: supplier.id });
     expect(beforeResult).not.toBeNull();
-    expect(parseFloat(beforeResult!.balance)).toBeCloseTo(600, 1);
+    expect(parseFloat(beforeResult!.balance)).toBeCloseTo(-600, 1);
 
     // Issue purchase return for ₹200
     await callerRamesh.purchaseReturn.create({
@@ -751,10 +751,10 @@ describe("party.getById — balance with CN/SR deductions", () => {
       ],
     });
 
-    // Balance: 600 - 200 = 400
+    // Balance: -600 + 200 = -400 (the return reduces what we owe)
     const afterResult = await callerRamesh.party.getById({ id: supplier.id });
     expect(afterResult).not.toBeNull();
-    expect(parseFloat(afterResult!.balance)).toBeCloseTo(400, 1);
+    expect(parseFloat(afterResult!.balance)).toBeCloseTo(-400, 1);
   });
 
   it("combined CN+SR correctly reduces outstanding", async () => {

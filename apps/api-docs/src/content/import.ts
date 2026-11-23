@@ -14,7 +14,7 @@ export const importEndpoints: EndpointGroup = {
       auth: "business",
       requiredRole: "admin",
       input: [
-        { name: "source", type: "string", required: false, description: "Import source adapter to use for field transformation", default: "mybillbook" },
+        { name: "source", type: "string", required: false, description: "Import source adapter to use for field transformation. Registered adapters: `mybillbook` (raw myBillBook export columns) and `hisaabo` (canonical Hisaabo fields; used by the CLI and MCP). Any other value is rejected with BAD_REQUEST.", default: "mybillbook" },
         { name: "parties", type: "array", required: true, description: "Array of party objects to import. Each object has: name (required), type, phone, email, gstin, pan, openingBalance, billingAddress, shippingAddress, city, state, pincode." },
       ],
       output: {
@@ -98,7 +98,7 @@ result = resp.json()["result"]["data"]["json"]`,
       auth: "business",
       requiredRole: "admin",
       input: [
-        { name: "source", type: "string", required: false, description: "Import source adapter", default: "mybillbook" },
+        { name: "source", type: "string", required: false, description: "Import source adapter. Registered adapters: `mybillbook` (raw myBillBook export columns) and `hisaabo` (canonical Hisaabo fields; used by the CLI and MCP). Any other value is rejected with BAD_REQUEST.", default: "mybillbook" },
         { name: "items", type: "array", required: true, description: "Array of item objects. Each has: name (required), itemType, salePrice, purchasePrice, taxPercent, hsn, unit, stockQuantity, sku, category." },
       ],
       output: {
@@ -183,7 +183,7 @@ result = resp.json()["result"]["data"]["json"]`,
       auth: "business",
       requiredRole: "admin",
       input: [
-        { name: "source", type: "string", required: false, description: "Import source adapter", default: "mybillbook" },
+        { name: "source", type: "string", required: false, description: "Import source adapter. Registered adapters: `mybillbook` (raw myBillBook export columns) and `hisaabo` (canonical Hisaabo fields; used by the CLI and MCP). Any other value is rejected with BAD_REQUEST.", default: "mybillbook" },
         { name: "autoCreatePayments", type: "boolean", required: false, description: "Automatically create payment records for invoices with amountPaid > 0", default: "false" },
         { name: "defaultPaymentMode", type: "enum", required: false, description: "Default payment mode for auto-created payments", default: "cash", enumValues: ["cash", "bank", "upi", "cheque", "other"] },
         { name: "invoices", type: "array", required: true, description: "Array of invoice objects with line items" },
@@ -294,7 +294,7 @@ result = resp.json()["result"]["data"]["json"]`,
       auth: "business",
       requiredRole: "admin",
       input: [
-        { name: "source", type: "string", required: false, description: "Import source adapter", default: "mybillbook" },
+        { name: "source", type: "string", required: false, description: "Import source adapter. Registered adapters: `mybillbook` (raw myBillBook export columns) and `hisaabo` (canonical Hisaabo fields; used by the CLI and MCP). Any other value is rejected with BAD_REQUEST.", default: "mybillbook" },
         { name: "paidInvoiceNumbers", type: "string[]", required: false, description: "Invoice numbers that were marked 'Paid' in the source system. After allocation, any still without full payment get auto-payments.", default: "[]" },
         { name: "payments", type: "array", required: true, description: "Array of payment objects. Each has: paymentDate (required), partyName (required), amount (required), mode, paymentNumber, referenceNumber, notes, invoiceNumbers." },
       ],

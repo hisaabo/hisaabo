@@ -461,6 +461,7 @@ Create a sale or purchase invoice.
   notes?: string;
   dueDate?: string;
   deliveryMethod?: "self_pickup" | "hand_delivery" | "courier" | "bus" | "transport" | "post";
+  update_item_prices?: boolean; // default false
 }
 ```
 
@@ -473,8 +474,24 @@ Create a sale or purchase invoice.
   taxAmount: string;
   status: "draft" | "sent" | "paid" | "overdue";
   pdfUrl: string;
+  itemPriceUpdate?: ItemPriceUpdate; // only when update_item_prices was true
 }
 ```
+
+**Rates are tax-exclusive.** `unit_price` is the taxable rate and GST is added on top. If the linked item's sale price includes GST (`item_get` returns `taxInclusive: true`), send the price without the GST: ₹118.00 at 18% is `"100.00"`, or the customer is taxed twice. Purchase prices are always tax-exclusive.
+
+**`update_item_prices: true`** also updates the saved price of every linked item (`item_id`) whose `unit_price` differs from the item's current price: the selling price on a sale, the purchase price on a purchase. Use it when the new price is the new list price; leave it off for a one-off or negotiated price. It is a second write after the invoice is saved, so the invoice exists whatever happens to it, and the result says what happened:
+
+```typescript
+type ItemPriceUpdate = {
+  status: "updated" | "nothing_to_update" | "not_applicable" | "failed";
+  updated: Array<{ label: string; side: "sale" | "purchase"; oldPrice: string | null; newPrice: string }>;
+  skipped: Array<{ itemName: string; reason: string }>; // lines it could not match (a unit renamed since, no variant chosen)
+  message?: string; // why nothing was updated (no permission to edit items, quotations and notes never update prices, ...)
+};
+```
+
+The key's role needs permission to edit items (owner, admin, seller manager); the server refuses anything else and the invoice is still saved. It is applied by `item.updatePricesFromDocument` and recorded in the audit log with source `mcp`, the old and new price and the invoice number. A line's discount is never part of the price: only `unit_price` is compared.
 
 #### `invoice_get`
 
@@ -505,6 +522,7 @@ Edit an existing invoice — update line items, dates, notes, or discount. Only 
   invoice_discount?: string;
   invoice_discount_type?: "amount" | "percent";
   round_off?: string;
+  update_item_prices?: boolean; // only with line_items; same as invoice_create, except that a line resent at the rate it already had on the saved invoice is not a price change
 }
 ```
 
@@ -1462,55 +1480,63 @@ Get all active targets assigned to the currently authenticated user.
 
 ### Import
 
+All four import tools need admin mode and `confirm: true`, take at most 500 records per call, and accept an optional `source` that selects the server's import adapter. Leave it at its default, `hisaabo`: the tools send Hisaabo's canonical fields. The server only has `hisaabo` and `mybillbook` adapters, so any other value (for example `tally` or `excel`, which earlier docs suggested) is rejected with a message listing the supported sources. Data exported from Tally, Vyapar or a spreadsheet has to be mapped to the fields below first.
+
 #### `import_parties`
 
-Bulk-import parties from a CSV or JSON payload.
+Bulk-import parties. Duplicates (same name, case-insensitive) are skipped, never overwritten.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string; // JSON array string or CSV content
-  skipDuplicates?: boolean; // default true
+  source?: "hisaabo";          // default
+  parties: Array<{
+    name: string;
+    type?: "customer" | "supplier";   // default "customer"
+    phone?: string; email?: string; gstin?: string; pan?: string;
+    opening_balance?: string;         // decimal string
+    billing_address?: string; shipping_address?: string;
+    city?: string; state?: string; pincode?: string;
+  }>;
 }
 ```
 
 #### `import_items`
 
-Bulk-import items from a CSV or JSON payload.
+Bulk-import items or services. Duplicates (same name) are skipped; stock always starts at 0.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string;
-  skipDuplicates?: boolean;
+  source?: "hisaabo";
+  items: Array<{ name: string; item_type?: "product" | "service"; sale_price?: string; purchase_price?: string; /* ... */ }>;
 }
 ```
 
 #### `import_invoices`
 
-Bulk-import historical invoices. Useful for migrating from Tally, Vyapar, or spreadsheets.
+Bulk-import historical invoices with optional line items. Parties must already exist; duplicate invoice numbers are skipped.
 
 **Input:**
 ```typescript
 {
-  format: "json";
-  data: string; // JSON array of invoice objects
-  createMissingParties?: boolean;
-  createMissingItems?: boolean;
+  source?: "hisaabo";
+  auto_create_payments?: boolean;
+  default_payment_mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  invoices: Array<{ invoice_number: string; invoice_date: string; party_name: string; total_amount: string; /* ... */ }>;
 }
 ```
 
 #### `import_payments`
 
-Bulk-import historical payment records.
+Bulk-import historical payment records. Parties and invoices must already exist.
 
 **Input:**
 ```typescript
 {
-  format: "json" | "csv";
-  data: string;
+  source?: "hisaabo";
+  paid_invoice_numbers?: string[];
+  payments: Array<{ party_name: string; amount: string; payment_date: string; mode?: string; /* ... */ }>;
 }
 ```
 
@@ -1790,14 +1816,14 @@ These tools are registered like the others and follow the same safety modes; the
 | `report_profit_and_loss`, `report_balance_sheet`, `report_trial_balance`, `report_cash_flow_statement` | Financial statements for a period or date |
 | `report_comparative_profit_and_loss`, `report_comparative_balance_sheet`, `report_comparative_trial_balance` | The same statements for two periods or dates side by side |
 | `report_general_ledger` | General ledger for one account |
-| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true` |
+| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true`; it posts a reversing entry and keeps both on record (there is no way to delete a journal entry) |
 | `gst_gstr9` | GSTR-9 annual return summary for a financial year |
 | `gstr2b_uploads`, `gstr2b_records`, `gstr2b_summary` | GSTR-2B uploads, records and reconciliation summary by return period |
 | `gstr2b_missing_in_2b`, `gstr2b_missing_in_books` | Purchase invoices missing from GSTR-2B, and GSTR-2B invoices missing from your books |
 | `itc_dashboard`, `itc_ledger`, `itc_aging_alerts`, `itc_gstr3b_table4` | Input Tax Credit summary, ledger, reversal-risk alerts and the GSTR-3B Table 4 breakdown |
 | `itc_mark_blocked`, `itc_mark_eligible` | Mark ITC on a purchase invoice as blocked or eligible |
 | `einvoice_status`, `einvoice_dashboard` | E-invoice status for an invoice, and the generation summary |
-| `einvoice_generate`, `einvoice_cancel`, `einvoice_retry` | Generate, cancel or retry an e-invoice on the IRP. Need `confirm: true` |
+| `einvoice_generate`, `einvoice_cancel`, `einvoice_retry` | Generate, cancel or retry an e-invoice on the IRP. Need `confirm: true`. `einvoice_cancel` also cancels the invoice (stock and returns are adjusted; issue a new invoice if the customer still needs billing) and is refused while payments are allocated to it |
 | `eway_bill_dashboard`, `eway_bill_expiring` | E-way bill summary, and bills expiring within 24 hours |
 | `eway_bill_generate`, `eway_bill_cancel`, `eway_bill_update_vehicle` | Generate, cancel or update the vehicle on an e-way bill. Need `confirm: true` |
 | `bank_account_gateway_config`, `bank_account_update_gateway` | Read or change a payment gateway account's charge configuration (the change needs `confirm: true`) |
@@ -1839,7 +1865,7 @@ MCP resources are read-only data snapshots that AI agents can load into their co
 
 **Treat data as untrusted** — Names, notes and store orders can be written by other people. The server fences every result as untrusted data and requires `confirm: true` for destructive tools; keep a human in the loop for anything the agent proposes to delete, void, merge, import or file.
 
-**Audit log** — All tool calls made through the MCP server are recorded in Hisaabo's audit log under `x-client-type: mcp`. You can review them under **Settings > Audit Log**.
+**Audit log** — Every change made through the MCP server is recorded in Hisaabo's audit log, labelled *via MCP server* (the `x-client-type: mcp` header the server sends is stored as the entry's `source`). You can review them under **Settings > Account > Activity Log**. The label is attribution, not authorisation: a client chooses its own headers, so permissions never depend on it.
 
 ---
 

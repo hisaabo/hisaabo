@@ -1,3 +1,5 @@
+import { businessYearMonth } from "@hisaabo/shared";
+import { usePersistedTab } from "@/hooks/usePersistedTab";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -27,7 +29,8 @@ const months = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-type ITCTab = "dashboard" | "ledger" | "aging" | "utilization" | "gstr3b-t4";
+const ITC_TABS = ["dashboard", "ledger", "aging", "utilization", "gstr3b-t4"] as const;
+type ITCTab = (typeof ITC_TABS)[number];
 
 const itcBlockReasons = [
   "motor_vehicle", "food_beverage", "personal", "membership",
@@ -102,19 +105,12 @@ function urgencyBadgeColor(urgency: string): string {
 // ── Main Page ─────────────────────────────────────────────────
 
 function ITCPage() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [activeTab, setActiveTabRaw] = useState<ITCTab>(
-    () => (localStorage.getItem("hisaabo_itc_tab") as ITCTab) || "dashboard",
-  );
+  const now = businessYearMonth(new Date());
+  const [year, setYear] = useState(now.year);
+  const [month, setMonth] = useState(now.month);
+  const [activeTab, setActiveTab] = usePersistedTab<ITCTab>("hisaabo_itc_tab", ITC_TABS, "dashboard");
 
-  const setActiveTab = (tab: ITCTab) => {
-    setActiveTabRaw(tab);
-    localStorage.setItem("hisaabo_itc_tab", tab);
-  };
-
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+  const years = Array.from({ length: 5 }, (_, i) => now.year - i);
   const returnPeriod = returnPeriodString(year, month);
 
   const tabs: Array<{ value: ITCTab; label: string }> = [

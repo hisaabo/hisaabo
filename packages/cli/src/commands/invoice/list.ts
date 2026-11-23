@@ -5,7 +5,7 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, outputIds,
   paginationFooter, EXIT, getWidthTier, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate, formatStatus, currentFY, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
+import { formatAmount, formatDate, formatStatus, currentFY, fyStart, todayISO, todayParts, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 
 interface ListOpts {
   json?: boolean;
@@ -36,9 +36,7 @@ export async function invoiceListCommand(opts: ListOpts): Promise<void> {
   if (opts.thisFy) { from = fyStart(); to = todayISO(); }
   else if (opts.thisMonth) { from = monthStart(); to = monthEnd(); }
   else if (opts.thisQuarter) {
-    const now = new Date();
-    const month = now.getMonth() + 1;
-    const year = now.getFullYear();
+    const { month, year } = todayParts(); // today's month in the business zone (IST by default)
     if (month >= 4 && month <= 6) { from = `${year}-04-01`; to = `${year}-06-30`; }
     else if (month >= 7 && month <= 9) { from = `${year}-07-01`; to = `${year}-09-30`; }
     else if (month >= 10 && month <= 12) { from = `${year}-10-01`; to = `${year}-12-31`; }

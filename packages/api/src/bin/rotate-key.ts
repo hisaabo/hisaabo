@@ -22,7 +22,7 @@
 import { config } from "dotenv";
 config({ path: "../../.env" });
 
-import { controlDb, tenants, getTenantDb } from "@hisaabo/db";
+import { controlDb, tenants, withDedicatedTenantDb, type TenantDatabase } from "@hisaabo/db";
 import { reEncryptField, getKeyVersion } from "@hisaabo/db";
 import { eq } from "drizzle-orm";
 
@@ -112,14 +112,23 @@ async function rotateControlDb(): Promise<RotationStats> {
 async function rotateTenantDb(tenantId: string, tenantSlug: string): Promise<RotationStats> {
   const stats = newStats();
 
-  let db;
+  // One-connection client per tenant, ended afterwards: the run visits every
+  // tenant and must not cycle them all through the shared pool cache.
+  let connected = false;
   try {
-    db = await getTenantDb(tenantId);
+    return await withDedicatedTenantDb(tenantId, async (db) => {
+      connected = true;
+      return rotateTenantDbWith(db, stats);
+    });
   } catch (err) {
+    if (connected) throw err; // a failure while processing is not a "cannot connect"
     log(`  SKIP tenant ${tenantSlug}: cannot connect (${err instanceof Error ? err.message : String(err)})`);
     stats.errors++;
     return stats;
   }
+}
+
+async function rotateTenantDbWith(db: TenantDatabase, stats: RotationStats): Promise<RotationStats> {
 
   // Dynamic imports for tenant schema tables
   const { eInvoiceConfigs, businesses } = await import("@hisaabo/db");

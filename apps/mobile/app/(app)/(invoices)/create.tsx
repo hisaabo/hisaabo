@@ -19,7 +19,10 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
-import { calcInvoiceTotals } from "@hisaabo/shared";
+import {
+  calcTotalsWithShelfTieOut, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown,
+  type PriceUpdateProposal,
+} from "@hisaabo/shared";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -28,6 +31,8 @@ import { DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
 import { useCan, useCanCreateDocument } from "../../../src/hooks/useCan";
+import { usePricePropagation } from "../../../src/hooks/usePricePropagation";
+import { pickerDateToISO } from "../../../src/lib/business-day";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -55,6 +60,20 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  /**
+   * The rate the Rate field held when the line was picked or loaded. A rate that
+   * still equals it was not edited, so it never proposes a catalog price update.
+   */
+  originalUnitPrice?: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax", sale side) when the Rate was
+   * derived from it. The Rate is always the tax-exclusive rate (the bill adds the GST on top), so
+   * a saved ₹118 incl. 18% starts the line at ₹100.00. Editing the GST % re-derives the Rate from
+   * it; typing a Rate yourself clears it. See shared/inclusive-price.ts.
+   */
+  inclusivePrice?: string;
+  /** The picked item's sale price includes tax: units / variants picked later are converted the same way. */
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -748,6 +767,7 @@ interface ItemPickerProps {
     taxPercent: string;
     itemMode?: string | null;
     unitVariants?: UnitVariant[] | null;
+    taxInclusive?: boolean | null;
   }) => void;
   onClose: () => void;
 }
@@ -1050,6 +1070,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
                         taxPercent: item.taxPercent,
                         itemMode: item.itemMode,
                         unitVariants: (item.unitVariants as UnitVariant[] | null) ?? null,
+                        taxInclusive: item.taxInclusive,
                       });
                       onClose();
                     }}
@@ -1407,6 +1428,16 @@ function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem,
         </View>
       </View>
 
+      {/* The saved price included GST: show how the Rate was derived. */}
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={styles.fieldLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}${hint.ties ? "" : ` = ${formatCurrency(hint.total)}`}`}
+          </Text>
+        ) : null;
+      })()}
+
       {/* Row 2b: GST % + Disc % */}
       <View style={[styles.lineItemFieldsRow, { marginBottom: 10 }]}>
         <View style={styles.lineFieldHalf}>
@@ -1662,8 +1693,17 @@ function InvoiceCreateForm() {
 
   const utils = trpc.useUtils();
 
+  // "Update saved prices?": what the user accepted for this save. It is written
+  // only after the bill itself saved, and a failure there is a toast, never an
+  // error for the bill.
+  const pricing = usePricePropagation("invoice", invoiceType);
+  const acceptedPricesRef = useRef<PriceUpdateProposal[]>([]);
+
   const createMutation = trpc.invoice.create.useMutation({
     onSuccess: (data) => {
+      const accepted = acceptedPricesRef.current;
+      acceptedPricesRef.current = [];
+      void pricing.apply(data.id, accepted);
       // Invalidate lists and dashboards so the new invoice shows up immediately
       // when the user navigates back. Mirrors web DocumentCreator behavior.
       utils.invoice.list.invalidate();
@@ -1673,6 +1713,8 @@ function InvoiceCreateForm() {
       router.replace(`/(invoices)/${data.id}` as never);
     },
     onError: (err) => {
+      // The bill did not save, so the prices that were to follow it must not either.
+      acceptedPricesRef.current = [];
       Alert.alert("Error", err.message, [
         {
           text: "Retry",
@@ -1690,21 +1732,24 @@ function InvoiceCreateForm() {
     if (validItems.length === 0) {
       return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
     }
-    return calcInvoiceTotals({
-      lineItems: validItems.map((li) => ({
+    // A tax-inclusive price (₹10.00 incl. 18%) bills at 9.99 on a tax-exclusive line: the round-off brings the
+    // invoice back to its shelf total (this screen has no round-off field of its own).
+    return calcTotalsWithShelfTieOut(
+      validItems.map((li) => ({
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        inclusivePrice: li.inclusivePrice,
       })),
-    });
+    );
   }, [lineItems]);
 
   const handleLineChange = useCallback(
     (index: number, field: keyof LineItem, value: string) => {
       setLineItems((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], [field]: value };
+        next[index] = applyLineEdit(next[index]!, field, value);
         return next;
       });
     },
@@ -1732,18 +1777,25 @@ function InvoiceCreateForm() {
       taxPercent: string;
       itemMode?: string | null;
       unitVariants?: UnitVariant[] | null;
+      taxInclusive?: boolean | null;
     }) => {
       const price =
         invoiceType === "purchase"
           ? item.purchasePrice ?? item.salePrice ?? "0"
           : item.salePrice ?? "0";
+      // A saved price that includes GST becomes the tax-exclusive Rate the bill needs (else it is taxed twice).
+      const priceFields = lineFieldsFromItemPrice({
+        price,
+        inclusive: priceIsTaxInclusive(item, invoiceType),
+        taxPercent: item.taxPercent,
+      });
       setLineItems((prev) => {
         const next = [...prev];
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
           itemName: item.name,
-          unitPrice: price,
+          ...priceFields,
           taxPercent: item.taxPercent,
           // G-08: store item mode so sub-selectors can render; clear prior selections
           itemMode: (item.itemMode as LineItem["itemMode"]) ?? "simple",
@@ -1776,7 +1828,11 @@ function InvoiceCreateForm() {
           ...li,
           variantId: variant.id,
           itemName: parentItem ? `${parentItem.name} - ${label}` : label,
-          unitPrice: variantPrice ?? "0",
+          ...lineFieldsFromItemPrice({
+            price: variantPrice ?? "0",
+            inclusive: li.itemPriceIncludesTax === true,
+            taxPercent: li.taxPercent,
+          }),
         };
         return next;
       });
@@ -1801,7 +1857,7 @@ function InvoiceCreateForm() {
             ...li,
             selectedUnit: undefined,
             conversionFactor: undefined,
-            unitPrice: basePrice,
+            ...lineFieldsFromItemPrice({ price: basePrice, inclusive: li.itemPriceIncludesTax === true, taxPercent: li.taxPercent }),
             itemName: parentItem.name,
           };
           return next;
@@ -1817,7 +1873,7 @@ function InvoiceCreateForm() {
           ...li,
           selectedUnit: uv.unit,
           conversionFactor: String(uv.conversionFactor),
-          unitPrice: unitPrice ?? "0",
+          ...lineFieldsFromItemPrice({ price: unitPrice ?? "0", inclusive: li.itemPriceIncludesTax === true, taxPercent: li.taxPercent }),
           itemName: `${parentItem.name} (${uv.unit})`,
         };
         return next;
@@ -1840,7 +1896,7 @@ function InvoiceCreateForm() {
     [partiesData, invoiceDate]
   );
 
-  const doCreate = useCallback(() => {
+  const doCreate = useCallback(async () => {
     if (!selectedParty) {
       Alert.alert("Validation", "Please select a party.");
       return;
@@ -1862,18 +1918,35 @@ function InvoiceCreateForm() {
       }
     }
 
+    // One question before saving: update the items' saved prices too? Skipped
+    // (no lookup, no sheet) unless the user can update items and edited a rate
+    // on a catalog-linked line.
+    const decision = await pricing.decide(
+      validItems.map((li) => ({
+        itemId: li.itemId,
+        variantId: li.variantId,
+        selectedUnit: li.selectedUnit,
+        conversionFactor: li.conversionFactor,
+        unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
+        originalUnitPrice: li.originalUnitPrice,
+      })),
+    );
+    if (decision.kind === "back") return;
+    acceptedPricesRef.current = decision.accepted;
+
     haptic.success();
     createMutation.mutate({
       partyId: selectedParty.id,
       type: invoiceType,
       documentType: "invoice",
-      invoiceDate: invoiceDate.toISOString(),
-      dueDate: dueDate.toISOString(),
+      invoiceDate: pickerDateToISO(invoiceDate),
+      dueDate: pickerDateToISO(dueDate),
       notes: notes.trim() || undefined,
       additionalCharges: "0",
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
-      roundOff: "0",
+      roundOff: totals.roundOff,
       // Bug B: itemName is the required name snapshot and description is
       // the optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
@@ -1890,7 +1963,7 @@ function InvoiceCreateForm() {
         conversionFactor: li.conversionFactor || undefined,
       })),
     });
-  }, [selectedParty, lineItems, invoiceType, invoiceDate, dueDate, notes, createMutation]);
+  }, [selectedParty, lineItems, invoiceType, invoiceDate, dueDate, notes, createMutation, pricing]);
 
   const handleCreate = useCallback(() => {
     const total = parseFloat(totals.total);
@@ -2061,6 +2134,12 @@ function InvoiceCreateForm() {
                 <Text style={styles.totalValue}>{formatCurrency(totals.taxTotal)}</Text>
               </View>
             )}
+            {parseFloat(totals.roundOff) !== 0 && (
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Round off</Text>
+                <Text style={styles.totalValue}>{formatCurrency(totals.roundOff)}</Text>
+              </View>
+            )}
             <View style={styles.totalDivider} />
             <View style={styles.totalRow}>
               <Text style={styles.totalLabelBold}>Total</Text>
@@ -2075,10 +2154,10 @@ function InvoiceCreateForm() {
         {/* Sticky Create Button */}
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.createBtn, (createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && styles.createBtnDisabled]}
+            style={[styles.createBtn, (createMutation.isPending || pricing.checking || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && styles.createBtnDisabled]}
             onPress={handleCreate}
             activeOpacity={0.85}
-            disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
+            disabled={createMutation.isPending || pricing.checking || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.textPrimary} size="small" />
@@ -2107,6 +2186,9 @@ function InvoiceCreateForm() {
         onSelect={handleItemSelected}
         onClose={() => setShowItemPicker(false)}
       />
+
+      {/* "Update saved prices?" */}
+      {pricing.dialog}
     </SafeAreaView>
   );
 }

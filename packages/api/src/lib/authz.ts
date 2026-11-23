@@ -3,7 +3,8 @@
  * (tRPC middlewares, REST handlers, role gates).
  *
  *   cache        key                    value                    tags                    TTL / max
- *   membership   tenantId:userId        {role, status:"active"}  tenant:T, user:U        60s / 10000
+ *   membership   tenantId:userId        {role, status:"active", webmcpDisabled}
+ *                                                                tenant:T, user:U        60s / 10000
  *   business     tenantId:businessId    {createdByUserId}        tenant:T, business:B    5min / 5000
  *
  * Rules (the "EVER" guarantee):
@@ -16,6 +17,7 @@
  *    cache bus AFTER their write settled (and the DB triggers do the same for
  *    out-of-process writers via NOTIFY).
  *  - The business entry only holds immutable facts (existence + creator);
+ *    where the creator rule applies (multi-org self-hosted only),
  *    "creator is still a member" is evaluated on every call against the
  *    membership cache, so removing the creator denies the very next call.
  */
@@ -24,10 +26,18 @@ import { controlDb, tenants, tenantMembers, businesses, type TenantDatabase } fr
 import { eq, and } from "drizzle-orm";
 import { TtlCache } from "./cache/ttl-cache.js";
 import { cacheBus } from "./cache/bus.js";
+import { creatorRuleApplies } from "./tenant-businesses.js";
 
 export interface Membership {
   role: string;
   status: string;
+  /**
+   * The owner's switch for browser AI agents (tenants.webmcp_disabled). It rides in
+   * this entry because it is a fact about the tenant read on the same path, and it
+   * is dropped by the same `tenant` event: the tenants cache trigger watches
+   * status, plan AND webmcp_disabled (see db/src/cache-triggers.ts).
+   */
+  webmcpDisabled: boolean;
 }
 
 export const membershipCache = new TtlCache<Membership>({ name: "authz.membership", max: 10_000, ttlMs: 60_000 });
@@ -66,7 +76,7 @@ export async function getMembership(tenantId: string, userId: string): Promise<M
     key,
     async () => {
       const [row] = await controlDb
-        .select({ role: tenantMembers.role, status: tenants.status })
+        .select({ role: tenantMembers.role, status: tenants.status, webmcpDisabled: tenants.webmcpDisabled })
         .from(tenantMembers)
         .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
         .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, userId)))
@@ -109,8 +119,12 @@ export async function getActiveMembership(
 }
 
 /**
- * Business belongs to the caller's tenant: it exists in the tenant DB and its
- * creator is (still) a member of `tenantId` (shared-DB self-hosted safety).
+ * Business belongs to the caller's tenant: it exists in the tenant DB and, only
+ * where one database holds several organisations (multi-org self-hosted), its
+ * creator is (still) a member of `tenantId`. On cloud and on a single-org
+ * self-hosted install the database is the tenant boundary, so a business whose
+ * creator was removed stays accessible to the remaining members. See
+ * tenant-businesses.ts (creatorRuleApplies).
  */
 export async function getBusinessAccess(
   db: TenantDatabase,
@@ -131,8 +145,10 @@ export async function getBusinessAccess(
   );
   if (!biz) return { ok: false, reason: "business_not_found" };
   // Re-evaluated every call (cached positive membership, 0 queries when warm).
-  const creator = await getMembership(tenantId, biz.createdByUserId);
-  if (!creator) return { ok: false, reason: "creator_not_member" };
+  if (await creatorRuleApplies()) {
+    const creator = await getMembership(tenantId, biz.createdByUserId);
+    if (!creator) return { ok: false, reason: "creator_not_member" };
+  }
   return { ok: true, createdByUserId: biz.createdByUserId };
 }
 

@@ -25,7 +25,7 @@ You can enter any tax percentage up to 56% (to accommodate cess-inclusive rates)
 
 Hisaabo determines CGST+SGST versus IGST using **2-digit GST state codes**:
 
-- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each = tax / 2)
+- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each line's tax is halved; when a line's tax is an odd number of paise the extra paisa goes to CGST, as in the e-invoice, e.g. ₹0.29 = CGST ₹0.15 + SGST ₹0.14)
 - If the state codes differ → **inter-state** → IGST (= full tax)
 
 ### Example
@@ -63,6 +63,24 @@ If you want your displayed price to already include tax (useful for retail where
 
 This distinction matters for GSTR-1, which requires the taxable value and tax amount separately.
 
+**How it works on a bill.** A bill line is always tax-exclusive: the line's rate is the taxable value and the GST is added on top. When you put a tax-inclusive item on an invoice (web, mobile, POS, or the CLI's default rate) Hisaabo converts the saved price to the tax-exclusive rate, exactly, in whole paise and rounding half up once:
+
+```
+taxable = round(price × 100 / (100 + GST%))      GST = price − taxable
+₹118.00 at 18%  →  ₹100.00 + ₹18.00      (11800 × 100 / 118 = 10000 paise)
+₹99.00  at 18%  →  ₹83.90  + ₹15.10      (9900 × 100 / 118 = 8389.83 → 8390 paise)
+```
+
+The same price on another document type (quotation, proforma, challan, credit note, return) converts the same way. Only the **sale** price can include tax; purchase prices are always tax-exclusive, because you claim input tax credit on the tax shown separately.
+
+**Rounding: a bill can be a paisa off the shelf price.** The rate is rounded to a paisa and the server then takes the GST on that rounded rate, exactly as for every invoice. For many prices the two agree (₹99.00 at 18% is ₹83.90 + ₹15.10 = ₹99.00), but not for all, even for one unit: ₹10.00 at 18% has the rate ₹8.47 and GST ₹1.52, so the line is ₹9.99, and ₹41.00 is ₹34.75 + ₹6.26 = ₹41.01. Across whole-rupee prices from ₹1 to ₹5,000, about 5% of prices at 5% GST, none at 12%, 15% at 18%, 12.5% at 28% and 29% at 40% are a paisa off; with several units the difference can grow (3 × ₹99.00 at 18% is ₹297.01, not ₹297.00; 10 × ₹99.00 is ₹990.02).
+
+Hisaabo shows this instead of hiding it. The note under the line shows what is billed (**₹10.00 incl. GST → ₹8.47 + ₹1.52 = ₹9.99**), and the document's **Round off** is filled in automatically (**+0.01** here) so the customer pays the shelf price, ₹10.00: in the web invoice form, on mobile, and at the POS register (the cart shows a **Round off** line). On the web the same field also floors the total to a whole rupee when your business has that setting on; type your own round-off and it is left alone. The online store prices a tax-inclusive line directly and does not have this: its total is exactly quantity × price (less the discount), and the taxable value and GST are split from it. A per-line "price includes tax" setting that removes the paisa at the source is planned for 0.11.0.
+
+:::note[Bills made before 0.10.1]
+Before 0.10.1 a bill put the saved inclusive price on the line as the taxable rate, so the GST was added twice. Saved bills are not changed; the [upgrade notes](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md#bills-made-from-items-priced-including-tax) include a query that lists them.
+:::
+
 ## GST registration types
 
 ### Regular (GSTIN holder)
@@ -90,7 +108,7 @@ A credit note reduces the customer's outstanding amount. Common uses:
 
 Create a credit note by selecting document type **Credit Note** when creating a document. Link it to the original invoice using the **Reference Document** field.
 
-In GSTR-1, credit notes appear under section CDN (Credit/Debit Notes) with the original invoice number. They reduce your output tax liability.
+In GSTR-1, credit notes appear under section CDN (Credit/Debit Notes) with the original invoice number. GSTR-3B reports the month's output tax net of them, so they reduce your output tax liability.
 
 ### Debit notes
 
@@ -100,7 +118,7 @@ A debit note increases the customer's outstanding amount. Common uses:
 
 Create a debit note by selecting document type **Debit Note**. Like credit notes, link to the original invoice.
 
-In GSTR-1, debit notes appear under CDN and increase your output tax liability.
+In GSTR-1, debit notes appear under CDN and GSTR-3B adds them to your output tax. Only sale-side debit notes count as outward supplies; a debit note you raise against a supplier reduces your input tax credit instead.
 
 ## How GST appears on the PDF
 

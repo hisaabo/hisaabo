@@ -4,7 +4,7 @@
  * Tools registered:
  *   einvoice_dashboard  — e-invoice generation summary
  *   einvoice_generate   — generate e-invoice (get IRN) for an invoice
- *   einvoice_cancel     — cancel a generated e-invoice
+ *   einvoice_cancel     — cancel a generated e-invoice and its invoice
  *   einvoice_retry      — retry a failed e-invoice generation
  *   einvoice_status     — get current e-invoice status for an invoice
  *
@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import { pickedDateToISO, pickedDateToEndISO } from "@hisaabo/shared";
 
 export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient) {
 
@@ -34,9 +35,9 @@ export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient)
     },
     wrapTool(async (input) => {
       const result = await client.eInvoice.dashboard({
-        // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day.
-        fromDate: input.from_date ? `${input.from_date}T00:00:00.000Z` : undefined,
-        toDate: input.to_date ? `${input.to_date}T23:59:59.999Z` : undefined,
+        // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day on the business calendar (IST).
+        fromDate: pickedDateToISO(input.from_date),
+        toDate: pickedDateToEndISO(input.to_date),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -66,7 +67,9 @@ export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient)
   server.tool(
     "einvoice_cancel",
     [
-      "Cancel a generated e-invoice on the IRP.",
+      "Cancel a generated e-invoice (IRN) on the IRP and also cancel the invoice itself: its stock and returns are adjusted and a new invoice must be issued if the customer still needs billing.",
+      "Under GST a cancelled e-invoice cannot be amended, so the cancelled invoice leaves GSTR-1/3B, the ledger and party balances, and the replacement needs a new invoice number.",
+      "Refused before anything is sent to the IRP if payments are allocated to the invoice (remove them first).",
       "E-invoices can only be cancelled within 24 hours of generation.",
       "Cancel reason codes: 1 = Duplicate, 2 = Data Entry Mistake, 3 = Order Cancelled, 4 = Others.",
     ].join(" "),

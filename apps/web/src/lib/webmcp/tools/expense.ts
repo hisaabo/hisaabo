@@ -21,6 +21,7 @@ import {
   str,
   withPaginationMeta,
 } from "./shared";
+import { day, rupees } from "./summary";
 
 const PAYMENT_MODES = [
   "cash",
@@ -112,15 +113,31 @@ const expenseCreate: WebMcpToolDefinition = {
     },
     ["category", "amount", "mode"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Expense", action: "create" },
-  execute: async (input, ctx) => {
+  summarize: async (input) => {
     const category = str(input.category);
     const amount = str(input.amount);
+    if (!category || !amount) return null;
+    const details: string[] = [];
     const mode = enumOf(input.mode, PAYMENT_MODES);
-    if (!category) throw new Error("category is required — see expense_categories for the names in use.");
-    if (!amount) throw new Error("amount is required, as a decimal string such as '25000.00'.");
-    if (!mode) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+    if (mode) details.push(`Paid by: ${mode.replace(/_/g, " ")}`);
+    if (str(input.description)) details.push(`For: ${str(input.description)}`);
+    const incurred = day(input.expenseDate);
+    if (incurred) details.push(`Date: ${incurred}`);
+    if (str(input.referenceNumber)) details.push(`Reference: ${str(input.referenceNumber)}`);
+    return { headline: `Record an expense of ${rupees(amount)} under “${category}”`, details };
+  },
+  validate: (input) => {
+    if (!str(input.category)) throw new Error("category is required — see expense_categories for the names in use.");
+    if (!str(input.amount)) throw new Error("amount is required, as a decimal string such as '25000.00'.");
+    if (!enumOf(input.mode, PAYMENT_MODES)) throw new Error(`mode must be one of: ${PAYMENT_MODES.join(", ")}.`);
+  },
+  execute: async (input, ctx) => {
+    expenseCreate.validate!(input, ctx);
+    const category = str(input.category)!;
+    const amount = str(input.amount)!;
+    const mode = enumOf(input.mode, PAYMENT_MODES)!;
 
     return await ctx.client.expense.create.mutate({
       category,

@@ -16,6 +16,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ROW_SCHEMAS,
+  auditLogRowSchema,
   businessRowSchema,
   paymentAllocationRowSchema,
   tdsSectionConfigRowSchema,
@@ -272,5 +273,32 @@ describe("TDS export rows", () => {
     });
     expect(parsed.effectiveFrom).toBeInstanceOf(Date);
     expect(parsed.effectiveTo).toBeNull();
+  });
+});
+
+describe("auditLogRowSchema.source", () => {
+  const row = {
+    id: "11111111-1111-4111-8111-111111111111",
+    businessId: "22222222-2222-4222-8222-222222222222",
+    userId: "33333333-3333-4333-8333-333333333333",
+    action: "party.create",
+    entityType: "party",
+    entityId: null,
+    metadata: null,
+    ipAddress: null,
+    createdAt: "2026-11-22T00:00:00.000Z",
+  };
+
+  it("accepts the two known sources, null, and an export written before the column existed", () => {
+    expect(auditLogRowSchema.safeParse({ ...row, source: "webmcp" }).success).toBe(true);
+    expect(auditLogRowSchema.safeParse({ ...row, source: "mcp" }).success).toBe(true);
+    expect(auditLogRowSchema.safeParse({ ...row, source: null }).success).toBe(true);
+    expect(auditLogRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it("rejects anything else, so an export cannot smuggle arbitrary text into the column", () => {
+    for (const bad of ["cli", "WEBMCP", "<script>", "", "webmcp ", 1]) {
+      expect(auditLogRowSchema.safeParse({ ...row, source: bad }).success, String(bad)).toBe(false);
+    }
   });
 });

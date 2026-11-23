@@ -16,7 +16,7 @@ export const lineItemShape = {
   quantity: z.string().regex(/^\d+(\.\d{1,3})?$/)
     .describe("Quantity as decimal string, e.g. '1.000', '7.500', '100'."),
   unit_price: z.string().regex(/^\d+(\.\d{1,2})?$/)
-    .describe("Price per unit as decimal string, e.g. '250.00', '15000.00'."),
+    .describe("TAX-EXCLUSIVE price per unit as decimal string, e.g. '250.00', '15000.00': GST is added on top using tax_percent. If the linked item's sale price includes GST (item_get returns taxInclusive: true), send the price WITHOUT the GST, e.g. 118.00 at 18% is '100.00', or the customer is taxed twice."),
   tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
     .describe("GST/tax rate percentage as decimal string: '0', '5.00', '12.00', '18.00', '28.00'. Omit to use the linked item's rate (when item_id is set) or the server default of 0."),
   discount_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()

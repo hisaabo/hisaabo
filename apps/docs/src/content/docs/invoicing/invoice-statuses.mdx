@@ -63,10 +63,21 @@ Deleting an invoice (available to Admin users) sets the status to `cancelled` an
 - Do not appear in the default invoice list
 - Do not count in GST reports
 - Do not affect party balances
-- Do not reverse the stock adjustment
+- Have their stock adjustment reversed: items sold on the invoice go back into stock
 
-:::caution[Stock is not reversed on cancellation]
-If you cancel a sale invoice, the stock that was decremented when the invoice was created is **not** automatically restored. If you need to reverse the stock change, create a purchase invoice for the same items (or a sales return document), or manually adjust the stock.
+Cancelling is refused while payments are allocated to the invoice (remove them first) and while the invoice has a live e-invoice (IRN), which has to be cancelled first.
+
+### Cancelling an e-invoice (IRN)
+
+Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and if the customer still needs billing you issue a **new invoice with a new number**. So in Hisaabo, cancelling the IRN (E-Invoicing, **Cancel**) cancels the invoice in the same step:
+
+- The IRN is cancelled on the NIC portal, and the invoice's status becomes `cancelled`. Stock is adjusted like any other cancellation, and the invoice leaves GSTR-1 and GSTR-3B, the ledger and the party balance.
+- It is only possible within 24 hours of generating the IRN, and only for admins.
+- It is refused, before anything is sent to the portal, while payments are allocated to the invoice. Remove or reallocate the payments first, then cancel.
+- If the portal accepts the cancellation but Hisaabo then cannot cancel the invoice (for example a payment was recorded at that very moment), the e-invoice shows **Cancelled** with a warning, and the invoice is still active. On the E-Invoicing dashboard press **Cancel invoice** on that row (after fixing the cause, such as removing the payment) to finish the job. The portal is not contacted again.
+
+:::note[Invoices cancelled at the portal by v0.10.0 or earlier]
+Earlier versions cancelled only the IRN and left the invoice active, so it still counted in your returns. Operators can list them with the query in the v0.10.1 upgrade notes. To fix one, cancel the invoice from its page (or **Cancel invoice** on the E-Invoicing dashboard); this never contacts the portal again.
 :::
 
 ## Status and editing
@@ -97,7 +108,7 @@ Seller Managers can only delete unpaid invoices created within the last 2 hours.
 Change the status manually to `cancelled`. This removes it from the outstanding receivables view. It will still appear in the invoice history but not in active reports. Alternatively, record a payment with mode `other` and amount equal to the outstanding balance, then add a note "Written off".
 
 **Can I restore a cancelled invoice?**
-Change the status back to `draft`, `sent`, or whichever status is appropriate. The invoice data is not deleted (it is a soft delete), so all the line items and party details are intact.
+No. Cancelling is final: its stock was returned and it left your reports, and an invoice with a cancelled e-invoice (IRN) cannot be amended under GST. The data is not deleted, so the line items and party details stay on record; create a new invoice (copy the details) with a new number if you need to bill again.
 
 **Why does the invoice list show "Overdue" for some invoices but the status shows "Sent"?**
 The "Overdue" label in the list view is computed on the fly: any invoice with `status = sent` or `status = partial` and a past due date is visually shown as overdue. The database status field itself is not changed automatically.

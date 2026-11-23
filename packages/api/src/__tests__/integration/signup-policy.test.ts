@@ -252,17 +252,17 @@ describe("sessionToken only for bearer clients", () => {
 
 describe("system.config", () => {
   it("self-hosted: signupOpen only while there are no users, or when ALLOW_OPEN_SIGNUP", async () => {
-    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: true });
+    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: true, webmcpDisabled: false });
     await createUser({ email: email("u") });
-    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: false });
+    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: false, webmcpDisabled: false });
     process.env.ALLOW_OPEN_SIGNUP = "true";
-    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: true });
+    expect(await caller().system.config()).toEqual({ multiTenant: false, signupOpen: true, webmcpDisabled: false });
   });
 
   it("multi-tenant: always open", async () => {
     await createUser({ email: email("u") });
     process.env.MULTI_TENANT = "true";
-    expect(await caller().system.config()).toEqual({ multiTenant: true, signupOpen: true });
+    expect(await caller().system.config()).toEqual({ multiTenant: true, signupOpen: true, webmcpDisabled: false });
   });
 });
 

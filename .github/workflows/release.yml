@@ -1,18 +1,43 @@
 name: Release
 
+# Order of a release (docs/DEPLOYMENT.md, "Release runbook"):
+#   1. changes          the tag must match every version manifest
+#   2. prepare-release  the ONE GitHub release for the tag (draft); every job
+#                       below attaches to it by id and never creates another
+#   3. docker           images built, pushed and cosign-signed (and the
+#                       signatures verified)
+#   4. wait-for-api     the production API runs on a separate server and is
+#                       upgraded by the operator (HISAABO_API_IMAGE pinned to
+#                       the new tag), so this job only POLLS
+#                       <api>/api/version until it reports the tagged version
+#   5. deploy-web / deploy-store / deploy-api-docs, and the CLI and MCP npm
+#      publishes
+#                       need wait-for-api; the Pages deploys run in the
+#                       `production` environment, so its required reviewers
+#                       approve here
+#   6. release-notes    fills in and publishes the release
+# Desktop and Android build in parallel with all of that and only attach assets
+# to the release from step 2.
 on:
   push:
     tags:
       - "v*"
-  # Recovery only: re-run a release whose image push partially failed. Run it
-  # on the tag ref (a branch fails the version check). See `force` in the
-  # docker job.
+  # Recovery only: re-run a release (on the tag ref; a branch fails the version
+  # check). Releases are otherwise started by pushing the tag.
   workflow_dispatch:
     inputs:
       force:
-        description: "Overwrite image tags that already exist for this version (recovery from a partial failure only; releases are otherwise immutable)"
+        description: "Overwrite image tags that already exist for this version (recovery from a partial publish only; releases are otherwise immutable). Without it, a second run reuses the published images after re-verifying their signatures."
         type: boolean
         default: false
+      skip_api_wait:
+        description: "EMERGENCY ONLY: deploy web/store without waiting for the production API to report this version. Frontends then run against whatever API version is live."
+        type: boolean
+        default: false
+      api_wait_timeout_minutes:
+        description: "How long wait-for-api polls before it fails, in minutes. Empty uses the API_WAIT_TIMEOUT_MINUTES repository variable, else 350 (also the cap: GitHub stops a hosted job at 360). Tag pushes always use the variable."
+        type: string
+        default: ""
 
 # Least privilege: read-only by default. Jobs that publish or sign request
 # exactly the extra scopes they need (id-token for npm Trusted Publishing and
@@ -104,6 +129,35 @@ jobs:
               - 'packages/mcp/**'
               - 'packages/shared/**'
 
+  # ── The one GitHub release for this tag ────────────────────────
+  # The ONLY job that creates a release. Desktop, Android and release-notes
+  # attach to / edit it by id. Before this job the desktop matrix (3 parallel
+  # jobs), the Android job and release-notes each created or looked up a draft
+  # on their own, which raced into duplicates and, next to a hand-made
+  # pre-release, failed the notes job for 0.10.0. An existing release for the
+  # tag (draft or published) is reused; two or more fail here, early.
+  prepare-release:
+    name: Prepare GitHub Release
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the draft; list releases (drafts need write access)
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the draft release, or reuse the existing one
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: bash scripts/ensure-release.sh "$REF_NAME"
+
   # ── Docker images (GHCR) ───────────────────────────────────────
   # Runs for EVERY release tag (no paths filter): a version always has images,
   # so `:vX.Y.Z` is never a dangling reference, and every image records the
@@ -111,9 +165,15 @@ jobs:
   #   v0.10.0  0.10.0  0.10  sha-<first 12 chars of the commit>  latest
   # A pre-release (v0.10.0-rc.1) gets only v0.10.0-rc.1, 0.10.0-rc.1 and
   # sha-<12>: never `latest` or the moving X.Y tag.
+  #
+  # Nothing is pushed unless prepare-release succeeded (images are immutable, so
+  # do not publish into a release state that has to be fixed and re-run). This
+  # job succeeding means BOTH images are pushed, signed and their signatures
+  # verified: wait-for-api needs it, so the operator is only asked to upgrade to
+  # an image that is complete.
   docker:
     name: Docker Images
-    needs: changes
+    needs: [changes, prepare-release]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -130,9 +190,11 @@ jobs:
     outputs:
       version: ${{ steps.rel.outputs.version }}
       api_image: ${{ steps.rel.outputs.api_image }}
-      api_digest: ${{ steps.build_api.outputs.digest }}
+      # Freshly built, or (a second run on the tag) the digests of the images
+      # that were already published.
+      api_digest: ${{ steps.build_api.outputs.digest || steps.existing.outputs.api_digest }}
       once_image: ${{ steps.rel.outputs.once_image }}
-      once_digest: ${{ steps.build_once.outputs.digest }}
+      once_digest: ${{ steps.build_once.outputs.digest || steps.existing.outputs.once_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -174,41 +236,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Release tags are immutable: self-hosters pin `:vX.Y.Z` and expect the
-      # same bytes forever. Fail BEFORE anything is pushed if either image
-      # already has this version, unless a maintainer explicitly forces it
-      # (workflow_dispatch input `force`, to recover a half-pushed release).
-      # Only a clear "not found" counts as absent; any other failure (network,
-      # registry error) fails closed, so a blip can never allow an overwrite.
-      # ("denied" means the package does not exist yet, i.e. the first release
-      # of an image; a genuine auth problem fails the push below instead.)
-      - name: Refuse to overwrite an existing release tag
+      # same bytes forever. See scripts/check-existing-images.sh:
+      #   neither image exists -> build, push and sign (below)
+      #   BOTH exist, no force -> reuse: nothing is rebuilt or pushed; the
+      #     existing signatures are verified and their digests flow on, so a
+      #     second run on the same tag (Re-run all jobs, or a dispatch with
+      #     skip_api_wait / api_wait_timeout_minutes) reaches wait-for-api
+      #   one exists, no force -> fail (partial publish)
+      #   force=true           -> re-push, loudly
+      # `force` stays a separate, explicit act: it is never implied by a re-run.
+      - name: Check for already-published release images
+        id: existing
         env:
           API_IMAGE: ${{ steps.rel.outputs.api_image }}
           ONCE_IMAGE: ${{ steps.rel.outputs.once_image }}
           FORCE: ${{ inputs.force }}
-        run: |
-          set -uo pipefail
-          existing=()
-          for image in "$API_IMAGE" "$ONCE_IMAGE"; do
-            ref="${image}:${REF_NAME}"
-            if out=$(docker buildx imagetools inspect "$ref" 2>&1); then
-              existing+=("$ref")
-            elif grep -qiE 'not found|manifest unknown|name unknown|denied|unauthorized' <<<"$out"; then
-              echo "${ref} does not exist yet"
-            else
-              echo "::error title=Cannot verify release tag::Could not determine whether ${ref} exists (failing closed): ${out}"
-              exit 1
-            fi
-          done
-          if [ "${#existing[@]}" -eq 0 ]; then
-            exit 0
-          fi
-          if [ "${FORCE:-}" = "true" ]; then
-            echo "::warning title=Overwriting release tag::force=true: re-pushing ${existing[*]}. Digest pins stay valid; tag pins will move."
-          else
-            echo "::error title=Release image tag already exists::Already published: ${existing[*]}. Release images are immutable: cut a new version instead. To recover a partially failed release, run this workflow on the tag via workflow_dispatch with force=true."
-            exit 1
-          fi
+        run: bash scripts/check-existing-images.sh
 
       # labels and annotations are generated independently, so each override
       # appears in both. source/revision/created/url come from the workflow
@@ -216,6 +259,7 @@ jobs:
       # (instead of the generated NOASSERTION).
       - name: Image metadata (API)
         id: meta_api
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.rel.outputs.api_image }}
@@ -240,6 +284,7 @@ jobs:
 
       - name: Build & push API image
         id: build_api
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -257,6 +302,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=api
 
       - name: Sign API image (cosign, keyless)
+        if: steps.existing.outputs.reuse != 'true'
         env:
           IMAGE: ${{ steps.rel.outputs.api_image }}
           DIGEST: ${{ steps.build_api.outputs.digest }}
@@ -264,6 +310,7 @@ jobs:
 
       - name: Image metadata (ONCE)
         id: meta_once
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.rel.outputs.once_image }}
@@ -288,6 +335,7 @@ jobs:
 
       - name: Build & push ONCE image
         id: build_once
+        if: steps.existing.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -306,55 +354,161 @@ jobs:
           cache-to: type=gha,mode=max,scope=once
 
       - name: Sign ONCE image (cosign, keyless)
+        if: steps.existing.outputs.reuse != 'true'
         env:
           IMAGE: ${{ steps.rel.outputs.once_image }}
           DIGEST: ${{ steps.build_once.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      # The last step of the job, and the gate for wait-for-api: prove each
+      # signature is verifiable, for the images built just now AND for ones a
+      # previous run published (a reused image must be proven, not trusted). The
+      # certificate must name this workflow, at this tag, run on this commit, so
+      # an image from some other run or commit never passes. Retried because the
+      # transparency-log entry can lag the signing by a moment.
+      - name: Verify image signatures
+        env:
+          API_REF: ${{ steps.rel.outputs.api_image }}@${{ steps.build_api.outputs.digest || steps.existing.outputs.api_digest }}
+          ONCE_REF: ${{ steps.rel.outputs.once_image }}@${{ steps.build_once.outputs.digest || steps.existing.outputs.once_digest }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+          REUSED: ${{ steps.existing.outputs.reuse }}
+        run: |
+          set -uo pipefail
+          for ref in "$API_REF" "$ONCE_REF"; do
+            for attempt in 1 2 3 4; do
+              if cosign verify "$ref" \
+                --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/${REF_NAME}$" \
+                --certificate-github-workflow-sha "$RELEASE_SHA" \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null; then
+                echo "Signature verified: ${ref}"
+                continue 2
+              fi
+              echo "Signature for ${ref} not verifiable yet (attempt ${attempt}/4)"
+              sleep 10
+            done
+            if [ "$REUSED" = "true" ]; then
+              echo "::error title=Existing image signature not verifiable::${ref} was published by an earlier run but has no signature from this workflow at ${REF_NAME} (${RELEASE_SHA}). Nothing was rebuilt. Repair it deliberately: run this workflow on the tag via workflow_dispatch with force=true."
+            else
+              echo "::error title=Image signature missing::${ref} is not verifiable with cosign. The API wait must not start for an unverifiable image."
+            fi
+            exit 1
+          done
+
+  # ── Hold until the production API runs this version ────────────
+  # The API is NOT deployed by this workflow: it runs on a separate server
+  # (Docker Compose behind nginx) whose operator pins HISAABO_API_IMAGE to the
+  # new tag by hand. So this job only waits, polling the public GET /api/version
+  # of the production API until it reports the tagged version. That keeps the
+  # web and store frontends (built against the new API) from going live ahead of
+  # it, which is what happened for 0.10.0.
+  #
+  # `needs: docker` (default success() semantics): it starts only after both
+  # images are pushed, signed and verified, i.e. once the operator CAN upgrade.
+  # What waits for it: the Cloudflare Pages deploys AND the CLI and MCP npm
+  # publishes, which are API clients too (npm publishes cannot be undone, and a
+  # CLI/MCP that calls procedures the production API lacks fails in users'
+  # hands).
+  #
+  # This job ALWAYS runs once the images are done (no job-level `if:`), so its
+  # result is meaningful to release-notes: `success` means the API question is
+  # settled, one of three ways, reported in the `result` output:
+  #   ready       production reports this version
+  #   not_needed  nothing in this release (no frontend, npm package or API
+  #               reference) has to wait for the API upgrade (WAIT_NEEDED)
+  #   skipped     the operator ticked skip_api_wait: the job takes its loud
+  #               bypass path and sets skipped_by_operator=true
+  # A job-level `skipped` therefore only ever means an upstream job (the image
+  # build) failed, never a deliberate skip, and the release stays a draft.
+  # A manual redeploy or rollback goes through deploy-web.yml /
+  # deploy-store.yml directly, where the API-version check applies instead.
+  wait-for-api:
+    name: Wait for production API
+    needs: [changes, docker]
+    runs-on: ubuntu-latest
+    # 355 = the script's 350-minute poll cap + checkout/setup. GitHub stops a
+    # hosted job at 360 minutes, so a longer wait is not possible in one job;
+    # re-run the failed jobs after upgrading the API instead.
+    timeout-minutes: 355
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.wait.outputs.result }}
+      skipped_by_operator: ${{ steps.wait.outputs.skipped_by_operator }}
+      observed_version: ${{ steps.wait.outputs.observed_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Wait for the production API to report this version
+        id: wait
+        env:
+          EXPECTED_VERSION: ${{ github.ref_name }}
+          # Override for a fork or a second environment (repository variable).
+          API_URL: ${{ vars.PRODUCTION_API_URL || 'https://api.hisaabo.in' }}
+          TIMEOUT_MINUTES: ${{ inputs.api_wait_timeout_minutes || vars.API_WAIT_TIMEOUT_MINUTES || '350' }}
+          SKIP_API_WAIT: ${{ inputs.skip_api_wait && 'true' || 'false' }}
+          # Only the Pages deploys and the npm publishes wait for the API.
+          WAIT_NEEDED: ${{ (needs.changes.outputs.web == 'true' || needs.changes.outputs.store == 'true' || needs.changes.outputs.api_docs == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.mcp == 'true') && 'true' || 'false' }}
+          API_IMAGE: ${{ needs.docker.outputs.api_image }}
+          API_DIGEST: ${{ needs.docker.outputs.api_digest }}
+        run: bash scripts/wait-for-api-version.sh
+
   # ── Web, store & API docs → Cloudflare Pages production ────────
   # Production goes live only from a tag (pushes to main deploy previews, see
-  # deploy-web.yml / deploy-store.yml / deploy-api-docs.yml). Each waits for
-  # the API image of the same tag, so new frontends never ship ahead of it.
+  # deploy-web.yml / deploy-store.yml / deploy-api-docs.yml), and only after
+  # wait-for-api: the production API reports this version. Each deploy then runs
+  # in the `production` environment, so its required reviewers approve it here.
   deploy-web:
     name: Deploy Web
-    needs: [changes, docker]
-    if: always() && needs.changes.result == 'success' && needs.changes.outputs.web == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    needs: [changes, wait-for-api]
+    if: needs.changes.outputs.web == 'true'
     permissions:
       contents: read
       deployments: write
     uses: ./.github/workflows/deploy-web.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   deploy-store:
     name: Deploy Store
-    needs: [changes, docker]
-    if: always() && needs.changes.result == 'success' && needs.changes.outputs.store == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    needs: [changes, wait-for-api]
+    if: needs.changes.outputs.store == 'true'
     permissions:
       contents: read
       deployments: write
     uses: ./.github/workflows/deploy-store.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   deploy-api-docs:
     name: Deploy API Docs
-    needs: [changes, docker]
-    if: always() && needs.changes.result == 'success' && needs.changes.outputs.api_docs == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    needs: [changes, wait-for-api]
+    if: needs.changes.outputs.api_docs == 'true'
     permissions:
       contents: read
       deployments: write
     uses: ./.github/workflows/deploy-api-docs.yml
     with:
       ref: ${{ github.ref_name }}
+      # skip_api_wait also lifts the deploy-level API version check, or the
+      # emergency bypass would be refused one step later.
+      allow_api_mismatch: ${{ inputs.skip_api_wait == true }}
     secrets: inherit
 
   # ── Desktop (Tauri — Windows, macOS, Linux) ────────────────────
   desktop:
     name: Desktop (${{ matrix.os }})
-    needs: changes
+    needs: [changes, prepare-release]
     if: needs.changes.outputs.desktop == 'true'
     strategy:
       fail-fast: false
@@ -442,32 +596,36 @@ jobs:
           # needed for `tauri dev` but dangerous in a signed release). See
           # apps/desktop/src-tauri/tauri.conf.prod.json.
           args: "--config src-tauri/tauri.conf.prod.json"
-          tagName: ${{ github.ref_name }}
-          releaseName: "Hisaabo ${{ github.ref_name }}"
-          # No releaseBody on purpose: the release-notes job (which runs after
-          # every build job) owns the body. A body set here ended up as the
-          # published body of every release, because release-notes could not
-          # replace it (see the "Publish release" step there). The release
-          # stays a draft until release-notes publishes it.
-          releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Upload to the release prepare-release made (by id) instead of
+          # tagName/releaseName: with a tag, each of the three parallel matrix
+          # jobs looked for "its" draft and could create one, which raced into
+          # duplicates. With a releaseId this action never creates a release,
+          # sets no title/body/draft/prerelease flags, and the release-notes job
+          # owns all of them (and publishes it after every build job).
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
 
   # ── Mobile (Android APK via EAS) ───────────────────────────────
   mobile:
     name: Android APK
-    needs: changes
+    needs: [changes, prepare-release]
     if: needs.changes.outputs.mobile == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
     outputs:
-      published: ${{ steps.signing.outputs.enabled }}
+      published: ${{ steps.upload.outcome == 'success' }}
+      signing: ${{ steps.signing.outputs.enabled == 'true' && 'release' || 'template-debug' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Play Store / release signing is not set up yet. Without ALL four secrets
-      # the signed release APK is skipped (never fall back to the debug keystore).
+      # With ALL four secrets the APK is signed with the project's release key.
+      # Until that key exists (it comes with Play Store registration), the APK is
+      # built exactly as releases up to 0.9.0 were: signed with the Expo/React
+      # Native template's debug key, so it installs over those earlier APKs. That
+      # key is public (anyone can sign an APK with it), so the release notes say
+      # which key signed it; switching to the release key later needs one
+      # uninstall/reinstall.
       - name: Check Android signing secrets
         id: signing
         env:
@@ -482,31 +640,26 @@ jobs:
           done
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Android release APK skipped::Android signing is not configured (missing: ${missing[*]}). The signed release APK build and upload are skipped; no debug-signed APK is published. Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD as repository secrets to enable it."
+            echo "::notice title=Android APK signed with the template debug key::Release signing is not configured (missing: ${missing[*]}). The APK is built as in releases up to 0.9.0, signed with the Expo template's debug key, so it installs over those. Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD as repository secrets to sign with the release key."
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        if: steps.signing.outputs.enabled == 'true'
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: steps.signing.outputs.enabled == 'true'
         with:
           node-version: 22
           cache: pnpm
 
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        if: steps.signing.outputs.enabled == 'true'
         with:
           distribution: temurin
           java-version: 21
 
       - run: pnpm install --frozen-lockfile
-        if: steps.signing.outputs.enabled == 'true'
 
       - name: Expo prebuild
-        if: steps.signing.outputs.enabled == 'true'
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --clean
 
@@ -551,11 +704,25 @@ jobs:
             -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
 
+      - name: Build APK (template debug key, as up to 0.9.0)
+        if: steps.signing.outputs.enabled != 'true'
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify APK is signed with the template debug key
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          APKSIGNER=$(printf '%s\n' "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          APK=$(printf '%s\n' apps/mobile/android/app/build/outputs/apk/release/*.apk | head -1)
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          echo "$CERTS"
+          echo "$CERTS" | grep -q "CN=Android Debug" || { echo "::error::Expected the template debug key (as in 0.9.0); got another signer. Refusing to publish an APK that cannot update earlier installs."; exit 1; }
+
       - name: Verify APK is not debug-signed
         if: steps.signing.outputs.enabled == 'true'
         run: |
-          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          APK=$(ls apps/mobile/android/app/build/outputs/apk/release/*.apk | head -1)
+          APKSIGNER=$(printf '%s\n' "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          APK=$(printf '%s\n' apps/mobile/android/app/build/outputs/apk/release/*.apk | head -1)
           CERTS=$("$APKSIGNER" verify --print-certs "$APK")
           echo "$CERTS"
           if echo "$CERTS" | grep -q "CN=Android Debug"; then
@@ -568,23 +735,25 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Rename APK
-        if: steps.signing.outputs.enabled == 'true'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: mv apps/mobile/android/app/build/outputs/apk/release/*.apk "apps/mobile/android/app/build/outputs/apk/release/hisaabo-${REF_NAME}.apk"
 
+      # Attaches to the release prepare-release made; this job never creates
+      # one (gh finds a draft by its pending tag, which the releases-by-tag API
+      # cannot, and --clobber makes a re-run replace the asset instead of failing).
       - name: Upload APK to release
-        if: steps.signing.outputs.enabled == 'true'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          draft: true
-          files: apps/mobile/android/app/build/outputs/apk/release/hisaabo-${{ github.ref_name }}.apk
-          tag_name: ${{ github.ref_name }}
+        id: upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release upload "$REF_NAME" "apps/mobile/android/app/build/outputs/apk/release/hisaabo-${REF_NAME}.apk" --repo "$REPOSITORY" --clobber
 
   # ── CLI (npm publish) ──────────────────────────────────────────
   cli:
     name: Publish CLI
-    needs: changes
+    needs: [changes, wait-for-api]
     if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -630,7 +799,7 @@ jobs:
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
     name: Publish MCP
-    needs: changes
+    needs: [changes, wait-for-api]
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -672,9 +841,10 @@ jobs:
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:
     name: Publish Release Notes
-    needs: [changes, docker, deploy-web, deploy-store, deploy-api-docs, desktop, mobile, cli, mcp]
-    # Not for a tag the version check rejected: nothing was built for it.
-    if: always() && needs.changes.result == 'success'
+    needs: [changes, prepare-release, docker, wait-for-api, deploy-web, deploy-store, deploy-api-docs, desktop, mobile, cli, mcp]
+    # Not for a tag the version check rejected (nothing was built for it), nor
+    # when there is no prepared release to edit.
+    if: always() && needs.changes.result == 'success' && needs.prepare-release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -699,6 +869,9 @@ jobs:
           CLI: ${{ needs.changes.outputs.cli }}
           MCP: ${{ needs.changes.outputs.mcp }}
           DOCKER_RESULT: ${{ needs.docker.result }}
+          WAIT_RESULT: ${{ needs.wait-for-api.result }}
+          WAIT_OUTCOME: ${{ needs.wait-for-api.outputs.result }}
+          WAIT_SKIPPED_BY_OPERATOR: ${{ needs.wait-for-api.outputs.skipped_by_operator }}
           API_IMAGE: ${{ needs.docker.outputs.api_image }}
           API_DIGEST: ${{ needs.docker.outputs.api_digest }}
           ONCE_IMAGE: ${{ needs.docker.outputs.once_image }}
@@ -758,10 +931,32 @@ jobs:
             fi
           }
 
+          # The production API is upgraded by hand; wait-for-api polls
+          # /api/version until it reports this release (or is told to skip).
+          api_wait_status() {
+            local label="API in production"
+            if [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "skipped" ] && [ "$WAIT_SKIPPED_BY_OPERATOR" = "true" ]; then
+              echo "| $label | Wait bypassed by the operator (skip_api_wait) | :warning: Version NOT verified |"
+            elif [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "not_needed" ]; then
+              echo "| $label | Not needed (no frontend or client changed) | :heavy_minus_sign: |"
+            elif [ "$WAIT_RESULT" = "success" ] && [ "$WAIT_OUTCOME" = "ready" ]; then
+              echo "| $label | Reports ${REF_NAME#v} | :white_check_mark: |"
+            elif [ "$WAIT_RESULT" = "success" ]; then
+              echo "| $label | Outcome not recorded | :hourglass: Release not published |"
+            elif [ "$WAIT_RESULT" = "skipped" ]; then
+              echo "| $label | Not checked: an earlier job did not succeed | :x: Release not published |"
+            elif [ "$WAIT_RESULT" = "cancelled" ]; then
+              echo "| $label | Check cancelled | :hourglass: Frontends not deployed, release not published |"
+            else
+              echo "| $label | Did not report ${REF_NAME#v} in time | :x: Frontends not deployed, release not published |"
+            fi
+          }
+
           cat >> /tmp/release-body.md << EOF
           | Component | Status | Build |
           |---|---|---|
           $(status "$API" "$DOCKER_RESULT" "API (Docker)")
+          $(api_wait_status)
           $(deploy_status "$WEB" "$WEB_RESULT" "Web App")
           $(deploy_status "$STORE" "$STORE_RESULT" "Online Store")
           $(deploy_status "$API_DOCS" "$API_DOCS_RESULT" "API Docs")
@@ -835,51 +1030,26 @@ jobs:
 
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
-      # Publishes the release with the final notes, addressing it by id.
-      # softprops/action-gh-release was not reliable here: the Tauri job leaves
-      # a DRAFT release behind and the releases-by-tag API never returns drafts.
-      # v2.6.2 (what `@v2` resolved to when v0.9.0 shipped) therefore did not see
-      # it, created a second draft with these notes, then "canonicalised" to the
-      # older Tauri draft, deleted its own and published the placeholder body,
-      # so every release showed only the Tauri text. Listing releases and
-      # patching the one for this tag does not depend on that behaviour.
+      # Updates the release prepare-release made (draft, or a hand-made one it
+      # reused) with the final notes and publishes it only when wait-for-api RAN
+      # and succeeded (production reports the version, nothing needed the wait,
+      # or the operator deliberately skipped it: scripts/publish-release.sh).
+      # After a failed or timed-out wait, or when an upstream job such as the
+      # image build failed (wait-for-api then shows as skipped), the notes are
+      # updated but the release stays a draft, so the installers do not go public
+      # with no matching API; a re-run of the failed jobs publishes it. It never creates
+      # a release: it patches by id, so a re-run is idempotent. (Why not
+      # softprops/action-gh-release: the releases-by-tag API never returns
+      # drafts, so v2.6.2 did not see the Tauri draft, made a second one and
+      # published the placeholder body for v0.9.0.)
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           BODY_PATH: ${{ steps.notes.outputs.body_path }}
-        run: |
-          set -euo pipefail
-          # A "-" in the version marks a pre-release (-beta.1, -rc.1): flagged
-          # as such and never "Latest". Stable uses GitHub's own ordering.
-          if [[ "$REF_NAME" == *-* ]]; then
-            PRERELEASE=true
-            MAKE_LATEST=false
-          else
-            PRERELEASE=false
-            MAKE_LATEST=legacy
-          fi
-
-          matches=$(gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" \
-            | jq -r --arg tag "$REF_NAME" '.[] | select(.tag_name == $tag) | .id')
-          count=$(printf '%s' "$matches" | grep -c . || true)
-
-          if [ "$count" -gt 1 ]; then
-            echo "::error title=Duplicate releases::Found ${count} releases for ${REF_NAME} (ids: $(tr '\n' ' ' <<<"$matches")). Parallel jobs probably each created a draft. Merge their assets into one release by hand, delete the others, and re-run this job."
-            exit 1
-          fi
-
-          if [ "$count" -eq 0 ]; then
-            args=(--repo "$REPOSITORY" --verify-tag --title "Hisaabo ${REF_NAME}" --notes-file "$BODY_PATH")
-            if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease --latest=false); fi
-            gh release create "$REF_NAME" "${args[@]}"
-          else
-            gh api --method PATCH "repos/${REPOSITORY}/releases/${matches}" \
-              -f name="Hisaabo ${REF_NAME}" \
-              -F body=@"$BODY_PATH" \
-              -F draft=false \
-              -F prerelease="$PRERELEASE" \
-              -f make_latest="$MAKE_LATEST" \
-              --jq '"Published " + .html_url'
-          fi
+          WAIT_RESULT: ${{ needs.wait-for-api.result }}
+          WAIT_OUTCOME: ${{ needs.wait-for-api.outputs.result }}
+          WAIT_SKIPPED_BY_OPERATOR: ${{ needs.wait-for-api.outputs.skipped_by_operator }}
+        run: bash scripts/publish-release.sh

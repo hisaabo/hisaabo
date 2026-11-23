@@ -15,6 +15,7 @@ import { formatCurrency } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { Card, QueryError, Skeleton, DatePickerField } from "../../../src/components/ui";
+import { getPeriodDates, getCustomRangeDates } from "../../../src/lib/business-day";
 
 type Period = "month" | "quarter" | "fy" | "all" | "custom";
 
@@ -23,33 +24,10 @@ interface PeriodDates {
   toDate?: string;
 }
 
-function getPeriodDates(period: Period, customFrom: Date | null, customTo: Date | null): PeriodDates {
-  const now = new Date();
-
-  if (period === "all") return {};
-
-  if (period === "custom") {
-    const from = customFrom ? new Date(customFrom.getFullYear(), customFrom.getMonth(), customFrom.getDate()).toISOString() : undefined;
-    const to = customTo ? new Date(customTo.getFullYear(), customTo.getMonth(), customTo.getDate(), 23, 59, 59, 999).toISOString() : undefined;
-    return { fromDate: from, toDate: to };
-  }
-
-  if (period === "month") {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    return { fromDate: start.toISOString(), toDate: now.toISOString() };
-  }
-
-  if (period === "quarter") {
-    const q = Math.floor(now.getMonth() / 3);
-    const start = new Date(now.getFullYear(), q * 3, 1);
-    return { fromDate: start.toISOString(), toDate: now.toISOString() };
-  }
-
-  // FY
-  const fyStartMonth = 3;
-  const fyYear = now.getMonth() < fyStartMonth ? now.getFullYear() - 1 : now.getFullYear();
-  const fyStart = new Date(fyYear, fyStartMonth, 1);
-  return { fromDate: fyStart.toISOString(), toDate: now.toISOString() };
+function getReportPeriodDates(period: Period, customFrom: Date | null, customTo: Date | null): PeriodDates {
+  // IST calendar windows, see src/lib/business-day.ts
+  if (period === "custom") return getCustomRangeDates(customFrom, customTo);
+  return getPeriodDates(period);
 }
 
 const PERIODS: { key: Period; label: string }[] = [
@@ -111,10 +89,9 @@ export default function ReportsScreen() {
     cancelled: colors.textMuted,
   }), [colors]);
 
-  // Memoised: getPeriodDates embeds `new Date().toISOString()`, which would
-  // otherwise change the query key on every render.
+  // Memoised so the query key is stable between renders (the range ends at the end of today, IST).
   const dates = useMemo(
-    () => getPeriodDates(period, customFrom, customTo),
+    () => getReportPeriodDates(period, customFrom, customTo),
     [period, customFrom, customTo],
   );
 

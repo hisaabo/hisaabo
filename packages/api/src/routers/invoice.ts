@@ -1,49 +1,29 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
+import { getTenantDb, type TenantDatabase, invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
+import { createInvoiceSchema, idempotencyInputSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, splitDocumentGst, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
+import { applyDocumentCancel, applyInvoiceCancel, reverseDocumentEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { DOCUMENT_STOCK_EFFECT } from "../lib/document-stock-reversal.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
-import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
+import { mapInvoiceToIRP, foreignPartyReason } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
+import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
+import { isIntraStateSupply } from "../lib/gst-split.js";
+import { supplyKind } from "@hisaabo/shared";
+import { gstReturnPeriodOf } from "../lib/gst-period.js";
 
-// Reverse the stock (and purchase ITC) impact an invoice had at creation.
-// Shared by delete and cancel so both undo exactly the same effects.
-type InvoiceTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
-
-async function reverseInvoiceEffects(
-  tx: InvoiceTx,
-  businessId: string,
-  inv: { id: string; type: "sale" | "purchase"; documentType: string },
-) {
-  const lineItemRows = await tx.select()
-    .from(invoiceItems)
-    .where(eq(invoiceItems.invoiceId, inv.id));
-
-  // Reverse stock per line item (batched, NUMERIC arithmetic in SQL)
-  await applyStockDeltas(
-    tx,
-    lineItemRows.map((li) => ({ ...li, sign: inv.type === "sale" ? (1 as const) : (-1 as const) })),
-    { businessId },
-  );
-
-  // Auto-reverse ITC when a purchase invoice is deleted/cancelled
-  if (inv.type === "purchase" && inv.documentType === "invoice") {
-    await tx.update(itcLedgerEntries)
-      .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
-      .where(and(
-        eq(itcLedgerEntries.invoiceId, inv.id),
-        eq(itcLedgerEntries.businessId, businessId),
-        inArray(itcLedgerEntries.status, ["available", "blocked"]),
-      ));
-  }
-}
+/** A create response that carries a replay marker only when the caller sent an idempotencyKey. */
+type WithReplayFlag<T> = T & { idempotentReplay?: boolean };
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -246,16 +226,22 @@ export const invoiceRouter = router({
       return { ...invoice, status: effectiveStatus, lineItems: lineItemsWithUnit, party: party ?? null, relatedDocuments: relatedDocs, totalAdjusted };
     }),
 
-  create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createInvoiceSchema.and(idempotencyInputSchema)).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
     if (!canCreateDocumentType(ctx.role, input.documentType, input.type)) {
       throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
     }
-    const invoice = await ctx.db.transaction(async (tx) => {
+    const idempotency = { businessId: ctx.businessId, userId: ctx.user!.id, scope: "invoice.create", key: input.idempotencyKey, input };
+    const created = await ctx.db.transaction(async (tx) => {
+      // An idempotency key that was already used with this exact input is a replay:
+      // recognised here, before anything is written or any side effect runs.
+      const claim = await claimIdempotencyKey(tx, idempotency);
+      if (claim.kind === "replay") return { replayed: true as const, resourceId: claim.resourceId };
+
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
-      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode })
+      const [partyCheck] = await tx.select({ id: parties.id, gstin: parties.gstin, stateCode: parties.stateCode, state: parties.state })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -278,11 +264,14 @@ export const invoiceRouter = router({
       if (input.type === "sale") {
         const [biz] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
+          gstin: businesses.gstin,
           stateCode: businesses.stateCode,
+          state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
 
         if (biz?.gstRegistrationType === "composition") {
-          if (partyCheck.stateCode && biz.stateCode && partyCheck.stateCode !== biz.stateCode) {
+          // the shared intra / inter-state decision: blocked only when both states are known and differ
+          if (supplyKind(biz, partyCheck) === "inter") {
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "Composition scheme businesses cannot make inter-state outward supplies",
@@ -450,28 +439,28 @@ export const invoiceRouter = router({
       if (input.type === "purchase" && parseFloat(totals.taxTotal) > 0) {
         const [bizForItc] = await tx.select({
           gstRegistrationType: businesses.gstRegistrationType,
+          gstin: businesses.gstin,
           stateCode: businesses.stateCode,
+          state: businesses.state,
         }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
 
         if (bizForItc?.gstRegistrationType !== "composition") {
           const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
-          const returnPeriod = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, "0")}`;
+          const returnPeriod = gstReturnPeriodOf(invoiceDate);
 
-          const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
+          // The same test GSTR-3B and a purchase return's ITC entry use (state codes, then names)
+          const sameState = isIntraStateSupply(bizForItc, partyCheck);
 
-          // Use integer paise arithmetic to avoid floating-point rounding errors
-          const taxPaise = Math.round(parseFloat(totals.taxTotal) * 100);
+          // The one CGST/SGST split (per line, odd paisa to CGST: the e-invoice rule), shared with
+          // the ledger and the GST returns
           let cgst = "0";
           let sgst = "0";
           let igst = "0";
 
           if (sameState) {
-            const halfPaise = Math.floor(taxPaise / 2);
-            const remainderPaise = taxPaise - halfPaise;
-            cgst = (halfPaise / 100).toFixed(2);
-            sgst = (remainderPaise / 100).toFixed(2);
+            [cgst, sgst] = splitDocumentGst(totals.taxTotal, processedItems.map((li) => li.taxAmount));
           } else {
-            igst = (taxPaise / 100).toFixed(2);
+            igst = money.add(totals.taxTotal, "0");
           }
 
           await tx.insert(itcLedgerEntries).values({
@@ -488,8 +477,23 @@ export const invoiceRouter = router({
         }
       }
 
-      return invoice;
+      await completeIdempotencyKey(tx, claim, invoice.id);
+      return { replayed: false as const, invoice };
     });
+    if (created.replayed) {
+      // Answer with the LIVE invoice (its status may have moved on), flagged as a
+      // replay so the caller can tell nothing new was created. If it has since been
+      // deleted, say so rather than quietly creating another.
+      const [live] = await ctx.db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, created.resourceId), eq(invoices.businessId, ctx.businessId), isNull(invoices.deletedAt)))
+        .limit(1);
+      if (!live) throw replayedRecordGone("invoice");
+      const replay: WithReplayFlag<typeof live> = { ...live, idempotentReplay: true };
+      return replay;
+    }
+    const invoice = created.invoice;
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,
@@ -499,6 +503,7 @@ export const invoiceRouter = router({
       entityId: invoice.id,
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
       ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
 
     // ── Async e-invoice submission (fire-and-forget) ───────────────────────
@@ -516,18 +521,52 @@ export const invoiceRouter = router({
       // Capture everything needed for the async task before returning
       const invoiceId = invoice.id;
       const businessId = ctx.businessId;
-      const db = ctx.db;
+      const tenantId = ctx.tenantId;
 
       // Non-blocking: check e-invoice config + party GSTIN
       setTimeout(async () => {
+        // Take the tenant DB when the task runs rather than capturing the
+        // request's `ctx.db`: this runs after the response, by which time the
+        // pool behind the request's handle may have been evicted from the cache.
+        let db: TenantDatabase;
         try {
-          const [config] = await db
+          db = await getTenantDb(tenantId);
+        } catch (err) {
+          if (process.env.NODE_ENV !== "test") {
+            console.error("[e-invoice auto-submit] tenant database unavailable:", err instanceof Error ? err.message : err);
+          }
+          return;
+        }
+
+        try {
+          const [rawConfig] = await db
             .select()
             .from(eInvoiceConfigs)
             .where(and(eq(eInvoiceConfigs.businessId, businessId), eq(eInvoiceConfigs.isEnabled, true)))
             .limit(1);
 
-          if (!config) return; // E-invoicing not configured/enabled
+          if (!rawConfig) return; // E-invoicing not configured/enabled
+
+          // The IRP credentials are stored encrypted (field-encryption.ts); eInvoice.generate,
+          // retryFailed and cancel decrypt them before handing them to IRPClient, and so must this.
+          const config = decryptEInvoiceConfig(rawConfig);
+
+          // Same rule as eInvoice.generate / retryFailed / cancel: without the NIC public
+          // key (lib/irp-public-key.ts) this server cannot sign in to the IRP, so do not
+          // touch the invoice. A `failed` e-invoice must mean the IRP rejected it, not that
+          // the server was never set up; once the key is configured the invoice can be
+          // generated from the E-Invoicing page like any other. Nothing is written first.
+          try {
+            loadIrpPublicKey(config.isSandbox);
+          } catch (keyErr) {
+            if (keyErr instanceof IRPNotConfiguredError) {
+              if (process.env.NODE_ENV !== "test") {
+                console.debug("[e-invoice auto-submit] skipped, NIC public key not configured:", keyErr.message);
+              }
+              return;
+            }
+            throw keyErr;
+          }
 
           // Fetch the full invoice with party
           const [inv] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
@@ -535,6 +574,9 @@ export const invoiceRouter = router({
 
           const [party] = await db.select().from(parties).where(eq(parties.id, inv.partyId)).limit(1);
           if (!party?.gstin) return; // B2C — skip
+          // An export (GSTIN "URP" / state code 96) cannot be e-invoiced until 0.11.0:
+          // skip it like B2C, writing nothing. eInvoice.generate states the reason.
+          if (foreignPartyReason(party)) return;
 
           const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
           if (!biz) return;
@@ -617,6 +659,7 @@ export const invoiceRouter = router({
               pincode: biz.pincode,
               phone: biz.phone,
               email: biz.email,
+              annualTurnover: biz.annualTurnover,
             },
           );
 
@@ -637,6 +680,21 @@ export const invoiceRouter = router({
             })
             .where(eq(invoices.id, invoiceId));
         } catch (err) {
+          if (err instanceof IRPNotConfiguredError) {
+            // The key went away after the check above (a file removed mid-flight, or a key
+            // that cannot encrypt the sign-in): a configuration problem, not an IRP
+            // rejection. Leave the invoice pending, with no error and no retry counted,
+            // as eInvoice.generate does.
+            if (process.env.NODE_ENV !== "test") {
+              console.error("[e-invoice auto-submit] not configured:", err.message);
+            }
+            await db
+              .update(invoices)
+              .set({ eInvoiceStatus: "pending", eInvoiceError: null, updatedAt: new Date() })
+              .where(eq(invoices.id, invoiceId))
+              .catch(() => {/* swallow DB errors in background task */});
+            return;
+          }
           // IRP errors must not bubble up — just log and mark as failed
           const isRetryable = err instanceof IRPError && err.isRetryable;
           const errorMsg = err instanceof Error ? err.message : "Unknown IRP error";
@@ -657,7 +715,9 @@ export const invoiceRouter = router({
       }, 0);
     }
 
-    return invoice;
+    // A caller that sent a key is told this call really created the record.
+    const response: WithReplayFlag<typeof invoice> = input.idempotencyKey ? { ...invoice, idempotentReplay: false } : invoice;
+    return response;
   }),
 
   // Get the delivery method used on the most recent sale invoice for a party
@@ -711,16 +771,22 @@ export const invoiceRouter = router({
 
         const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
         if (isCancelling) {
-          // Cancelling undoes stock like delete does, so it needs the same permission and rule.
-          requireCan(ctx.ability, "delete", "Invoice");
-          const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: before.status, createdAt: before.createdAt });
-          if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
-          await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
-          await reverseInvoiceEffects(tx, ctx.businessId, before);
+          // Same rules and effects as cancelling through eInvoice.cancel and the document
+          // routers (lib/invoice-cancel.ts), by document type: applyInvoiceCancel undoes an
+          // invoice's stock by its sale / purchase side, which is wrong for every other
+          // type (a credit note moves no stock, a sales return added stock, a purchase return
+          // removed it). They get applyDocumentCancel with their own DOCUMENT_STOCK_EFFECT.
+          // This route stays open to them because it is the one the 0.10.1 upgrade notes
+          // give for finishing a document whose IRN was already cancelled.
+          if (before.documentType === "invoice") {
+            await applyInvoiceCancel(tx, ctx, before);
+          } else {
+            await applyDocumentCancel(tx, ctx.businessId, before, DOCUMENT_STOCK_EFFECT[before.documentType] ?? "none");
+          }
         }
 
         const [invoice] = await tx.update(invoices)
-          .set({ status: input.status, updatedAt: new Date() })
+          .set({ status: input.status, updatedAt: new Date(), ...(isCancelling ? staleEInvoiceErrorPatch(before) : {}) })
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
           .returning();
 
@@ -735,6 +801,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus, toStatus: input.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return invoice;
@@ -945,6 +1012,26 @@ export const invoiceRouter = router({
           .where(eq(invoices.id, input.id))
           .returning();
 
+        // A purchase-side reversal's negative ITC entry carries its tax, party and date: record it
+        // again from the saved document so an edit never leaves it stale.
+        if (result && isPurchaseReversal(result.documentType, result.type)) {
+          await removePurchaseReversalItc(tx, ctx.businessId, result);
+          const savedLines = await tx.select({ taxAmount: invoiceItems.taxAmount })
+            .from(invoiceItems)
+            .where(eq(invoiceItems.invoiceId, result.id));
+          await recordPurchaseReversalItc(tx, {
+            businessId: ctx.businessId,
+            documentId: result.id,
+            documentType: result.documentType,
+            type: result.type,
+            partyId: result.partyId,
+            documentDate: result.invoiceDate,
+            taxTotal: result.taxAmount,
+            lineTaxes: savedLines.map((l) => l.taxAmount),
+            isReverseCharge: result.isReverseCharge,
+          });
+        }
+
         return result;
       });
 
@@ -956,6 +1043,7 @@ export const invoiceRouter = router({
         entityId: updated.id,
         metadata: { invoiceNumber: updated.invoiceNumber },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return updated;
@@ -984,8 +1072,11 @@ export const invoiceRouter = router({
         await assertNoPaymentsOrActiveIrn(tx, "delete", inv);
 
         // A cancelled invoice already had its stock/ITC reversed when it was cancelled.
+        // This route accepts any document id, so undo what that document type did (an
+        // invoice's stock by its sale / purchase side; a credit note, quotation, sales
+        // return, ... by its own DOCUMENT_STOCK_EFFECT).
         if (inv.status !== "cancelled") {
-          await reverseInvoiceEffects(tx, ctx.businessId, inv);
+          await reverseDocumentEffects(tx, ctx.businessId, inv);
         }
 
         // Soft delete
@@ -1006,6 +1097,7 @@ export const invoiceRouter = router({
         entityId: input.id,
         metadata: { invoiceNumber: result.invoiceNumber, previousStatus: result.status },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { success: true };

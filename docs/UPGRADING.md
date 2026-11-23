@@ -1,5 +1,601 @@
 # Upgrading Hisaabo
 
+## From v0.10.0 to v0.10.1 (Docker Compose and ONCE)
+
+A bug-fix release. Take the usual backup, then **upgrade the API first**: set `HISAABO_API_IMAGE` to `v0.10.1`, then `pull api` and `up -d api` as in [Upgrading a pinned install](DEPLOYMENT.md#upgrading-a-pinned-install). The migration step applies the small additive migrations listed below on first boot. Then upgrade the web app and the store. There are **no breaking API changes**: every procedure keeps its name and its success response shape, and 0.10.0 web, desktop, mobile, CLI and MCP clients keep working against a 0.10.1 API. Multi-tenant operators should read the connection-pool sizing below.
+
+**Action needed** (each item says who it concerns; nothing else has to be done):
+
+1. **If you use e-invoicing: configure the NIC public key** (`IRP_PUBLIC_KEY_PATH` / `IRP_PUBLIC_KEY_PEM`, and the `IRP_SANDBOX_*` pair for sandbox mode). Until you do, generating, retrying and cancelling an e-invoice are refused. See [E-invoicing never signed in to the IRP](#e-invoicing-never-signed-in-to-the-irp).
+2. **Review the GST returns you have already filed.** Past periods are recomputed with corrected rules; run the per-month query to find the months that change. See [What to do after upgrading](#what-to-do-after-upgrading), step 1.
+3. **Review supplier and customer opening balances** with the review query: the meaning of a positive supplier balance changed. Run it again after your users' mobile and desktop apps update. See step 5 of the same list.
+4. **Multi-tenant: size the tenant connection pools** (`TENANT_POOL_MAX`, `TENANT_POOL_PER_DB_MAX`, `TENANT_POOL_DRAINING_MAX`) for your `max_connections`. See [Multi-tenant: size the tenant connection pools](#multi-tenant-size-the-tenant-connection-pools).
+5. **If you have items marked "Price includes tax": review the bills made from them before this release.** Those bills added the GST on top of a price that already contained it. See [Bills made from items priced including tax](#bills-made-from-items-priced-including-tax).
+
+### For operators
+
+- **Postgres `max_connections` is now 200 in `docker-compose.prod.yml`** (it was the Postgres default, 100). Override it with `POSTGRES_MAX_CONNECTIONS` in `.env.prod`. It takes effect when the `postgres` container restarts, a few seconds of downtime, so do it in the same window as the API upgrade: `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d postgres`. Check it with `docker compose exec postgres psql -U hisaabo -Atc 'show max_connections'`. Postgres reserves about 10 MB of RAM per 100 extra connections.
+- **Android APK is back on the release.** 0.10.0 published no APK (its workflow skipped the build without a release signing key). 0.10.1 attaches `hisaabo-v0.10.1.apk` again, signed the same way as releases up to 0.9.0 (the Expo template key), so it installs over 0.9.0 without uninstalling. When the Play Store release key is set up, that build is signed with it instead, and moving to it needs one uninstall and reinstall (Android only updates an app signed with the same key).
+- **New: `GET /api/version`.** It returns `{"version":"0.10.1"}`: the running version only, public, uncacheable, no database access. Use it to confirm which release a server runs (`curl https://<your-api-host>/api/version`); an API older than 0.10.1 answers 404. Set `EXPOSE_VERSION=false` if you do not want the exact version readable by the public (the endpoint then answers 404; it is on by default). The bundled `nginx/nginx.conf` already forwards it (`location /api/`). If you front the API with your own proxy rules, keep `/api/version` reachable. `/health` still does not report a version.
+- **Release order is now enforced for the maintainers' deployment.** The release workflow no longer deploys the web app and the store before the API: it waits until the production API reports the new version, then a required reviewer approves the frontend deploys. If you run your own copy of `release.yml`, add required reviewers to the `production` environment and set the `PRODUCTION_API_URL` repository variable (and optionally `API_WAIT_TIMEOUT_MINUTES`). Upgrade the API first, then the frontends, as in the [Release runbook](DEPLOYMENT.md#release-runbook).
+- **Multi-tenant: new tenant databases get random names.** Until now a tenant's database and role were named from its slug (`tenant_<slug, lowercased, cut to 40 characters>`). When two sign-ups had the same long name (a slug base of 34 characters or more loses its random suffix after the cut) they were assigned the same database name, and the second sign-up failed on `CREATE DATABASE`. Tenants created from 0.10.1 on get `t_<32 random hex characters>` for the database and `t_<same hex>_u` for the role (34 and 36 characters, inside Postgres' 63-byte identifier limit). The slug shown in URLs and the UI is unchanged. **Existing tenants keep their `tenant_<slug>` names**: the API, the migration step, the admin dashboard and `rotate-key` always read the names from `tenants.db_name` and `tenants.db_user`, never derive them from a slug, and nothing is renamed. Anything of yours that guesses a tenant database from its slug (a script, a dashboard) must read `tenants.db_name` instead; with the new names it cannot work.
+- **Multi-tenant: tenant databases are closed to other roles.** `CREATE DATABASE` grants `CONNECT` and `TEMPORARY` on the new database to `PUBLIC`, i.e. to every role in the cluster, so any tenant's database role could open a session on every other tenant's database (row data was still protected by table privileges, but the door should not be open). From 0.10.1 provisioning grants `CONNECT` and `TEMPORARY` to the tenant's own role and revokes them from `PUBLIC`.
+- **Multi-tenant: the migration step applies this to every existing tenant database.** After the control and tenant migrations, every API start (and so every deploy) runs one idempotent pass over each database listed in `tenants`: `GRANT CONNECT, TEMPORARY` to the tenant's own role, then `REVOKE CONNECT, TEMPORARY ... FROM PUBLIC`, in one statement per database. The first pass after the upgrade closes the databases you already have; later passes change nothing (and also close a database that an older replica provisioned during a rolling deploy). It never fails startup: per-database errors are logged and counted. Look for this line in the API log:
+
+  ```
+  Tenant database access: closed to PUBLIC  {"total":228,"restricted":228,"missing":0,"skipped":0,"failed":0}
+  ```
+
+  `restricted` counts only databases **verified in the catalog** afterwards: the tenant role can connect and `PUBLIC` holds nothing. `missing` counts tenants whose database no longer exists, `skipped` counts rows without a `db_user`, and `failed` counts databases that could not be changed or where the change had no effect (the log has one `could not restrict database` error per tenant with the reason). The usual cause is a control role that neither owns the database nor is a superuser: Postgres then only prints a warning ("no privileges could be revoked") and reports success while leaving the database open, which the pass detects and reports as `failed` ("PUBLIC can still connect ..."). Run the preflight query below before upgrading to find those databases. When several API instances start together, one runs the pass and the others log `Tenant database access: skipped, another instance is running the same pass` instead of waiting for it, so the pass never delays startup. To run the pass on its own, without migrations, and get exit code 1 if any database failed (or if another instance held the lock):
+
+  ```bash
+  docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+    node packages/db/dist/migrate.mjs --restrict-tenant-db-access
+  ```
+
+- **New: `WEBMCP_DISABLED`, a kill switch for browser AI agents (WebMCP, experimental, web only).** `true` stops the web app offering Hisaabo to anyone's browser agent on this server, and the API then refuses requests marked `X-Hisaabo-Agent: webmcp` with 403. It does not affect the MCP server or the CLI. It is also reported by `system.config` (`webmcpDisabled`). See [DEPLOYMENT.md](DEPLOYMENT.md#backend-docker--ghcr). Browser agent calls are capped at 120 per minute per address on top of the ordinary per-address limit (they are charged against both, so the marker never raises the total) and send `X-Hisaabo-Agent: webmcp`, which is in the credentialed CORS allow-list; if a reverse proxy in front of the API restricts custom request headers, allow `X-Hisaabo-Agent`.
+
+### Migrations
+
+Three additive schema migrations for the browser agent (WebMCP) hardening, plus a re-install of the cache-invalidation triggers, applied by the same migration step (the ledger and recurring-invoice fixes ship their own, listed below). All are expand-only, and old code ignores them, so rolling back needs no reverse SQL.
+
+| Mode | Directory | Migration | What it adds |
+|---|---|---|---|
+| Self-hosted (unified) | `packages/db/drizzle` | `0025_webmcp_audit_source`, `0026_idempotency_keys`, `0027_tenant_webmcp_disabled`, `0028_webmcp_cache_invalidation_triggers` | the three below, plus the trigger re-install |
+| Multi-tenant, each tenant database | `packages/db/drizzle-tenant` | `0012_webmcp_audit_source`, `0013_idempotency_keys` | the audit column and the idempotency table |
+| Multi-tenant, control database | `packages/db/drizzle-control` | `0009_tenant_webmcp_disabled`, `0010_webmcp_cache_invalidation_triggers` | the organization switch, plus the trigger re-install |
+
+- `audit_log.source` (nullable text): where a change came from when it was not a person at the UI. `webmcp` for a browser AI agent, `mcp` for the MCP server (it already sent `x-client-type: mcp`), null for everything else, including every existing row. The web Activity Log labels these entries. It is attribution, not authorisation. Mobile and the CLI are unaffected (the extra field is ignored; the CLI's `--json` output now includes it), and self-export files written before the column existed still validate.
+- `idempotency_keys`: a small table behind a new optional `idempotencyKey` input on `invoice.create` and `payment.create`. Idempotency is strictly opt-in: clients that do not send a key behave exactly as before, and nothing derives a key. Repeating the identical request with the same key within 15 minutes creates nothing and answers with the live record flagged `idempotentReplay: true` (a keyed call that did create the record is flagged `false`; a deleted record is a `CONFLICT`). The table keeps only the record id and a hash of the request, never a copy of the response, and expired rows are purged by the next keyed write and by an hourly sweep.
+- `tenants.webmcp_disabled` (boolean, default false): the organization owner's switch for browser AI agents, read through `auth.me` and enforced by the API for agent-marked calls (FORBIDDEN). It rides in the cached membership entry, so the `hisaabo_cache_tenants` cache-invalidation trigger now also fires on changes to this column: the `*_webmcp_cache_invalidation_triggers` migrations re-install the (idempotent) cache triggers with the new column list; nothing else about them changes.
+
+The recurring-invoice and ledger fixes add two more additive migrations of their own, applied automatically by the same migration step: `recurring_run_occurrence` (`drizzle-tenant/0010`; `drizzle/0023` on self-hosted) and `ledger_adjustment_accounts` (`drizzle-tenant/0011`; `drizzle/0024`), which is data-only and described under [Corrected accounting and GST figures](#corrected-accounting-and-gst-figures). `recurring_run_occurrence` adds a nullable column `recurring_invoice_runs.scheduled_for` and a **partial** unique index `recurring_run_occurrence_uniq` on `(template_id, scheduled_for)` for successful and plan-limit-skipped runs that have a `scheduled_for`.
+
+- **Existing rows are not touched, and existing duplicates cannot make it fail.** The old scheduler could, rarely, leave two `success` runs for one occurrence. Those rows keep `scheduled_for = NULL`, the index ignores rows without it, and nothing is deleted or rewritten; only runs created from now on are constrained. (The release was checked against a database with duplicate runs already in it.)
+- It is quick and safe on a live system: adding a nullable column is a catalog change, and the index is built over a small table. Multi-tenant: it runs once per tenant database during the migration step, like any tenant migration.
+- Old code ignores the column and the index, so rolling the image back to 0.10.0 needs no reverse SQL (see [ROLLBACK.md](ROLLBACK.md)).
+
+To look for double-generated invoices from before the fix, run this read-only query in each database (each tenant database when multi-tenant). A template that was behind by several periods also shows up, because catch-up legitimately creates one invoice per missed period in a single tick, so compare the invoices and the template's frequency before acting. Nothing needs doing unless one period was billed twice; if it was, cancel the extra invoice the normal way.
+
+```sql
+SELECT r.template_id, t.name, r.business_id, count(*) AS runs,
+       min(r.executed_at) AS first_at, array_agg(r.invoice_id) AS invoices
+FROM recurring_invoice_runs r
+JOIN recurring_invoice_templates t ON t.id = r.template_id
+WHERE r.status = 'success'
+GROUP BY r.template_id, t.name, r.business_id, date_trunc('minute', r.executed_at)
+HAVING count(*) > 1
+ORDER BY first_at DESC;
+```
+
+### Multi-tenant: size the tenant connection pools
+
+The defaults (`TENANT_POOL_MAX=50`, `TENANT_POOL_PER_DB_MAX=5`, and the new `TENANT_POOL_DRAINING_MAX`, which defaults to `TENANT_POOL_MAX`) allow one API process up to `(50 + 50) x 5 = 500` tenant connections, far above Postgres' default `max_connections` of 100. Idle pools hold no connections, so a quiet system never gets near that, but a busy period can. **Never raise `TENANT_POOL_MAX` alone**: the bound is `(TENANT_POOL_MAX + TENANT_POOL_DRAINING_MAX) x TENANT_POOL_PER_DB_MAX`.
+
+For about 230 tenants on `max_connections = 100` (one API process and one worker), set:
+
+```
+TENANT_POOL_MAX=10
+TENANT_POOL_PER_DB_MAX=2
+```
+
+That bounds tenant connections at `(10 + 10) x 2 = 40`. Add about 15 for the API's control, queue and cache connections, about 25 for the worker (conservative: today the worker only runs the system ping job), about 5 for background tenant visits, about 10 for operators and 3 reserved by Postgres, and you are at about 98. It is tight: a second API replica does not fit until `max_connections` is raised. On a server with `max_connections = 300`, `TENANT_POOL_MAX=50` with `TENANT_POOL_PER_DB_MAX=2` (bound 200) keeps most active tenants cached. Keep `TENANT_POOL_PER_DB_MAX` at 2 or more, and add every replica and worker when you add things up. The full budget, and what to do when the API logs `[tenant-pool] ... ended the oldest`, is in [DEPLOYMENT.md](DEPLOYMENT.md#tenant-connection-budget-multi-tenant).
+
+How eviction behaves: an evicted pool is not closed, so a request still using it is not affected, and its connections close by themselves after 20 idle seconds. At most `TENANT_POOL_DRAINING_MAX` evicted pools are allowed to drain at once; beyond that the oldest is closed after its running queries finish (up to 30 seconds). Only in such a storm, where more pools are evicted inside 20 seconds than the cap allows, can a request that holds the closed pool fail with `CONNECTION_ENDED`, and only if it starts a new query or transaction after that. To check connections during a busy period, run `SELECT datname, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;`.
+
+### Before you start (multi-tenant)
+
+1. **Back up the control database and every tenant database** (`backup.sh`, see the 0.10.0 section below).
+2. **Multi-tenant only: preflight the control role.** The pass can only change databases that the `CONTROL_DATABASE_URL` role owns (or acts as the owner of through role membership), or that it can change as a superuser. Connected as that role to the **control database**, this catalog-only query must return no rows:
+
+   ```sql
+   SELECT t.slug, t.db_name, pg_get_userbyid(d.datdba) AS owner
+   FROM tenants t
+   JOIN pg_database d ON d.datname = t.db_name
+   WHERE NOT pg_has_role(current_user, d.datdba, 'USAGE');
+   ```
+
+   Every row is a tenant database the pass will report as `failed`. Fix it with `ALTER DATABASE "<db_name>" OWNER TO <control role>;` (as the current owner or a superuser) or run the control role as a superuser. It only sees databases on the control database's server; tenants with another `db_host` need the same check there.
+3. **Multi-tenant only: check that no two tenants share a database.** Each row of `tenants` must point at its own database. Two rows with the same host, port and database name would share data, and the access pass would treat them as one. On the control database this query must return no rows:
+
+   ```sql
+   SELECT coalesce(db_host, 'localhost') AS db_host, coalesce(db_port, '5432') AS db_port, db_name,
+          count(*) AS tenants, array_agg(slug ORDER BY slug) AS slugs
+   FROM tenants
+   WHERE db_name IS NOT NULL
+   GROUP BY 1, 2, 3
+   HAVING count(*) > 1;
+   ```
+
+   Provisioning always gives a tenant a database of its own, so a row here means a hand-edited or restored `tenants` table: fix it before upgrading (point each row at its own database, or remove the duplicate). A unique index on `(db_host, db_port, db_name)` is planned for 0.11.0; until then nothing in the database prevents it.
+4. **Multi-tenant only:** list the roles other than the control role that connect to tenant databases (`SELECT usename, datname FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY 1, 2;` while they are connected, and your own scripts and dashboards) and decide which need a `GRANT CONNECT` after the upgrade.
+
+### If you connect to tenant databases with a role other than the control role
+
+Who keeps access after the pass: the **tenant's own role** (explicitly), the **role that owns the database** (the role in `CONTROL_DATABASE_URL`, which ran `CREATE DATABASE`: `POSTGRES_USER` in the bundled compose file) and **superusers**. The API, the migration step, the admin dashboard (`admin`), `ops`, `rotate-key`, `scripts/backup.sh` (it connects as `DB_USER`, which defaults to `POSTGRES_USER`) and the restore sidecar all use one of those, so nothing in the stock deployment needs a change.
+
+If you added **another role** that connects to tenant databases (a read-only BI role, a monitoring or backup role, a pooler's auth role, an engineer's personal login), that role loses access to every tenant database on the first pass, until it is granted explicitly. Typical symptom: `FATAL: permission denied for database "tenant_acme"` / `User does not have CONNECT privilege`. Grant it per database, run on the control database:
+
+```sql
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', db_name, 'bi_reader')
+FROM tenants WHERE db_name IS NOT NULL \gexec
+```
+
+Explicit grants to a role survive every later pass (only `PUBLIC` is revoked). Postgres has no default privileges for databases, so a tenant created later needs the same grant: re-run the statement after new sign-ups, or from a periodic job. Do not work around this by granting `CONNECT` to `PUBLIC` again; the next pass would revoke it. Table privileges inside a tenant database are unchanged.
+
+To check a database by hand: `SELECT datname, datacl FROM pg_database WHERE datname LIKE 'tenant\_%' OR datname LIKE 't\_%';`. A closed database lists only its owner and its own role (for example `{hisaabo=CTc/hisaabo,tenant_acme_user=CTc/hisaabo}`), with no `=Tc/...` entry (the empty grantee is `PUBLIC`). The control database and the `postgres` maintenance database are not touched by this release and remain connectable by `PUBLIC`.
+
+After you restore a single tenant database from a backup (see [ROLLBACK.md](ROLLBACK.md)), the restored database has the default privileges again: restart the `api` container, or run the command above, to close it.
+
+### Upgrade
+
+Take the usual backup first (the `backup.sh` command is under "Before you start" in the 0.10.0 section below), then pull and restart as described in [DEPLOYMENT.md](DEPLOYMENT.md#updating). No existing environment variable changes meaning. 0.10.1 adds these, all documented in [DEPLOYMENT.md](DEPLOYMENT.md#environment-variables) and `.env.prod.example`:
+
+- `EXPOSE_VERSION` (optional): `false` hides `GET /api/version`. Default on.
+- `WEBMCP_DISABLED` (optional): `true` switches browser AI agents (WebMCP) off for everyone on this server. Default off.
+- `TENANT_POOL_MAX`, `TENANT_POOL_PER_DB_MAX` and `TENANT_POOL_DRAINING_MAX` (**recommended for multi-tenant**; ignored otherwise): the defaults allow up to 500 tenant connections per API process, so size them for your `max_connections` (see [Multi-tenant: size the tenant connection pools](#multi-tenant-size-the-tenant-connection-pools)). `TENANT_POOL_DRAINING_MAX` is new in 0.10.1.
+- `IRP_PUBLIC_KEY_PEM` / `IRP_PUBLIC_KEY_PATH` and `IRP_SANDBOX_PUBLIC_KEY_PEM` / `IRP_SANDBOX_PUBLIC_KEY_PATH` (**required for e-invoicing**, not otherwise): the NIC public key for each mode you use. 0.10.1 no longer bundles one.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f api
+```
+
+ONCE: pull the new image and restart it as usual; it runs the same migration step.
+
+Verify:
+
+- `curl http://127.0.0.1:3000/health` returns `ok`.
+- `curl https://<your-api-host>/api/version` returns `{"version":"0.10.1"}` (404 means the API is still older than 0.10.1, or you set `EXPOSE_VERSION=false`).
+- E-invoicing only: in the app, **E-Invoicing, Settings, Test Connection** succeeds. It names the step that failed (the public key, the network or the sign-in).
+- Multi-tenant: the log shows `Tenant database access: closed to PUBLIC` with `failed: 0`. Spot-check from the host: connect as one tenant's role to another tenant's database and expect `permission denied for database`.
+- Multi-tenant: sign in as a user whose organisation has a business, and open an invoice (it proves the tenant role still connects to its own database).
+- Create an organisation with a long name in a multi-tenant deployment; its row in `tenants` has a `t_...` `db_name`.
+
+### Rolling back
+
+Rolling back to the 0.10.0 image needs no reverse SQL and no data change. This was rehearsed on a copy of a production 0.10.0 database: 0.10.0 booted on the migrated database, signed in, listed and opened invoices written by 0.10.1, created invoices and payments, and served the dashboard, GSTR-1, GSTR-3B and party reports; rolling forward again read everything 0.10.0 wrote. **Roll back the web app and the store together with the API**: some 0.10.1 responses changed shape (for example GSTR-1's B2C sections), so a 0.10.1 web app against a 0.10.0 API shows errors on those pages. Tenant roles keep `CONNECT` on their own database, so 0.10.0 works with the closed databases, and it reads the new `t_...` names from `tenants.db_name`. The one thing 0.10.0 lacks is the protection itself: it provisions new tenants with `CONNECT` open to `PUBLIC` again, and its migration step does not close them (upgrade again, or run `migrate.mjs --restrict-tenant-db-access` from a 0.10.1 image). The sign-up collision for long names also returns on 0.10.0.
+
+### New
+
+- **Update an item's saved price from the bill you are making.** When you change the **rate** of a catalog item on an **invoice** (sale or purchase), web and mobile now ask once, on save: "Update saved prices?", listing each changed item as old price to new price, with a checkbox per item (all checked). **Update item prices** saves the bill and then the checked prices; **Just this bill** saves the bill and leaves the catalog alone. The bill is saved either way, and a failed price update never undoes or blocks it (you get a message). Only people who can edit items are asked (owner, admin, seller manager; not sellers or accountants). It compares the rate you typed, never a discounted net; an alternate unit updates that unit's own price and a variant its own price; a line it cannot match to the item (a unit renamed since) is listed as "not offered". Sale invoices update the selling price, purchase invoices the purchase price. Quotations, proformas, challans, credit and debit notes and returns never ask. No migration: a new procedure `item.updatePricesFromDocument` writes the new price in one transaction and records old price, new price and the source bill in the audit log. The CLI has `hisaabo invoice create --update-item-prices` and MCP `invoice_create` / `invoice_update` take `update_item_prices`; both update only the rates you stated. See [Items](https://docs.hisaabo.in/items/#update-prices-from-a-bill).
+- **The online store's "Manage Items" lists the items already on your store first.** Selected items come together at the top, each group in its usual order. The order follows what is saved: it is decided when you open the picker or search, so ticking an item does not move it while you work. The mobile picker no longer re-sorts on every tap. `store.listStoreItems` takes an optional `selectedFirst`.
+
+### What is fixed (reliability)
+
+- **Multi-tenant: intermittent `CONNECTION_ENDED` errors.** The API keeps a cache of tenant database pools (`TENANT_POOL_MAX`, default 50). When the cache was full, serving another tenant evicted the least recently used pool and **closed** it, even while a request that had already taken that pool was still working. That request's next query, or its next transaction, failed with `write CONNECTION_ENDED`. With more tenants than pool slots (for example 229 tenants), and the recurring-invoice scheduler walking every tenant each minute, this was easy to hit. An evicted pool is now just dropped from the cache: requests holding it finish normally, and its connections close by themselves after 20 idle seconds.
+- **Multi-tenant: background loops over every tenant no longer use the shared pool cache.** The recurring-invoice scheduler, the notification dispatcher and collections sweep, the legacy store-slug scan, the shipping-webhook owner lookup and the `rotate-key` / `encrypt-sensitive-fields` tools visit each tenant with their own single-connection client and close it afterwards, so a sweep no longer evicts the pools live requests are using. Self-hosted (single-tenant) installs behave as before.
+- **A recurring template that cannot generate no longer writes a `failed` run every minute.** The failure is recorded once per distinct error for that occurrence; the template stays due and is retried quietly.
+- **Recurring invoices could be generated twice when more than one API replica was running.** The row lock that was meant to prevent it was released before the invoice was generated. Each occurrence is now claimed and generated in one transaction under the template's row lock, and a unique index on the occurrence rejects a second run as a backstop. "Run now" clicked twice quickly now creates two successive invoices (two occurrences) instead of racing for the same one.
+- **E-invoice submission after invoice creation** takes its own tenant database handle when it runs, instead of reusing the request's, which could already be gone.
+
+### What changes for users
+
+- **Date filters now follow the business time zone (IST).** "This Month", "Last Month", "Last 30 Days", "This FY", "Last FY", custom date ranges and the month / financial-year charts used to be computed in UTC (web, dashboard), in the browser's or phone's own zone (custom ranges, mobile reports) or in the server's zone, so a document dated 1 November 03:00 IST (31 October 21:30 UTC) could show up under October. Every surface (API, web, desktop, mobile, CLI) now uses one calendar, the Indian one: a day runs from 00:00 IST to 00:00 IST the next day, a picked date is stored as 00:00 IST, and every document or report date shown is the IST date, whatever zone the browser, phone or server is in (the clock times of operational events, the maintenance banner and the backup time, are not document dates and stay in the viewer's zone). See [Date filters follow the business time zone](#date-filters-follow-the-business-time-zone-ist).
+- **CLI: purchase documents default their rate to the purchase price.** `hisaabo invoice create --type purchase` (and the document commands with `--type purchase`, a debit note or purchase return) without `--rate` took the item's **sale** price as the rate; they now use the **purchase** price, like web and mobile, and stop with "has no purchase price" when the item has none (pass `--rate`). Sale-side documents are unchanged. Scripts that relied on the old default for purchase bills must pass `--rate`.
+- **Items priced including tax were taxed again on bills; fixed.** An item with "Price includes tax" (say ₹118 including 18% GST) was put on a bill at ₹118 and the 18% was added on top: ₹139.24. Now the bill starts the line at the tax-exclusive rate (₹100.00 + ₹18.00 = ₹118.00) on web, mobile, the POS and the CLI's default rate, with a small hint on the line ("₹118.00 incl. GST → ₹100.00 + ₹18.00"); change the GST % and the rate follows, type a rate and it is yours. **A bill is tax-exclusive, so a price that does not split to the paisa can bill a paisa off the shelf price, even for one unit** (₹10.00 incl. 18%: rate 8.47 + GST 1.52 = 9.99; ₹41.00: 41.01; 3 x ₹99.00: 297.01). The hint shows the real figure ("₹10.00 incl. GST → ₹8.47 + ₹1.52 = ₹9.99") and, on web, mobile and the POS register, the document's round-off is filled in (+0.01) so the customer pays the shelf price (type your own round-off and it is left alone; the CLI and MCP send the amounts they are given and add no round-off). A per-line "price includes tax" flag that removes the miss at the source is planned for 0.11.0. Only **sale** prices can include tax; purchase prices are always tax-exclusive. The server still computes every line tax-exclusive, so nothing about a saved bill changes. **Online-store orders** of such items now store the tax-exclusive rate on the invoice line too (the order total the customer saw is unchanged); before, the line held the inclusive price and editing the order's invoice, a quantity for instance, taxed it again. Orders already placed are not rewritten; the review query below lists the ones that were edited. **Bills created before 0.10.1 from such items are not changed. Review them:** [Bills made from items priced including tax](#bills-made-from-items-priced-including-tax). Also exact now: `calcLineItem` for a tax-inclusive line (the online store uses it) works in integer paise, so the total is exactly quantity x price (it was off by a paisa for quantities above 1), and `money.mul` / `money.percent` round half-up without floating point (₹0.85 x 0.7 is ₹0.60, it was ₹0.59).
+- **E-invoice (IRP) and e-way bill payloads are built from the amounts stored on the invoice.** They used to recompute quantity x rate x GST% in floating point, which disagrees with the stored line whenever that is not exact to the paisa: an online-store order of tax-inclusive items (3 x ₹99.00 incl. 18%: stored taxable 251.69, payload said 251.70 and a line total of 297.01), a quantity with a third decimal (0.125 kg was rounded to 0.13 before multiplying), and, on the e-way bill, a line discount (the item's taxable value ignored it, so the items did not add up to the invoice's value). Now each line's taxable value, tax and total are the stored ones and the payload adds up to the stored invoice. **The e-invoice header was wrong for invoices with a line discount:** `ValDtls.Discount` carried the sum of the line discounts, which are already inside each line's taxable value, so they were subtracted twice and `TotInvVal` missed the invoice total. It is now the invoice-level discount only (`discount_amount`), with `OthChrg` the additional charges and `RndOffAmt` the round-off, and the mapper refuses to send a payload whose `AssVal + GST + OthChrg - Discount + RndOffAmt` is not exactly the stored total (an `EInvoicePayloadError` naming the figures, instead of an IRP rejection). The e-way bill now sends `otherValue` (charges + round-off - invoice discount, possibly negative) and `totInvValue`, and is refused the same way if `totalValue + GST + otherValue` is not the stored total. On an e-invoice line whose stored taxable value is a paisa below quantity x rate, the paisa is shown as the line's `Discount` so that `AssAmt = TotAmt - Discount` stays exact. Invoices already submitted are not changed.
+- **Browser AI agents (WebMCP, experimental, web only) are off for everyone after the upgrade.** The setting used to be one flag per browser; it is now per person and organization, and the old flag is deleted, never honoured. Anyone who had turned it on must turn it on again in Settings → Account. The organization owner can turn it off for the whole organization (Settings → Account), and the desktop app never registers browser-agent tools. Writes now show the business, the people and amounts involved and what will change; several queued prompts show **N pending** and **Deny all**; and an agent is limited to 20 approved writes per session and 10 per minute. `invoice_update_status` in the browser no longer accepts `cancelled`, so an agent cannot void an invoice (the MCP tool is unchanged). `system.config` and `auth.me` gain a `webmcpDisabled` field; both are additive. Details: [Browser AI Agents](https://docs.hisaabo.in/ai/webmcp/).
+- **Import wizard: Tally and Generic CSV are gone.** The wizard listed them, but the server only has `mybillbook` and `hisaabo` import adapters, so every import from the other two failed on its first batch with "Unknown import source". The wizard now offers myBillBook only. Nothing that worked is removed; there was never a Tally importer. To bring in Tally, Busy or spreadsheet data, convert it to the Hisaabo CSV layout and use `hisaabo import` (see [Import Data](https://docs.hisaabo.in/getting-started/import-data/)). An unregistered `source` sent to the API now returns `BAD_REQUEST` listing the supported sources (it used to be a 500).
+- **MCP import tools default to `source: "hisaabo"`** (they defaulted to `"excel"`, which the server rejected, so calls that did not set `source` failed). Agents that pass `source` explicitly are unaffected.
+- **Bank reconciliation can skip duplicate statement lines (web: on by default; API: opt-in).** When asked to, confirming a column mapping leaves out any line that is already on file in another import of the same bank account (same day, debit, credit and reference number, or the same narration when there is no reference). Overlapping statements and re-uploaded files no longer double up. The 0.10.1 web app has a **Skip lines already imported from an earlier statement** checkbox on the mapping step, ticked by default, and always sends the choice. The API input `skipDuplicates` defaults to **`false`**, so a 0.10.0 web or desktop client talking to a 0.10.1 API (which never sends the flag) imports every line exactly as before; nothing is dropped unless the client asks. The result carries `duplicatesSkipped` and a `duplicates` list (up to 500 lines: file position, date, amounts, narration, and the earlier import that holds each one), and the review screen shows the count with an expandable list of what was skipped, so nothing disappears unseen. `totalLines` in the result and on the import counts the lines actually imported. Imports made before this release are not changed, and they count as "already on file" for later statements. If two statements legitimately contain identical lines with no reference, untick the checkbox (or send `skipDuplicates: false`) for that upload.
+- **Journal entries are never deleted.** `journal.delete` used to remove an entry and its lines with no trace. It now voids the entry, exactly like `journal.void`: a reversing entry is posted, the original is flagged voided, and both stay in the books, reports and Tally export (netting to zero). The response is still `{ success: true }` with extra fields (`voided`, `alreadyVoided`, `reversingEntryNumber`, ...). Calling it on an already voided entry is a no-op. **Both `journal.delete` and `journal.void` now refuse a reversal entry** (the entry a previous void posted) with `BAD_REQUEST`: before, `journal.void` would reverse it, which reinstated the original's effect in the ledger while the original stayed flagged voided. To correct a wrong void, post a new journal entry. **`journal.update` also refuses a reversal entry** (`BAD_REQUEST`, "post a new journal entry to correct it"), because editing it would break the pair's netting to zero. `journal.update` now checks that the entry is not voided under a row lock inside its transaction, so an edit racing a void can no longer rewrite the lines of an entry that was just reversed (the edit is refused instead). Every void, from `journal.void` or `journal.delete`, is now recorded in the audit log as `journal.void`, written in the same transaction as the void itself: the record cannot be missing, and if it cannot be written the void is rolled back with an error. The web app and the CLI only ever offered Void; there is no delete command. Scripts that called `journal.delete` expecting the entry to disappear from `journal.list` will now see it (and its reversal) listed as voided.
+- **Tally export is XML.** The web **Reports > Tally Export** tab now downloads Tally Prime XML (`reports.tallyExport`: ledger masters plus every invoice, payment, expense and journal entry in the period, no row limit; the **All** preset is unbounded, future-dated entries included), which is what Tally imports. It used to download a CSV from `party.tallyExport` that Tally cannot import. The tab no longer shows a voucher preview table. `party.tallyExport` still works unchanged but is **deprecated**: the API logs `party.tallyExport is deprecated and will be removed in a future release; ... use reports.tallyExport` at most once an hour per process, with no request data, so you can find scripts that still call it. No removal version is set.
+- **Multi-tenant and self-hosted: a business created by a since-removed admin is visible again.** Hisaabo hid a business from its organisation when the member who created it was removed from the organisation (an owner can remove an admin who created a business). The business disappeared from the list for everyone, requests for it were refused with "Business not found", and its background jobs failed. That check only exists to separate organisations that share one database, so it now applies only to a **self-hosted install with more than one organisation**. On the multi-tenant cloud (a database per tenant) and on a normal single-organisation self-hosted install, businesses created by a removed member reappear after the upgrade and stay accessible to the remaining members. A self-hosted database that holds more than one organisation (rare: an install that was converted by hand) keeps the old behaviour until 0.11.0 adds `businesses.tenant_id`, and logs a warning at start. That state is **latched**: the first time the API sees more than one row in `tenants` it writes a `system_config` row (`self_host_multi_org_seen`) and keeps the rule on even if the extra organisations are deleted later, because a hard-deleted organisation leaves its businesses in the shared database and they would otherwise appear in the surviving organisation. If you really did remove the extra organisations and their businesses, switch the rule off again with `DELETE FROM system_config WHERE key = 'self_host_multi_org_seen';` (it takes effect within about 15 seconds). Cloud and single-organisation installs never write the row.
+- **A free or pro plan can no longer be pushed past its business limit by concurrent requests.** Creating several businesses at the same moment on a plan that allows one could create all of them. The limit check and the insert now run in one transaction under a lock. No action needed.
+
+### Bills made from items priced including tax
+
+Before 0.10.1 a manual bill (web, mobile, POS, CLI) put an item's saved price on the line as the taxable rate. For an item marked **Price includes tax** that price already contained the GST, so the customer was invoiced the tax twice: ₹118 including 18% became 118.00 + 21.24 = ₹139.24, and your GST output, GSTR-1, GSTR-3B and the ledger carried the extra tax. **Nothing is rewritten** (a saved bill, its GST returns and its payments stay as they are). Run the query below to list the lines billed at an item's saved price while the item is marked tax-inclusive, with what the line should have totalled (`should_total`: quantity x price less the line discount) and the difference (`overcharge`). Online-store orders are included only when they were **edited** after they were placed: the store priced an order correctly (the total on the inclusive price), but stored that inclusive price as the line's rate, so changing the invoice afterwards, a quantity for instance, added the GST on top again. An order nobody edited has a line total equal to quantity x price, so it is not listed. From 0.10.1 the invoice of a new store order holds the tax-exclusive rate (118.00 including 18% is stored as 100.00 and the order total is unchanged), so editing it is safe; orders placed before the upgrade are not rewritten.
+
+<!-- inclusive-bills-query -->
+```sql
+SELECT b.name AS business, i.business_id, i.invoice_number, i.document_type::text AS document_type,
+       to_char(i.invoice_date AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS invoice_date, i.status::text AS status,
+       it.name AS item, li.quantity, li.unit_price AS billed_rate, li.tax_percent, li.discount_percent,
+       li.total_amount AS line_total,
+       round(li.quantity * li.unit_price * (1 - li.discount_percent / 100), 2) AS should_total,
+       li.total_amount - round(li.quantity * li.unit_price * (1 - li.discount_percent / 100), 2) AS overcharge
+FROM invoice_items li
+JOIN invoices i ON i.id = li.invoice_id
+JOIN businesses b ON b.id = i.business_id
+JOIN items it ON it.id = li.item_id
+LEFT JOIN item_variants iv ON iv.id = li.variant_id
+WHERE it.tax_inclusive
+  AND i.type = 'sale' AND i.document_type <> 'purchase_return'
+  AND i.deleted_at IS NULL AND i.status <> 'cancelled'
+  AND li.tax_percent > 0
+  -- the stored line total is NOT quantity x price: the GST was added on top (an untouched store order is exact)
+  AND li.total_amount <> round(li.quantity * li.unit_price * (1 - li.discount_percent / 100), 2)
+  -- billed at the item's saved price: its own, its variant's, or its alternate unit's
+  AND li.unit_price = COALESCE(
+        iv.sale_price,
+        (SELECT (uv ->> 'salePrice')::numeric
+           FROM jsonb_array_elements(COALESCE(it.unit_variants, '[]'::jsonb)) uv
+          WHERE uv ->> 'unit' = li.selected_unit LIMIT 1),
+        it.sale_price)
+ORDER BY b.name, i.invoice_date, i.invoice_number
+```
+
+The query is read-only and a heuristic: a line billed at a price other than the saved one (you typed the exclusive rate yourself) is not listed, and an item you marked tax-inclusive only after billing it is. Save it as `inclusive-bills.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, with the loop in [Running it on every tenant](#running-the-queries-on-every-tenant): put `inclusive-bills.sql` where that loop says `gstr3b-diff.sql`; the loop reads the tenant databases from the `tenants` table). For each row decide with the customer: issue a **credit note** for the overcharge (it reduces the GST of that month), or leave it if the customer was told the exclusive price. Re-file the GSTR-1 / GSTR-3B of an affected month only if your CA says so.
+
+### Corrected accounting and GST figures
+
+> **Warning: figures for past periods will change. Review previously filed returns.**
+> Hisaabo does not store GSTR-1, GSTR-3B, party balances or the trial balance. It recomputes them from your invoices, notes and payments every time you open them. After this upgrade the **past periods** are recomputed with the corrected rules below, so a GSTR-3B or GSTR-1 you have already filed can now show different numbers from the ones you filed, and party balances, party statements, the P&L, the trial balance and the balance sheet can differ from what you saw before. Before you file the next return or an amendment, re-open the months you have already filed, compare them with what was filed, and take any difference to your CA.
+
+What was wrong, and what you see now:
+
+| Where | Before | Now |
+|---|---|---|
+| **Round-off, invoice discount, additional charges (books)** | An invoice, credit note, debit note or return that carried a round-off, an invoice-level discount or additional charges was posted to the ledger without them, so the trial balance and balance sheet were out of balance by exactly that amount. | They post to accounts of their own, mirrored for notes and returns: round-off to **Round Off** (5030, either sign), the discount to **Discount Allowed** (5020) on sales and **Discount Received** (4200) on purchases, additional charges to **Other Charges** (4020) on sales and **Direct Expenses** (5100) on purchases. Every document balances, and net profit now includes them. The GST on the document is unchanged (it is computed before the invoice-level discount, as the invoice shows). |
+| **Gross profit** | Sales returns were never deducted and purchase returns were ignored. | Gross profit is (Sales + Sales Returns) - (Purchases + Purchase Returns + Direct Expenses). |
+| **GSTR-3B, input tax credit (Table 4)** | Purchase returns, purchase-side debit notes and credit notes / sales returns raised from a purchase invoice were **added** to the credit, overstating it, and so was **every other purchase-type document**: the query had no document-type filter, so purchase quotations, proformas and delivery challans counted as if they were bills. | They **reduce** it, by head (CGST, SGST, IGST), as in your books, and **purchase-type documents that are not invoices or reversals no longer count toward input credit at all**. |
+| **GSTR-3B, output tax (Table 3.1(a), Tax Payable, Net Tax)** | Credit notes, sales returns and sale-side debit notes were ignored, overstating the tax when you issued credit notes. | Taxable value and tax are **net of credit notes and sales returns and include sale-side debit notes**, per head. GSTR-1 still lists the invoices gross and the notes in their own section. In a month where credit notes exceed sales, the net 3.1(a) figures (and Tax Payable) are **negative**: that is a credit to carry forward, not an error. |
+| **Which side a credit note belongs to** | The web and mobile apps create a credit note or sales return from a **purchase** invoice with the type of that invoice, but the books, GSTR-1 and GSTR-3B treated every credit note / sales return as a sale-side document: they were posted against a receivable and output GST, listed in GSTR-1 and netted from output tax. | One classifier everywhere, by the document's **type**: a credit note or sales return raised from a purchase invoice reverses the purchase (Dr Payable / Cr Purchase Returns / Cr Input GST), reduces input credit, is **not** in GSTR-1, and reduces what you owe the supplier; sale-side ones are unchanged. |
+| **CGST / SGST on an odd paisa** | GSTR-1 and GSTR-3B rounded the odd paisa up for both heads (an invoice with GST of 102.59 reported 51.30 + 51.30 = 102.60), while the books, the invoice's ITC entry and the PDF each split it differently again (the PDF printed tax / 2 for each head). | One rule everywhere, the **e-invoice (IRP) one**, because the IRP-signed e-invoice is what the government holds: each **line's** tax is halved with CGST rounded half-up and SGST the remainder (the odd paisa goes to CGST), and a document's CGST / SGST is the sum of its lines. The ledger, GSTR-1 (invoice rows, B2CS, HSN and totals now tie), GSTR-3B, GSTR-9, the PDF and the e-way bill all follow it. Limits to know: **PDFs you downloaded earlier** printed tax / 2 per head, so on an odd-paisa invoice an old PDF can differ by one paisa per head from the reports (a re-downloaded PDF uses the new split); **e-invoices already submitted are not touched**; and the IRP payload computed the half in floating point, which rounded a few odd paise (about 1 in 22) down, so for those lines the CGST / SGST in a payload sent earlier can differ by one paisa from the exact rule now used. |
+| **GSTR-1, debit notes** | Purchase-side debit notes and purchase returns, which you issue to a supplier, were listed as outward debit notes. | Only sale-side debit notes are listed. |
+| **Party balance (party page, party list, "Outstanding" filter)** | Quotations, proformas and delivery challans were counted, a purchase-side debit note was added to what you owe a supplier instead of reducing it, and a **supplier's balance was shown as a positive number** (the web and mobile apps then labelled it "Receivable" / "You will receive", although the API, CLI and MCP documentation say negative = you owe them). | The balance is **signed, debit minus credit, for customers and suppliers alike**: positive = they owe you, negative = you owe them. A supplier you owe 14,000 now shows **-14,000** (Payable). Only invoices, credit notes, sales returns, purchase returns and debit notes count, and credit notes, returns and purchase-side debit notes move the balance the right way. The "Outstanding" filter lists every party whose balance is not zero, in either direction. The dashboard "Payable" card, which stays a positive amount, now includes suppliers' opening balances and the same reversals. |
+| **Party ledger tab, statement and PDF** | On the party's **Ledger tab**, payments to a supplier were shown as credits, purchase-side debit notes were on the wrong side and deleted payments were listed. | Fixed; the tab, the party statement report, the CSV and the PDF all start from the opening balance exactly as stored and agree with the party's balance (they add payments as their own rows, so they match whenever every payment is allocated to an invoice). |
+| **ITC utilisation** | Recording a period's utilisation a second time posted the credit a second time, and Input GST went negative. | Recording a period again **replaces** its journal: the earlier one is reversed (marked void, with a mirror entry; nothing is deleted) and the new one posted. Recording zero amounts clears the period. |
+| **ITC ledger and the utilisation limit** | The ITC ledger was written only when a purchase invoice was created, so a purchase return reduced GSTR-3B but not the ITC dashboard, and a utilisation could exceed the credit GSTR-3B reports. | A purchase-side reversal created from now on writes a **negative** ITC entry (and cancelling or deleting it removes the entry), so the ITC dashboard, Table 4 and the utilisation limit are net and equal GSTR-3B. **Reversals created before this release have no entry**: for those months the ITC dashboard stays gross while GSTR-3B Table 4, which is computed from the documents, is net. |
+| **A document that does not add up** | A document whose stored total is not explained by its subtotal, tax, discount, charges and round-off (a legacy import, hand-edited data) had the whole difference posted as round-off, however large. | Up to ₹1.00 it is still a round-off. A larger difference is parked in a new **Suspense / Unreconciled** account (2900, a balance-sheet account, so it never looks like profit) and the API logs a warning with the document id: find it in the log, fix the document, and the account clears. |
+
+#### What the accounting migration does
+
+`0024_ledger_adjustment_accounts` (`0011_ledger_adjustment_accounts` for tenant databases) only adds four system accounts to every existing business: **4020 Other Charges**, **5020 Discount Allowed**, **5030 Round Off** and **2900 Suspense / Unreconciled**. It is idempotent and rewrites no document. If a business already has an account of its own coded 4020, 5020, 5030 or 2900 it is left untouched, and the adjustment then posts to Other Income (4100), Miscellaneous Expenses (5990) or Other Current Liabilities (2300) instead of failing.
+
+#### What to do after upgrading
+
+1. **Find the months that change.** Save the query below as `gstr3b-diff.sql` and run it once in each database (single-tenant: your one database; multi-tenant: every tenant database, see [Running it on every tenant](#running-the-queries-on-every-tenant) below). It lists, per business and month, the GSTR-3B output tax and input credit the old rules produced and the corrected ones, and only months where the net tax payable differs. Figures are totals over CGST + SGST + IGST (the head split follows the same rules); months are calendar months in UTC, which is what the reports use on the Docker image.
+
+   <!-- gstr3b-diff-query -->
+   ```sql
+   WITH docs AS (
+     SELECT i.business_id,
+            date_trunc('month', i.invoice_date AT TIME ZONE 'UTC')::date AS month,
+            i.type::text AS type,
+            i.document_type::text AS document_type,
+            i.tax_amount::numeric AS tax,
+            -- the side a document belongs to, by its type (the ledger's rule); a purchase
+            -- return is purchase-side whatever type it was stored with
+            CASE
+              WHEN i.document_type = 'purchase_return' THEN 'purchase'
+              WHEN i.document_type IN ('invoice', 'credit_note', 'sales_return', 'debit_note') THEN i.type::text
+            END AS side,
+            -- credit notes / returns, and a debit note raised against a supplier, take tax back
+            (i.document_type IN ('credit_note', 'sales_return', 'purchase_return')
+             OR (i.document_type = 'debit_note' AND i.type = 'purchase')) AS reverses
+     FROM invoices i
+     WHERE i.status <> 'cancelled' AND i.deleted_at IS NULL
+   ), m AS (
+     SELECT business_id, month,
+            -- before: only sale invoices; after: net of credit notes / returns, plus sale debit notes
+            COALESCE(SUM(tax) FILTER (WHERE type = 'sale' AND document_type = 'invoice'), 0) AS old_output,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'sale' AND reverses), 0) AS new_output,
+            -- before: EVERY purchase-type document; after: invoices less reversals
+            COALESCE(SUM(tax) FILTER (WHERE type = 'purchase'), 0) AS old_itc,
+            COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND NOT reverses), 0)
+              - COALESCE(SUM(tax) FILTER (WHERE side = 'purchase' AND reverses), 0) AS new_itc
+     FROM docs
+     GROUP BY business_id, month
+   )
+   SELECT b.name AS business, m.business_id, to_char(m.month, 'YYYY-MM') AS month,
+          m.old_output, m.new_output, m.old_itc, m.new_itc,
+          m.old_output - m.old_itc AS old_net_tax, m.new_output - m.new_itc AS new_net_tax,
+          (m.new_output - m.new_itc) - (m.old_output - m.old_itc) AS change
+   FROM m JOIN businesses b ON b.id = m.business_id
+   WHERE (m.old_output - m.old_itc) <> (m.new_output - m.new_itc)
+   ORDER BY b.name, m.month
+   ```
+
+   A positive `change` means more tax payable than before, a negative one less. It does not show the odd-paisa CGST / SGST difference (a paisa per affected invoice).
+
+   <a id="running-the-queries-on-every-tenant"></a>
+   **Running it on every tenant (multi-tenant).** Connected with `psql` to the **control database** as the control role, in the directory that holds `gstr3b-diff.sql`, this generates one `\c` + `\i` pair per tenant database and runs them (a `psql` `\gexec` cannot be used here: it runs generated SQL in the *same* database and cannot switch databases):
+
+   ```
+   \t on
+   \a
+   \o each-tenant.psql
+   SELECT format(E'\\echo == %s\n\\c %I %I %s %s\n\\i gstr3b-diff.sql',
+                 slug, db_name, current_user, coalesce(db_host, 'localhost'), coalesce(db_port, '5432'))
+   FROM tenants WHERE db_name IS NOT NULL ORDER BY slug;
+   \o
+   \t off
+   \a
+   \i each-tenant.psql
+   ```
+
+   It reconnects as the same role to each tenant's host, port and database (set `PGPASSWORD` or use a `.pgpass` entry so it does not prompt per tenant) and prints one `== <slug>` heading per tenant followed by that tenant's rows. The same loop runs the opening-balance review query in step 5: replace `gstr3b-diff.sql` with its file name.
+2. **Re-open every GSTR-3B and GSTR-1 you have already filed** for the months it lists (GST, pick the month) and compare with what was filed. Differences come from credit notes, returns, debit notes, purchase-type documents that are not bills, and odd-paisa GST; if one is material, your CA decides whether to amend.
+3. Open the **trial balance** and **balance sheet**: they now balance for invoices with a round-off, discount or charges. New rows (Round Off, Discount Allowed, Other Charges) appear in the P&L when you used those fields. If **Suspense / Unreconciled** shows a balance, a document does not add up: the API log names it.
+4. **ITC utilisation recorded twice before this release** is not rewritten automatically. Open ITC, **Utilization**, pick the period, and save it again: the doubled journal is reversed and one correct journal is posted.
+5. **Review supplier and customer opening balances. Their meaning may have changed for you.** The documented convention (docs, API, CLI, MCP) is one signed number for everyone: **positive = they owe you, negative = you owe them**. Hisaabo 0.10.0 showed a bare "Opening Balance" box with no direction, and its party page added a supplier's purchases to whatever you typed, so a supplier's opening balance entered as a **positive** number (for example `14000`, meant as "we owe them 14,000") behaved as an amount you owe. Under the convention it now means **they owe you 14,000**: the supplier's balance and statement start from the other side. Customers are the mirror image (a negative opening balance means you owe the customer). Nothing is changed automatically, because only you know what each number meant. Run this read-only query (same way as step 1) to list the candidates, the rows whose sign differs from the usual direction:
+
+   <!-- opening-balance-review-query -->
+   ```sql
+   SELECT b.name AS business, p.id AS party_id, p.business_id, p.type, p.name AS party,
+          p.opening_balance,
+          CASE WHEN p.type = 'supplier' THEN 'positive: the supplier now OWES YOU this' ELSE 'negative: YOU now owe the customer this' END AS meaning_now
+   FROM parties p JOIN businesses b ON b.id = p.business_id
+   WHERE (p.type = 'supplier' AND p.opening_balance::numeric > 0)
+      OR (p.type = 'customer' AND p.opening_balance::numeric < 0)
+   ORDER BY b.name, p.type, p.name
+   ```
+
+   For each row, decide what the number was meant to be. If it is right as it stands (an advance you paid a supplier is a positive supplier balance; an advance a customer paid you is a negative customer balance), leave it. If it was typed as "the amount I owe the supplier" (or "the amount the customer owes me" typed negative), flip its sign **after confirming**, either by editing the party in the mobile app (its edit screen has **To receive** / **To pay**) or with this optional per-party statement, run in the right database:
+
+   <!-- opening-balance-flip -->
+   ```sql
+   UPDATE parties
+   SET opening_balance = -opening_balance, updated_at = now()
+   WHERE id = '<party_id from the query>' AND business_id = '<business_id from the query>';
+   ```
+
+   There is deliberately no bulk migration. The statement is safe to run once per party; running it twice flips it back.
+
+   **Run the review query again after your users' mobile and desktop apps have updated.** The 0.10.0 mobile and desktop apps keep showing the bare "Opening Balance" box, where a positive number on a supplier now means "they owe you". A supplier created or edited from such an app after you did this review can therefore introduce a new row with the sign you did not intend, and the query will list it. The web app and the 0.10.1 mobile app label the direction ("To receive" / "To pay").
+
+#### Points to confirm with your CA
+
+- A **purchase-side debit note** (a debit note you raise against a supplier) is treated like a purchase return: it reduces input credit in GSTR-3B Table 4, matching the books. Under the GST law a *debit note issued by the supplier* increases credit; Hisaabo's purchase-side debit note is the one you issue.
+- An **invoice-level discount** is booked after GST (as a Discount Allowed expense); it does not reduce the taxable value or the GST on the invoice.
+- **Round Off** is an expense account that can carry either sign; a net credit shows as a negative expense.
+
+### E-invoicing never signed in to the IRP
+
+**Action needed if you use e-invoicing:** configure the NIC public key. Through v0.10.0 the NIC public key bundled in the API image was not a valid key, so the sign-in request to the IRP failed before anything was sent, and **e-invoicing has never worked against the IRP** in any release (so no IRN was ever generated by a real IRP call). v0.10.1 no longer bundles a key: you supply it.
+
+1. Download the NIC e-invoice public key for each environment you use (the sandbox and production keys differ) from the NIC e-invoice portal, as described in [DEPLOYMENT.md](DEPLOYMENT.md#e-invoicing-irp).
+2. Set `IRP_SANDBOX_PUBLIC_KEY_PATH` / `IRP_SANDBOX_PUBLIC_KEY_PEM` (businesses with sandbox mode on) and/or `IRP_PUBLIC_KEY_PATH` / `IRP_PUBLIC_KEY_PEM` (sandbox mode off). A file mounted as a Compose secret is the easiest. Restart the API.
+3. In the app, **E-Invoicing, Settings, Test Connection**. It says whether the key (server setup), the network or the sign-in (credentials) failed.
+
+Until a key is configured, generating, retrying or cancelling an e-invoice is refused with "E-invoicing is not configured: the NIC public key is missing or invalid" and nothing is changed (invoices are not marked `failed`). Installs that do not use e-invoicing need to do nothing; the API logs a warning at startup only if a key variable is set but invalid.
+
+The same release corrects how the sign-in request is built and how the IRP's `Status` is read, to match NIC's published documentation. That was checked against the documentation only, not against NIC's live sandbox, so run Test Connection in sandbox mode first. The request and key handling are recorded in [compliance-audit.md](compliance-audit.md).
+
+### E-invoice supply type: every domestic B2B invoice is "B2B"
+
+The IRP takes a supply type (`TranDtls.SupTyp`: `B2B`, `SEZWP`, `SEZWOP`, `EXPWP`, `EXPWOP` or `DEXP`). Hisaabo sent **`EXPWP` (export with payment) for every inter-state sale** and `B2B` only for intra-state ones. Inter- versus intra-state is not a supply type: it shows in IGST versus CGST + SGST and in the place of supply, which the payload already carried. From 0.10.1 the supply type is `B2B` for every e-invoice, intra- or inter-state.
+
+**Nothing to correct.** No e-invoice could be generated by a real IRP call before 0.10.1 (see above: the bundled NIC key was invalid), so no wrongly typed e-invoice exists. Nothing in your data changes.
+
+Related rules, also new in 0.10.1:
+
+- **Exports are refused, not mis-filed.** Hisaabo has no export, SEZ or deemed-export fields until 0.11.0, so it cannot build those supply types. A customer whose GSTIN is `URP` or whose state code is `96` (other country), set on the customer or read from the start of its GSTIN, is refused with "Exports aren't supported in e-invoicing yet; available in 0.11". Nothing is sent to the IRP and the invoice is left as it was; the automatic submission after invoice creation skips such an invoice the same way. Issue the export invoice on the GST portal until 0.11.0.
+- **A customer with no state code takes its state from its GSTIN.** The first two digits of a GSTIN are the state code. Until now a customer with a GSTIN but no state code was treated as being in the seller's state, so the e-invoice carried CGST + SGST and the seller's state as the place of supply even for an inter-state customer. The state now comes from the customer's state code, else from its GSTIN. If neither exists, or the business has no state code and no GSTIN, generation is refused with a message saying which state is missing.
+- `IgstOnIntra` stays `N`: Hisaabo never charges IGST on an intra-state supply. (`Y` is for SEZ and deemed exports, which arrive in 0.11.0.)
+
+### GST return periods are always April to March
+
+The GST financial year is 1 April to 31 March for every taxpayer. A business's own accounting year (`financialYearStart`, which can be January or July, for example) decides only the accounting reports: trial balance, profit and loss, balance sheet and the dashboard. It must never move a GST return period. Hisaabo mixed the two in two places; both now follow the statute:
+
+- **GSTR-1 portal JSON: the financial-year label.** `gst.gstr1Json` worked the financial year out from the business's `financialYearStart`, so a January-books business labelled January-March 2026 as FY 2026-27 and a July-books business labelled April-June as the previous year. The label was computed but never written into the downloaded JSON (the portal schema has no such key), so **no filing was wrong**. The filing period `fp` (MMYYYY) was always right. The label is now computed from April, and returned as the new `financialYear` field of the response (additive: `json` and `filename` are unchanged).
+- **CMP-08 (composition dealers): the quarters.** `gst.cmp08` treated quarters as calendar quarters (Q1 = January-March of `year`). Under GST the quarters of the financial year are Q1 April-June, Q2 July-September, Q3 October-December, Q4 January-March. `quarter` is now the GST quarter and `year` is the **start year of the financial year** (`year: 2025, quarter: 1` is April-June 2025; `year: 2025, quarter: 4` is January-March 2026). **A caller that passed `quarter: 1` for January-March now gets April-June: update any script that calls `gst.cmp08`** (the web app and the CLI do not). The taxable value and the 1% tax are now summed in exact paise, with 1.005 rounding half up to 1.01; the last second of the quarter is no longer left out. **CMP-08 now counts what GSTR-1 and GSTR-3B count.** It used to sum every non-cancelled sale-type row of the quarter, so quotations, proformas, delivery challans and deleted documents were counted and credit notes and sales returns were ADDED. It now sums the quarter's three GSTR-1 months: sale invoices (not cancelled, not deleted), net of credit notes and sales returns, plus sale-side debit notes. A quarter whose credit notes exceed its sales shows the negative net value and tax payable `0.00` (CMP-08 does not refund; ask your CA how to carry it).
+- **Which period each return covers was already right** (GSTR-1 and GSTR-3B: the calendar month; GSTR-9: April of the start year to March of the next; the ITC ledger; GSTR-2B reconciliation), so those labels do not change. What did change is how the edges of those months are cut: see "GST months follow the Indian calendar, with no gaps" below, which applies to GSTR-1, GSTR-3B, GSTR-9, GSTR-2B and CMP-08. The trial balance, profit and loss, balance sheet and dashboard still start the year on the business's `financialYearStart`.
+
+Nothing in your data changes. If you use CMP-08 and a quarter you looked at before 0.10.1 was January-March, look at it again under the new numbering.
+
+### E-invoice lines need a real HSN code
+
+A line whose item had no HSN code was sent to the IRP as HSN `9999`, a code that does not exist. From 0.10.1 generating an e-invoice (from the E-Invoicing page, a retry, or the automatic submission after you create an invoice) is **refused before anything is sent to the IRP**, naming each offending line: `line 2 'Copper Wire' has no HSN code; add it on the item`. The invoice is left exactly as it was; add the HSN on the item (Items, edit) and generate again. After the automatic submission refuses an invoice, the invoice shows the e-invoice as failed with that message (no notification is sent for an automatic submission); fix the item and use Retry.
+
+The code must be 4 to 8 digits and not all zeros (`0000` and `000000` are placeholders, not codes; spaces, dots and hyphens are ignored: `7306.90` is sent as `730690`), and the minimum follows the business's annual turnover: **4 digits up to and including ₹5,00,00,000, 6 digits above** (compared in exact paise: ₹50,000,000.00 is still the 4-digit band, ₹50,000,000.01 is not). The turnover is the business's `annual_turnover`, which the app has no field for yet (it is empty for almost every business), so until 0.11.0 captures it only the 4-digit minimum is enforced; a business above ₹5 Cr must keep 6-digit codes on its items itself. HSN is read from the live item, because invoice lines carry no HSN snapshot until 0.11.0: changing an item's HSN changes the code on every e-invoice generated afterwards, and a line without an item (typed in free) has no HSN and cannot be e-invoiced.
+
+**The same rule applies to e-way bills.** A line whose item has no HSN used to go to the NIC with an empty HSN code; generating the e-way bill is now refused before the NIC is called and before anything is saved, with the same per-line message (`Cannot generate the e-way bill: line 2 'Copper Wire' has no HSN code; add it on the item.`), the same 4 to 8 digit check and the same turnover minimum (4 digits up to and including ₹5,00,00,000, 6 above).
+
+No action is needed if every item you e-invoice already has an HSN. Nothing was ever sent to the IRP with a made-up code, since no e-invoice could be generated before 0.10.1 (see above).
+
+### GSTR-1 Table 12 (HSN summary): one row per HSN, unit and GST rate
+
+The HSN summary in GSTR-1 had one row per HSN code. An HSN sold at 5% on some invoices and 18% on others was a single row with the two rates mixed and no rate at all, and every row said unit `NOS`. From 0.10.1:
+
+- **A row is one HSN + unit + GST rate.** The same HSN at 5% and at 18% is two rows, and each row states its rate (`taxRate`; `rt` in the portal JSON). Quantities in different units (kilograms and grams, say) are separate rows, never added together. Each row's taxable value and tax still add up to the same totals as the B2B and B2CS sections and GSTR-3B Table 3.1(a); only the grouping changed.
+- **The unit (UQC) comes from the line.** It is the unit the line was billed in, or the item's unit when none was chosen, translated to the GST code (`kg` is `KGS`, `g` is `GMS`, `l` is `LTR`, `m` is `MTR`, `pair` is `PRS`, and so on for every unit Hisaabo offers; feet, inches, jars and pouches have no GST code and are `OTH`; a bunch is `BUN`). `pcs` stays `NOS`. A line with no item has no unit and is `NOS`. Before 0.10.1 the portal JSON said `NOS` for every row, and `g`, `l`, `m`, `cm`, `ft`, `pair`, `pkt`, `bun`, `btl` and a few others were not translated at all.
+- **Quantities are added exactly** (in thousandths), not as floating-point numbers.
+- **The portal JSON `hsn.data` rows now carry `rt`** (and the real `uqc`); the GSTR-1 CSV gets a new **HSN summary** section with HSN, description, UQC, quantity, rate, taxable value, CGST, SGST, IGST, cess and total value. Cess is not modelled on sales lines yet and is always 0 (planned for 0.11.0).
+- **`gst.gstr1` rows carry two new fields, `uqc` and `taxRate`** (additive; the existing fields are unchanged), and the rows are sorted by HSN, rate and unit.
+
+**A known limitation that stays until 0.11.0: HSN comes from the live item, not from the invoice.** Invoice lines carry no HSN snapshot, so the summary uses each item's *current* HSN. If you change an item's HSN, every past invoice of that item moves to the new HSN in Table 12 for months you have already filed. Before filing, check that every item you sold has the HSN you want; do not change the HSN of an item after the month is filed unless you are refiling it.
+
+**A line with no HSN now blocks the GSTR-1 JSON file.** A line typed in without an item, or sold from an item that has no HSN, used to be filed in Table 12 under `0000`, which is not a real code. `gst.gstr1Json` (the file for the portal's offline tool) is now **refused** while any sale line of the month has no HSN, with a message that lists what to fix: `Cannot export GSTR-1 JSON for Jan 2026: 2 line(s) have no HSN code ... add the HSN on these items: 'Copper Wire' (INV-12 line 1) ... these lines were typed in without an item and cannot carry an HSN: INV-12 line 2 ('Packing'); bill a catalogue item with an HSN instead.` Add the HSN on each item and export again. A typed-in line cannot be fixed on the item: change the invoice (or cancel it and issue a new one) so the line bills a catalogue item with an HSN. **The on-screen report and the CSV are not blocked**: the web GSTR-1 tab shows a warning listing the lines, the CSV carries a WARNING line, one `NO HSN` line per line and a `Flag` column, and the CLI summary prints a warning; the figures themselves are unchanged (the lines are in the `0000` row, so Table 12 still ties to B2B + B2CS). `gst.gstr1` rows gain a list, `hsnMissing`, with the invoice number, line number and item of each. The block is only on the file because a screen can say what is wrong while a file with a made-up code would be filed or rejected; if you must file regardless, take the figures from the CSV and enter Table 12 by hand on the portal.
+
+**An HSN that is present but cannot be filed blocks the file too.** The same rule as the e-invoice applies, with the same per-line wording: the code must be 4 to 8 digits (spaces, dots and hyphens are dropped, so `7306.90` is filed as `730690` and groups with `730690`), and at least 6 digits when the business's annual turnover is above ₹5,00,00,000 (4 digits up to and including it; the turnover is unknown for almost every business until 0.11.0, so only the 4-digit minimum applies). A line like `INV-3 line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item` is listed in `gst.gstr1`'s new `hsnInvalid`, refuses `gst.gstr1Json`, appears in the web warning and the CLI summary, and is flagged in the CSV (a WARNING line, one `INVALID HSN` line per line, `INVALID HSN` in the Flag column). Table 12 keeps the code as stored, and the figures still tie. An item whose HSN is all zeros (`0000`, `000000`) is treated as missing, and the e-invoice and the e-way bill refuse it with "which is not a real HSN code (all zeros)".
+
+If you downloaded or uploaded GSTR-1 Table 12 before 0.10.1, compare it with the new one: rows for an HSN sold at more than one rate are now split.
+
+### GSTR-1 portal JSON: rate-wise rows, places of supply, Table 12 fields
+
+The file `gst.gstr1Json` produces for the portal's offline tool could not be filed as it stood. Each defect is fixed in 0.10.1, and what could not be checked is listed under "Not verified" below.
+
+- **B2B invoices were one `itms` entry with `rt: 0`** and the invoice's lump sums. Each invoice now has **one `itms` entry per GST rate**, with the real `rt`, `txval` and the heads of its supply type (`iamt` when inter-state, `camt` + `samt` when intra-state), `csamt` 0. The entries are summed line by line, CGST and SGST split per line with the odd paisa to CGST, exactly as the B2CS and HSN sections and the ledger do, so every section ties.
+- **Credit and debit notes (CDNR) had `rt: 0` and zero tax.** They now carry their real rate rows and tax.
+- **B2CL (inter-state, unregistered, over 2.5 lakh) had no invoice number, date, value or rate**, only totals per state. It is now invoice by invoice (`inum`, `idt`, `val`, rate rows), grouped by the customer's state (`pos`), where an unknown state used to become `99`.
+- **B2CS put the supplier's state on every row** and decided INTRA or INTER from "CGST is not zero". It is now keyed by supply type, place of supply and rate: an INTER row carries the **customer's** state and `iamt` only, an INTRA row the supplier's state and `camt` + `samt` only.
+- **Table 12 (`hsn.data`) rows get `val`** (the row's total value), which the portal requires and the rows lacked. **A service line (an item of type service) is filed with UQC `NA` and quantity 0**, not with a unit.
+- **UQC.** `ft` was sent as `FTS`, which is not a GST unit code; feet and inches have none and are `OTH`. `bun` is **bunches (`BUN`)**, as the item form says, not bundles (`BDL`). The e-invoice and the e-way bill had their own maps with codes that are not on the list either (`CMT`, `FT`, `INH`, `DZN`, `PAR`, `JAR` on the IRP; `FT`, `INH`, `PAR`, `PKT`, `TNE`, `JAR` and `BDL` for a bunch on the e-way bill): all three now use one map, so a unit that went to the IRP or the NIC as an invalid code is now a valid one (`dozen` is `DOZ`, `pair` is `PRS`, `pkt` is `PAC`, `ton` is `TON`, `cm` is `CMS`). `pcs` is still `PCS` on the e-invoice and `NOS` on the e-way bill and in GSTR-1.
+- **The file is refused, naming the document, for what it cannot represent yet** (the on-screen report and the CSV still show everything, and `portalIssues` lists it): a credit or debit note to an **unregistered** customer (these belong in Table 9B or are netted in Table 7; add them on the portal); an invoice or note whose lines do not add up to its own taxable value and tax (an old import: no rate rows can be built; correct the document); a B2CL or B2CS customer whose state is not a GST state. The refusal text is the same `PRECONDITION_FAILED` the missing-HSN check uses.
+- `gst.gstr1` gains additive fields: `items` and `interState` on each B2B row and note, `b2cLargeInvoices`, `b2cSmallRows`, `portalIssues`. Nothing existing changed.
+
+**Not verified.** There is no official GSTN JSON schema to check against, and the file was not uploaded to the portal. The shape follows the offline tool's format as third parties document it. Before relying on a file, upload it to the offline tool or the portal's validation step (which does not file anything), and tell us what it rejects.
+
+- **Table 12 as two lists (`hsn_b2b` and `hsn_b2c`).** Third-party write-ups of the newer portal format describe the HSN summary split into a B2B list and a B2C list; the schema is not confirmed. Hisaabo still writes one `hsn.data` list. Not implemented until the schema is confirmed.
+- **UQC `NA` and quantity 0 for services**, and the UQC list itself, are as the portal's help describes them, not checked against the schema file.
+- **Gross-turnover keys.** Offline-tool exports usually carry `gt` and `cur_gt`; Hisaabo does not write them (it does not know the turnover). Whether the portal requires them on upload is not confirmed.
+- **The B2CL threshold is still 2.5 lakh.** Notification 12/2024-Central Tax lowered it to 1 lakh for inter-state supplies to unregistered persons; sources disagree on the start date (1 August or 1 September 2024) and GSTN's advisory of 3 September 2024 said to keep the existing reporting until the portal is updated. Hisaabo has not changed its threshold: ask your CA which applies to you.
+- **Cess is always 0** (planned for 0.11.0).
+
+Nothing stored changes. If you filed GSTR-1 from the JSON before 0.10.1, compare the new file with what you filed.
+
+### GST months follow the Indian calendar, with no gaps
+
+**Figures for past periods can change. Review the months you have already filed.**
+
+A GST month was built as "the 1st to 23:59:59 of the month **in the API server's time zone**". Two things were wrong with that:
+
+- **A document dated the 1st of a month, entered in an Indian browser, fell into the previous month on a server running in UTC.** The web app sends a date-only "1 April" as the browser's local midnight, which is 31 March 18:30 UTC. The shipped images and Compose files set no `TZ`, so the API runs in UTC unless you set one, and GSTR-1 and GSTR-3B put that invoice in **March**. Every invoice, credit note and purchase dated the 1st of a month was filed a month early.
+- **The month ended at 23:59:59.000, so a document stamped in the last second of the month after `.000` (23:59:59.500, say) was in no month at all.**
+
+From 0.10.1 a month (and a quarter) is the half-open window **[00:00 IST on day 1, 00:00 IST on day 1 of the next month)**: IST is UTC+05:30 all year (India has no daylight saving), nothing falls between two months and nothing is in two. The result no longer depends on the server's time zone. It applies to GSTR-1, GSTR-3B (output tax and input credit), GSTR-9, GSTR-2B "missing in 2B", CMP-08 and the dashboard's this-month / last-month comparison, and to the **return period that a purchase (or a purchase return) writes to the ITC ledger**. The document date sent to the IRP (e-invoice) and the NIC (e-way bill) is now the IST calendar date as well: a "1 April" invoice used to be sent as 31 March on a UTC server.
+
+If your API server already runs with `TZ=Asia/Kolkata`, only the last-second gap changes for you. On a UTC server, find what moves: documents whose month differs between the two calendars
+
+```sql
+SELECT business_id, invoice_number, document_type, type, invoice_date,
+       to_char(invoice_date AT TIME ZONE 'UTC', 'YYYY-MM')           AS month_before,
+       to_char(invoice_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM')  AS month_now
+FROM invoices
+WHERE deleted_at IS NULL AND status <> 'cancelled'
+  AND to_char(invoice_date AT TIME ZONE 'UTC', 'YYYY-MM') <> to_char(invoice_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM')
+ORDER BY invoice_date;
+```
+
+(in a multi-tenant install, run it in each tenant database). For each row, the month in `month_before` was filed with that document and `month_now` is where it belongs. If a return you filed included such a document, the corrected figures differ from what you filed: talk to your CA about whether to amend. Documents entered through the API, the CLI or an import with an explicit UTC time are rarely affected.
+
+**ITC ledger rows written before 0.10.1 keep the period they were written with** (the old server-time month). GSTR-3B always recomputes input credit from the documents, so it is right; the ITC dashboard and the utilisation limit read the stored period, so for a purchase dated on the 1st they can still show last month's credit until that row is corrected. The query above lists those purchases (`type = 'purchase'`). Rows written from 0.10.1 on are right.
+
+### One intra-state / inter-state decision everywhere (CGST + SGST or IGST)
+
+Whether a sale or purchase is CGST + SGST (same state) or IGST (different state) was decided by four different rules: the GST returns compared state codes and then state names and, failing both, said IGST; the ledger said CGST + SGST when it could not tell; the invoice PDF said IGST; the e-invoice read the state from the GSTIN. **A customer with a GSTIN and no state on file was IGST in GSTR-1 and GSTR-3B and CGST + SGST in the ledger and the e-invoice, for the same invoice.** From 0.10.1 GSTR-1, GSTR-3B (output tax, purchases and input credit), GSTR-2B, the ITC entries, the ledger, the invoice PDF, the e-invoice and the e-way bill all ask one function (`isIntraStateSupply`, `@hisaabo/shared`):
+
+1. **The GSTIN's state** (its first two digits) when it is a valid state code. The portal and the IRP check the GSTIN, so it outranks anything typed beside it.
+2. **The stored state code** when it is valid.
+3. **The state name** ("Maharashtra", "Orissa", "Andhra Pradesh (New)" ...).
+
+The state codes are 01-38 plus 97 (other territory) and 96 (other country, an export). **Andhra Pradesh: the old code 28 and the current code 37 are one state** (and 25, Daman & Diu, is 26), so a business in 37 and a customer on 28 is CGST + SGST. A code that is not in the table (`00`, `50`, `99`) is ignored, not compared; the party and business forms now reject it. When neither side's state can be worked out (for example the POS "Walk-in Customer", who has no address), the supply is **intra-state, the supplier's own state**.
+
+What this changes for you:
+
+- **Invoices and credit notes to a customer with a GSTIN and no state on file** move in GSTR-1 and GSTR-3B from IGST to CGST + SGST when the GSTIN is the business's own state (and the ledger and the e-invoice, which already said so, now agree with the return); in the other direction, a customer with another state's GSTIN and no state on file is IGST in the ledger and the PDF as well as in the return (the ledger used to book CGST + SGST).
+- **Sales to the POS "Walk-in Customer" and to any customer with nothing on file** were IGST in GSTR-1 (B2CS) and GSTR-3B and are now CGST + SGST, as the ledger already booked them and as the place of supply requires (the supplier's location when the recipient's is unknown). **If you filed such months as IGST, review them with your CA.** To list the customers affected: `SELECT id, name FROM parties WHERE (gstin IS NULL OR gstin = '') AND (state_code IS NULL OR state_code = '') AND (state IS NULL OR state = '')` (and every customer whose `state_code` does not match the first two digits of its `gstin`, see below).
+- **A customer or business whose stored state code disagrees with its GSTIN** (say code 27, GSTIN starting 29) is now treated by its GSTIN in the returns, the ledger and the PDF. **The e-invoice and the e-way bill refuse it** ("has state code 27 but its GSTIN starts with 29; correct one of them"), nothing is sent to the IRP / NIC. Correct the state or the GSTIN on the party. To find them: `SELECT id, name, gstin, state_code FROM parties WHERE gstin ~ '^[0-9]{2}' AND state_code IS NOT NULL AND state_code <> '' AND left(gstin, 2) <> state_code`.
+- The code sent to the IRP and the NIC is still the one on the GSTIN or the record (a GSTIN starting 28 is sent as 28); only the comparison treats 28 and 37 alike.
+
+**Nothing stored is rewritten.** The tax split of an invoice is computed when the return, the ledger or the PDF is produced, from the line taxes; no stored amount changes, and for data with valid state codes and no GSTIN-only parties the answers are exactly the old ones.
+
+### Date filters follow the business time zone (IST)
+
+Every date range a screen or a script sends is now a half-open window of Indian (IST, UTC+05:30) days, and every stored date is read as its IST calendar day. What changed, by surface:
+
+- **Web and desktop:** the date presets (This Month, Last Month, Last 30 Days, This FY, Last FY), the custom range pickers, the GST / ITC / GSTR-2B period selectors, the financial-year lists, the audit-log filter, the sales-target default periods and the browser-agent (WebMCP) dashboard periods use IST midnights. The date you pick in a form is stored as 00:00 IST and every document or report date shown (and the time column of the daybook CSV and the dates in the browser-agent confirmations) is the IST date (a viewer in another country sees the same day as everyone else). The clock times of operational events, the maintenance-window banner and the backup time in Settings, are not document dates and are still shown in the viewer's own zone. Before, the presets were computed in UTC: "This Month" ended at 05:29 IST on the 1st, so anything dated the 1st before 05:30 IST fell in the month before.
+- **Mobile:** the dashboard (UTC before), the Reports screen, the account audit filter and the party ledger ranges (the phone's zone before) use the same IST windows; a picked date is stored as 00:00 IST of the day the picker showed; dates are shown as IST days.
+- **MCP server (AI agents):** a plain date an agent passes (`report_*`, `journal_list`, `einvoice_dashboard`, `journal_create`) is a whole IST day (00:00 IST to the last millisecond of that day; a journal entry date is stored as 00:00 IST), where it was the UTC day; `dashboard_summary`'s periods are IST windows, not the host's zone; **`this-year` is now the Indian financial year (April-March), not January-December**, and a call with no period now sends the financial-year-to-date window (it sent no dates, which the API reads as all time).
+- **CLI:** day boundaries (`--from`, `--to`, `--this-month`, `--this-fy`, `--this-quarter`, GST month defaults) use **IST by default**. Before, the default was the machine's zone, so the same command gave different answers on a UTC server and on a laptop. `--tz` and `HISAABO_TZ` still override it.
+- **API:** the daybook's date-only `fromDate` / `toDate` are IST days (they were read in the server's zone); the sales trend's month and week buckets and its financial-year grouping start at 00:00 IST (they used the database's zone); the trial balance's default year start and the dashboard's FY start are IST midnights; the Tally export file name carries the IST days of the range; the invoice and ledger PDFs, the party statement CSV, the GSTR-1 CSV and the Tally XML print the IST date; the automated-invoice plan limit counts runs per IST calendar month. **The GSTR-1 portal JSON printed the UTC date of an invoice or note** (`idt`, `nt_dt`), so an invoice dated 1 April 00:00 IST (stored 31 March 18:30 UTC) was filed as `31-03-2026`, in the previous financial year and a day away from the date its IRN was registered under; it now prints the IST day (`01-04-2026`). The same fix covers the file names of the party statement and Tally CSV (the IST day of the range start) and the self-export archive (today's IST date). Dates read from an import (bank statements, myBillBook and Hisaabo CSVs) are now 00:00 IST of the day in the file instead of the server's local midnight, and a day that does not exist (30 Feb) is rejected instead of rolling into March. A period filter is half-open at the end (a range ending `...23:59:59.999` also takes a stored timestamp with microseconds in that millisecond). API clients that send `fromDate` / `toDate` themselves are unaffected apart from that (the instants they send are used as given); to match the apps, send the first instant of the first day and the last millisecond of the last day in IST, e.g. `2026-10-31T18:30:00.000Z` .. `2026-11-30T18:29:59.999Z` for November.
+
+Stored data is not changed. A document keeps its instant, and its calendar day is read in IST: dates entered in India (the web app's date picker stores the browser's local midnight, 18:30 UTC the day before) read back as the day entered; dates stored as UTC midnight (API, CLI and imports with a bare date) are 05:30 IST on the same day and also read back as the day entered. Dates entered from a browser outside India's zone before this release can be a day off; the rule cannot know the intended day, so check them if you have such users.
+
+Charts and exports that list months or financial years will move a document dated on the 1st of a month from the previous bucket to the right one; compare a month you have already used for decisions (the GST returns are covered above).
+
+**The business time zone is fixed to IST for now.** `businesses` has no time zone column and every business is Indian. A per-business time zone (and the migration that goes with it) is planned for 0.11.0; until then a business outside India sees IST days.
+
+### Recurring invoices run on IST calendar days
+
+A recurring template's next run date was worked out in the API server's time zone. The web app stores a start date as IST midnight (18:30 UTC the evening before), so on a UTC server the arithmetic saw the day before and the clamp to short months moved the day: a monthly template due on the 1st ran 1 Feb, 1 Mar, then **29 Mar**, 29 Apr and so on, and one starting on the 31st landed on the 28th for good. From 0.10.1 the next run is computed on the IST calendar (`@hisaabo/shared` business-time), whatever the server's `TZ`:
+
+- the IST **day** moves and the IST **time of day** is kept; weekly, every two weeks and custom intervals add whole days;
+- monthly, quarterly, half-yearly and yearly runs add calendar months and **clamp to the month's last day** (31 Jan gives 28 Feb, or 29 Feb in a leap year; 30 Apr gives 30 May);
+- a template **created in 0.10.1 or later with a start date in the future** keeps its start day for good: runs are counted from the start date, so "the 1st" is always the 1st and "the 31st" comes back after a short month (31 Jan, 28 Feb, 31 Mar, 30 Apr, 31 May). A template created with a start date of today or earlier counts each run from the previous one, as before (31 Jan, 28 Feb, 28 Mar: the clamped day sticks). **A template created by an earlier version is only kept on its start day if its next run is still exactly on that start day's schedule** (see below);
+- the **end date** is a calendar day, and a run ON that day still happens (before, a run later in the day than the end date's midnight was cut);
+- the scheduler's due check is unchanged (a run is due once its instant has passed, which does not depend on a time zone), a run is generated **once** and dated the day it runs, and **catch-up** is unchanged: each missed occurrence generates one invoice dated that day (never back-dated), up to 12 per template per minute.
+
+**Stored templates are not rewritten, and a template that had drifted is not pulled back.** Every stored run date keeps its instant, and its IST day is the day it was due (dates from the web app are IST midnight; dates from the API, CLI or an import with a bare date are 05:30 IST on the same day), so no stored run shifts by a day. Only the arithmetic that produces the following dates changed. A template that had already drifted under the old arithmetic (a monthly template started on 31 Jan whose runs were 3 Mar, 3 Apr, ...) **carries on from its own next run date** (3 May after 3 Apr), counted on the IST calendar: it is NOT snapped back onto its start day, so no stored schedule moves without anyone asking. A template whose next run is still on its start day's schedule (every template that never drifted, and every new one) keeps that schedule. Find the templates that drifted:
+
+```sql
+SELECT id, name, frequency, start_date, next_run_date,
+       to_char(start_date AT TIME ZONE 'Asia/Kolkata', 'DD')    AS start_day_ist,
+       to_char(next_run_date AT TIME ZONE 'Asia/Kolkata', 'DD') AS next_day_ist
+FROM recurring_invoice_templates
+WHERE status IN ('active', 'paused')
+  AND frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly')
+  AND start_date > created_at
+  AND to_char(start_date AT TIME ZONE 'Asia/Kolkata', 'DD') <> to_char(next_run_date AT TIME ZONE 'Asia/Kolkata', 'DD');
+```
+
+(a start day of 29, 30 or 31 legitimately differs from the next run's day in a short month). **What to do:** nothing is required. If a listed template should run on its start day again, create a new template with that start date (a start date in the future anchors it) and delete the old one; there is no field to edit a template's next run date.
+
+**Pause and resume no longer move a next run date that is still in the future.** "Run now" generates the next occurrence early and moves the template on to the one after. Resuming used to recompute the next run from now, which handed the occurrences "Run now" had consumed back to the scheduler: they were billed a second time, or refused by the one-run-per-occurrence index (`recurring_run_occurrence_uniq`), and a template refused that way **stayed due on that occurrence and conflicted on every tick for ever**, never generating again. Now a resume keeps a next run date that is later than now, and a template paused past its run date resumes on the first occurrence after now on its own schedule (no burst of the missed runs). **A template that was already stuck this way advances itself past the consumed occurrence on its next tick** (the log says `already has a run recorded ... advanced it`), without billing it again, and then runs on schedule; a template that was stuck on its last occurrence before its end date completes. To see whether any template is due on an occurrence that already has a run:
+
+```sql
+SELECT t.id, t.name, t.next_run_date
+FROM recurring_invoice_templates t
+WHERE t.status = 'active' AND t.next_run_date <= now()
+  AND EXISTS (SELECT 1 FROM recurring_invoice_runs r
+              WHERE r.template_id = t.id AND r.scheduled_for = t.next_run_date AND r.status IN ('success', 'skipped_limit'));
+```
+
+### E-invoice cancellation now cancels the invoice
+
+Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.
+
+From v0.10.1, **Cancel** on the E-Invoicing page (also `hisaabo einvoice cancel`, the `einvoice_cancel` MCP tool and `eInvoice.cancel`) cancels the IRN and the invoice together, through the same path as a normal invoice cancel (stock and returns adjusted, out of GSTR-1/3B, the ledger and party balances). The 24-hour window is unchanged, and it is refused **before** anything is sent to the portal while payments are allocated to the invoice (remove or reallocate them first). This fix needs no migration of its own.
+
+**Invoices already cancelled by v0.10.0 or earlier are not fixed automatically.** Nothing is migrated, because cancelling an invoice reverses stock and changes returns, and that is a decision for the business. List them with this read-only query, one database at a time (self-hosted: the one database; multi-tenant: every tenant database):
+
+```sql
+-- Invoices whose IRN was cancelled but which are still live.
+SELECT i.business_id,
+       i.invoice_number,
+       i.document_type,
+       p.name AS party,
+       i.invoice_date::date AS invoice_date,
+       i.total_amount,
+       i.status AS invoice_status,
+       i.e_invoice_status,
+       i.e_invoice_cancel_reason,
+       i.irn
+FROM invoices i
+JOIN parties p ON p.id = i.party_id
+WHERE i.e_invoice_status = 'cancelled'
+  AND i.status <> 'cancelled'
+  AND i.deleted_at IS NULL
+ORDER BY i.business_id, i.invoice_date, i.invoice_number;
+```
+
+Save it as `stuck-einvoices.sql` and run it against a self-hosted Docker Compose install:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < stuck-einvoices.sql
+```
+
+Multi-tenant (loops over every tenant database). Tenant databases are listed from the control database's `tenants` table, not found by name, because their names are not all alike. The control database is `$POSTGRES_DB` unless you set `CONTROL_DATABASE_URL` to another one (then use that name). It reads with the same `POSTGRES_USER` the admin dashboard uses, so that role must be able to connect to every tenant database:
+
+```bash
+COMPOSE="docker compose --env-file .env.prod -f docker-compose.prod.yml"
+for db in $(echo "SELECT db_name FROM tenants WHERE db_name IS NOT NULL ORDER BY db_name" \
+    | $COMPOSE exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'); do
+  echo "== $db"
+  $COMPOSE exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d $db" < stuck-einvoices.sql
+done
+```
+
+A tenant whose `db_host` is not this Postgres server has to be queried with `psql` on that host instead.
+
+On the ONCE image, connect as shown in [DEPLOYMENT.md](DEPLOYMENT.md#once-all-in-one-image) and run the same file.
+
+For each row returned, whoever owns the business decides whether the invoice should really be cancelled (it normally should: its IRN is gone). Cancel it with the **normal invoice cancel**, which never contacts the IRP again because the IRN is already cancelled:
+
+- **Web:** open E-Invoicing, **Cancelled** tab, press **Cancel invoice** on the row.
+- **CLI:** `hisaabo invoice status <invoice-id> cancelled`.
+- **MCP / API:** `invoice_update_status` / `invoice.updateStatus` with `status: "cancelled"`. (`eInvoice.cancel` on such an invoice also works and only finishes the local cancel.)
+
+The invoice status rules are unchanged in 0.10.1, so some rows cannot be cancelled directly:
+
+- **`paid`, or any invoice with payments allocated:** remove the payment allocations first (removing the payments moves the invoice back to `sent` or `partial`), then cancel it.
+- **`adjusted` (fully offset by credit notes or sales/purchase returns):** the status rules do not allow cancelling it, and cancelling or deleting those credit notes or returns does not move the invoice out of `adjusted`, so there is no in-app route yet. Leave these rows for a later release and decide with your accountant how the offsetting credit note or return is reported until then.
+
+If the customer still needs billing, issue a new invoice (new number, new IRN). An invoice that is still listed after you cancel it was in a different state than expected: check its `status`. The E-Invoicing page also shows a banner with the count of such invoices, and the invoice's own panel says it is still active.
+
+### Other changes in 0.10.1 that touch e-invoice cancellation
+
+- **A cancel whose answer was lost is now recoverable.** Requests to the IRP time out after 30 seconds. If the IRP cancelled the IRN but the answer never arrived (timeout, crash, double click), cancelling again asks the IRP for the IRN's status; when it reports the IRN as cancelled, Hisaabo completes the local cancel instead of showing the IRP's refusal. This also works after the 24-hour window. If the IRN is still active, the original error is shown and nothing changes.
+- **Known issue (not fixed in 0.10.1, planned for 0.11): cancelling an invoice that was converted from a delivery challan restores stock the invoice did not deduct.** The challan already deducted the stock, the invoice created from it deducts nothing, but cancelling or deleting that invoice (including by cancelling its e-invoice) adds its quantities back. Adjust stock manually after cancelling such an invoice. Listed in [compliance-audit.md](compliance-audit.md).
+
+
 ## From v0.9.0 to v0.10.0 (Docker Compose and ONCE)
 
 The database upgrades in place: the API's migration step applies everything on first boot, and re-running it is a no-op. This was rehearsed on copies of self-hosted and multi-tenant v0.9.0 databases with all row counts preserved.

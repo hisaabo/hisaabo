@@ -19,6 +19,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../../src/components/ui";
 import { useCan } from "../../../../src/hooks/useCan";
+import { pickerDateToISO, storedToPickerDate } from "../../../../src/lib/business-day";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -104,7 +105,7 @@ export default function ExpenseDetailScreen() {
     setEditMode((expenseItem.mode as PaymentMode) ?? "cash");
     setEditDate(
       expenseItem.expenseDate
-        ? new Date(expenseItem.expenseDate)
+        ? storedToPickerDate(expenseItem.expenseDate)
         : new Date()
     );
     setEditReferenceNumber(expenseItem.referenceNumber ?? "");
@@ -129,7 +130,7 @@ export default function ExpenseDetailScreen() {
         description: editDescription.trim() || undefined,
         amount: parseFloat(editAmount).toFixed(2),
         mode: editMode,
-        expenseDate: editDate.toISOString(),
+        expenseDate: pickerDateToISO(editDate),
         referenceNumber: editReferenceNumber.trim() || undefined,
       },
     });

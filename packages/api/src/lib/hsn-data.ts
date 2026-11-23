@@ -11,6 +11,8 @@
  *   (8-digit is optional but accepted at any turnover level)
  */
 
+import { money } from "@hisaabo/shared";
+
 export interface HsnEntry {
   hsn: string;
   description: string;
@@ -633,13 +635,15 @@ export function searchHsn(query: string, opts?: SearchOptions): HsnEntry[] {
 }
 
 /**
- * Check whether a given code exists in the master data (as an exact match
- * or as the prefix of a longer code in the master list).
+ * Check whether a given code is listed in the curated master data.
  *
  * Rules:
  *   - Must be at least 4 digits long
  *   - Must be entirely numeric
- *   - Must exist as an exact match in the master list
+ *   - Must be an EXACT match of an entry in the master list. A longer code that merely
+ *     starts with a listed code (a prefix match) is NOT valid here: the master list is a
+ *     curated subset, so this answers "is it one of the codes we list", not "could it be
+ *     a real HSN".
  */
 export function isValidHsn(code: string): boolean {
   if (code.length < 4) return false;
@@ -661,12 +665,13 @@ export function validateHsnForTurnover(
   hsn: string,
   annualTurnover: string
 ): { valid: boolean; message?: string } {
-  const FIVE_CRORE = 50_000_000; // ₹5,00,00,000
+  const FIVE_CRORE = "50000000.00"; // ₹5,00,00,000
 
-  const turnover = parseFloat(annualTurnover);
+  // Exact comparison in paise: exactly ₹5 Cr is still the 4-digit band, a paisa above is not.
+  const above5Cr = money.compare(annualTurnover, FIVE_CRORE) > 0;
   const digits = hsn.replace(/\D/g, "").length;
 
-  if (turnover > FIVE_CRORE) {
+  if (above5Cr) {
     if (digits < 6) {
       return {
         valid: false,

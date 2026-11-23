@@ -20,6 +20,7 @@
 
 import postgres from "postgres";
 import { resetAllCaches } from "../../lib/cache/ttl-cache.js";
+import { MULTI_ORG_LATCH_KEY } from "../../lib/tenant-businesses.js";
 import { drizzle } from "drizzle-orm/postgres-js";
 // Import schema namespaces via the package barrel. The barrel re-exports all
 // named exports from both control-schema and tenant-schema. We need separate
@@ -230,6 +231,7 @@ export async function truncateAllTables(): Promise<void> {
       shipments,
       store_phone_otps,
       store_orders,
+      idempotency_keys,
       audit_log,
       stock_adjustments,
       sales_targets,
@@ -265,6 +267,10 @@ export async function truncateAllTables(): Promise<void> {
       users
     CASCADE
   `;
+  // The self-hosted multi-organisation latch (lib/tenant-businesses.ts) lives in
+  // system_config, which is not truncated (maintenance flags, migration markers).
+  // A latch left by one file would switch the creator rule on for the next one.
+  await client`DELETE FROM system_config WHERE key = ${MULTI_ORG_LATCH_KEY}`;
 }
 
 /**

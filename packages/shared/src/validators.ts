@@ -2,6 +2,7 @@ import { z } from "zod";
 import "./zod-messages.js";
 import { validateInvoiceTotals } from "./calc.js";
 import { money } from "./money.js";
+import { isValidStateCode } from "./gst-state.js";
 
 // ── Common ─────────────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ export const createBusinessSchema = z.object({
   address: z.string().min(1).max(500),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
-  stateCode: z.string().max(2).optional(),
+  stateCode: z.string().max(2).refine((v) => v === "" || isValidStateCode(v), { message: "Not a GST state code (01-38, or 97 other territory, 96 other country)" }).optional(),
   pincode: z.string().max(10).optional(),
   invoicePrefix: z.string().min(1).max(10).regex(/^[A-Za-z0-9_-]+$/, "Prefix may only contain letters, numbers, hyphen and underscore").default("INV"),
   currency: z.string().length(3).default("INR"),
@@ -180,7 +181,7 @@ export const createPartySchema = z.object({
   shippingAddress: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
-  stateCode: z.string().max(2).optional(),
+  stateCode: z.string().max(2).refine((v) => v === "" || isValidStateCode(v), { message: "Not a GST state code (01-38, or 97 other territory, 96 other country)" }).optional(),
   pincode: z.string().max(10).optional(),
   openingBalance: z.string().regex(/^-?\d{1,13}(\.\d{1,2})?$/).default("0"),
   category: z.string().max(100).optional(),
@@ -254,6 +255,30 @@ export const createItemSchema = createItemBaseSchema.refine((d) => {
 }, { message: "An item cannot have both unit variants and product variants" });
 
 export const updateItemSchema = partialWithoutDefaults(createItemBaseSchema);
+
+// ── Price updates from a bill ──────────────────────────────────
+// `item.updatePricesFromDocument`: "update the saved prices" after a bill was
+// made. One entry per catalog price slot: the item's base price, one alternate
+// unit's own price (`unit`), or one product variant's price (`variantId`).
+export const itemPriceUpdateSchema = z.object({
+  itemId: z.string().uuid(),
+  /** A product variant's price (items in "variants" mode). Not combinable with `unit`. */
+  variantId: z.string().uuid().optional(),
+  /** An alternate unit's own price (items in "alt_units" mode). Omit for the base unit. */
+  unit: z.string().min(1).max(50).optional(),
+  side: z.enum(["sale", "purchase"]),
+  newPrice: decimalStr,
+  /** Basis `newPrice` is stated in. Omit when it is the item's own basis (the default). */
+  priceIncludesTax: z.boolean().optional(),
+}).refine((u) => !(u.variantId && u.unit), { message: "A price update names a variant or a unit, not both" });
+
+export type ItemPriceUpdate = z.infer<typeof itemPriceUpdateSchema>;
+
+export const updatePricesFromDocumentSchema = z.object({
+  /** The bill the prices came from: recorded in the audit trail with its number. */
+  documentId: z.string().uuid().optional(),
+  updates: z.array(itemPriceUpdateSchema).min(1).max(100),
+});
 
 // ── Item Images ────────────────────────────────────────────────
 // Max images kept per item. Enough for a rich gallery without letting a
@@ -425,6 +450,29 @@ export const paymentAllocationSchema = z.object({
     }
   }
 });
+
+/**
+ * What the API answers (FORBIDDEN) to a browser-agent call (x-hisaabo-agent: webmcp)
+ * once the organization's owner has turned agents off. The web app recognises it to
+ * withdraw its tools at once instead of waiting for its next session refresh.
+ */
+export const WEBMCP_ORG_DISABLED_MESSAGE = "Browser AI agents are turned off for this organization";
+
+/**
+ * Optional client-supplied idempotency key for create mutations (invoice.create,
+ * payment.create). Strictly opt-in: without a key every call creates a record.
+ * Reusing a key with the SAME input is a replay: nothing new is created and the
+ * live record comes back flagged `idempotentReplay: true`; reusing it with
+ * DIFFERENT input is a CONFLICT. Keys are remembered for a short window (see
+ * IDEMPOTENCY_WINDOW_MINUTES), per business and user, as a record id only. The
+ * browser-agent (WebMCP) tools send one only when the agent passes it.
+ */
+export const IDEMPOTENCY_WINDOW_MINUTES = 15;
+export const idempotencyKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.:-]{8,100}$/, "idempotencyKey must be 8-100 characters: letters, digits and _ . : -");
+/** Fields added to a create input to make it idempotent. Intersect, do not extend: the base schemas carry refinements. */
+export const idempotencyInputSchema = z.object({ idempotencyKey: idempotencyKeySchema.optional() });
 
 export const createPaymentSchema = z.object({
   invoiceId: z.string().uuid().optional(),

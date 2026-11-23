@@ -17,6 +17,7 @@ import { useAuthStore } from "../src/stores/auth";
 import { useBusinessStore } from "../src/stores/business";
 import { useBiometricStore } from "../src/stores/biometric";
 import { LockScreen } from "../src/components/LockScreen";
+import { ToastHost } from "../src/components/ToastHost";
 import { vanillaTRPC } from "../src/lib/trpc";
 
 // Keep the native splash screen visible while we hydrate stores
@@ -695,6 +696,7 @@ function RootLayoutInner() {
         <Stack.Screen name="(app)" />
         <Stack.Screen name="invite/[token]" />
       </Stack>
+      <ToastHost />
     </TRPCProvider>
   );
 }

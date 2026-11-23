@@ -4,10 +4,19 @@
  * All operations return string results with 2 decimal places.
  */
 
+import { divRoundHalfUp, parseDecimal, pow10, toPaiseExact } from "./decimal.js";
+
 const SCALE = 100; // 2 decimal places
 
-/** Parse a string/number to integer paise */
+/**
+ * Parse a string/number to integer paise. A plain decimal STRING is read exactly
+ * (BigInt, rounded half-up once); anything else falls back to the old float path.
+ */
 function toPaise(value: string | number): number {
+  if (typeof value === "string") {
+    const exact = toPaiseExact(value);
+    if (exact !== null) return Number(exact);
+  }
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return 0;
   return Math.round(num * SCALE);
@@ -33,16 +42,23 @@ export const money = {
     return fromPaise(toPaise(a) - toPaise(b));
   },
 
-  /** Multiply a money value by a factor (e.g., quantity) */
+  /**
+   * Multiply a money value by a factor (e.g., quantity). The product of integer
+   * paise and a decimal factor is computed exactly and rounded half-up ONCE.
+   */
   mul(amount: string | number, factor: string | number): string {
     const a = toPaise(amount);
+    const exact = parseDecimal(factor);
+    if (exact) return fromPaise(Number(divRoundHalfUp(BigInt(a) * exact.int, pow10(exact.scale))));
     const f = typeof factor === "string" ? parseFloat(factor) : factor;
     return fromPaise(Math.round(a * f));
   },
 
-  /** Calculate percentage of a value: amount * (percent / 100) */
+  /** Calculate percentage of a value: amount * (percent / 100), exact, rounded half-up once. */
   percent(amount: string | number, pct: string | number): string {
     const a = toPaise(amount);
+    const exact = parseDecimal(pct);
+    if (exact) return fromPaise(Number(divRoundHalfUp(BigInt(a) * exact.int, 100n * pow10(exact.scale))));
     const p = typeof pct === "string" ? parseFloat(pct) : pct;
     return fromPaise(Math.round((a * p) / 100));
   },
@@ -72,6 +88,29 @@ export const money = {
   /** Max of 0 and value */
   max0(value: string | number): string {
     return fromPaise(Math.max(0, toPaise(value)));
+  },
+
+  /**
+   * Split an amount into two halves that add back to it exactly, in integer
+   * paise. The first half is ceil(amount / 2), i.e. the odd paisa, if any, goes
+   * to the FIRST half (e.g. 102.59 -> ["51.30", "51.29"]); the second half is
+   * the remainder.
+   *
+   * This is THE intra-state GST split: the first half is CGST, the second SGST,
+   * and it is the e-invoice (IRP) rule: CGST = round-half-up(tax / 2), SGST =
+   * tax - CGST. The IRP-signed e-invoice is what the government holds, so every
+   * surface that splits tax (ledger, ITC ledger, GSTR-1 / 3B / 9, invoice PDF,
+   * e-way bill, the IRP payload itself) must use it, and apply it PER LINE (see
+   * `splitGstByLine`), exactly as the IRP payload does. Negative amounts split
+   * symmetrically (-102.59 -> ["-51.30", "-51.29"]).
+   */
+  splitHalf(amount: string | number): [string, string] {
+    const total = toPaise(amount);
+    const abs = Math.abs(total);
+    const first = Math.ceil(abs / 2);
+    const second = abs - first;
+    const sign = total < 0 ? -1 : 1;
+    return [fromPaise(sign * first), fromPaise(sign * second)];
   },
 
   /** Parse to number (for display only — not for further calculation) */

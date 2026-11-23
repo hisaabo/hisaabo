@@ -35,9 +35,13 @@ const WEB_ONLY: Set<string> = new Set([
   // GST compliance (desktop-only)
   "gst/index.mdx",
   "gst/gstr1.mdx",
+  "gst/e-invoicing.mdx",
 
   // Online store admin (desktop-only)
   "online-store/index.mdx",
+  // Embedding the store's public catalog / cart link on your own website: a web-developer
+  // guide to a public HTTP endpoint, no app screens involved (child of the web-only store admin)
+  "online-store/own-website.mdx",
 
   // AI & automation (developer tooling)
   "ai/index.mdx",
@@ -56,6 +60,10 @@ const SHARED: Set<string> = new Set([
 
   // Overview pages that are mostly conceptual
   "getting-started/index.mdx",
+
+  // Questions and answers in prose: the few platform mentions (web app on a phone, native app) are
+  // sentences, not steps that differ per device
+  "faq.mdx",
 
   // Reference data (platform-agnostic)
   "reference/supported-units.mdx",

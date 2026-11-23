@@ -1,31 +1,50 @@
 /**
  * In-process scheduler for recurring invoices.
  * Ticks every 60 seconds, finds due templates, and generates invoices.
- * Uses SELECT ... FOR UPDATE SKIP LOCKED for concurrency safety.
+ *
+ * Concurrency: each occurrence is claimed and generated inside ONE transaction
+ * that holds the template's row lock (`SELECT ... FOR UPDATE SKIP LOCKED`), so
+ * a second runner (another replica, or an overlapping tick) skips the template
+ * instead of generating the same invoice. `recurring_run_occurrence_uniq` is
+ * the database-level backstop.
+ *
+ * Multi-tenant: every tenant is visited with its own short-lived, single
+ * connection client (`withDedicatedTenantDb`), not through the shared pool
+ * cache, so a sweep over hundreds of tenants cannot evict the pools that live
+ * requests are using.
  */
 
-import { eq, and, sql, gte, lte } from "drizzle-orm";
-import { getTenantDb, controlDb, tenants, recurringInvoiceTemplates, recurringInvoiceRuns } from "@hisaabo/db";
-import { generateInvoiceFromTemplate } from "./recurring-invoice-generator.js";
+import { eq, and, sql, gte, lte, asc, desc } from "drizzle-orm";
+import {
+  getTenantDb,
+  withDedicatedTenantDb,
+  controlDb,
+  tenants,
+  recurringInvoiceTemplates,
+  recurringInvoiceRuns,
+} from "@hisaabo/db";
+import { generateInvoiceInTx, toTemplateRow, computeNextRunDate, templateAnchor } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
+import { businessYearMonth, businessMonthStart, businessDateOf } from "@hisaabo/shared";
 
 const TICK_MS = 60_000; // 60 seconds
 const MAX_CATCHUP = 12; // Max invoices per template per tick to prevent runaway loops
+const MAX_TEMPLATES_PER_TICK = 50; // Per tenant database; the rest are picked up on the next tick
+const OCCURRENCE_INDEX = "recurring_run_occurrence_uniq";
 const isMultiTenant = process.env.MULTI_TENANT === "true";
 let timer: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
 
+type SchedulerDb = Awaited<ReturnType<typeof getTenantDb>>;
+
 async function tick() {
-  // Skip if the previous tick is still running so ticks never overlap
   if (tickInFlight) return;
   tickInFlight = true;
   try {
     if (!isMultiTenant) {
-      // Self-hosted: single tenant DB
       const db = await getTenantDb("single");
       await processDueTemplates(db);
     } else {
-      // Multi-tenant: iterate all active tenants
       const activeTenants = await controlDb
         .select({ id: tenants.id })
         .from(tenants)
@@ -33,8 +52,7 @@ async function tick() {
 
       for (const tenant of activeTenants) {
         try {
-          const db = await getTenantDb(tenant.id);
-          await processDueTemplates(db);
+          await withDedicatedTenantDb(tenant.id, (db) => processDueTemplates(db));
         } catch (err) {
           console.error(`[recurring-scheduler] tenant ${tenant.id} error:`, err);
         }
@@ -47,82 +65,76 @@ async function tick() {
   }
 }
 
-export async function processDueTemplates(db: Awaited<ReturnType<typeof getTenantDb>>) {
-  // Find active templates that are due, using FOR UPDATE SKIP LOCKED
-  // to prevent duplicate processing in multi-instance deployments.
-  const dueTemplates = await db.transaction(async (tx) => {
-    return tx.select()
-      .from(recurringInvoiceTemplates)
-      .where(and(
-        eq(recurringInvoiceTemplates.status, "active"),
-        lte(recurringInvoiceTemplates.nextRunDate, new Date()),
-      ))
-      .limit(50)
-      .for("update", { skipLocked: true });
-  });
+/**
+ * True when `err` is the occurrence backstop firing: another runner consumed
+ * this occurrence between our claim and our commit. Not a failure.
+ */
+function isOccurrenceConflict(err: unknown): boolean {
+  let e: unknown = err;
+  for (let depth = 0; e && depth < 5; depth++) {
+    const x = e as { code?: string; constraint_name?: string; cause?: unknown };
+    if (x.code === "23505" && x.constraint_name === OCCURRENCE_INDEX) return true;
+    e = x.cause;
+  }
+  return false;
+}
 
-  for (const tpl of dueTemplates) {
-    let catchupCount = 0;
-    let currentNextRunDate = tpl.nextRunDate;
-    let currentTotalRuns = tpl.totalRuns;
+/**
+ * Consumes ONE occurrence of a due template: claims the row (skipping it when
+ * another runner holds it or it is no longer due), then either records a
+ * plan-limit skip or generates the invoice, all in a single transaction.
+ *
+ * Returns true when the template may have another occurrence due right now
+ * (catch-up), false to stop.
+ */
+async function processOccurrence(db: SchedulerDb, templateId: string): Promise<boolean> {
+  const claimed: { tpl?: typeof recurringInvoiceTemplates.$inferSelect } = {};
+  try {
+    return await db.transaction(async (tx) => {
+      const [tpl] = await tx.select()
+        .from(recurringInvoiceTemplates)
+        .where(and(
+          eq(recurringInvoiceTemplates.id, templateId),
+          eq(recurringInvoiceTemplates.status, "active"),
+          lte(recurringInvoiceTemplates.nextRunDate, new Date()),
+        ))
+        .for("update", { skipLocked: true });
+      if (!tpl) return false; // no longer due, or another runner holds the lock
+      claimed.tpl = tpl;
 
-    while (currentNextRunDate <= new Date() && catchupCount < MAX_CATCHUP) {
-      try {
-        // Check plan limit: count successful runs this month for this business
-        const monthStart = new Date();
-        monthStart.setDate(1);
-        monthStart.setHours(0, 0, 0, 0);
+      // the plan limit counts runs in the current calendar month on the business (IST) calendar
+      const { year: nowYear, month: nowMonth } = businessYearMonth(new Date());
+      const monthStart = businessMonthStart(nowYear, nowMonth);
 
-        const [{ count }] = await db.select({ count: sql<number>`count(*)::int` })
-          .from(recurringInvoiceRuns)
-          .where(and(
-            eq(recurringInvoiceRuns.businessId, tpl.businessId),
-            eq(recurringInvoiceRuns.status, "success"),
-            gte(recurringInvoiceRuns.executedAt, monthStart),
-          ));
+      const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` })
+        .from(recurringInvoiceRuns)
+        .where(and(
+          eq(recurringInvoiceRuns.businessId, tpl.businessId),
+          eq(recurringInvoiceRuns.status, "success"),
+          gte(recurringInvoiceRuns.executedAt, monthStart),
+        ));
 
-        if (count >= RECURRING_RUNS_PER_MONTH_FREE) {
-          // Record skipped run
-          await db.insert(recurringInvoiceRuns).values({
-            templateId: tpl.id,
-            businessId: tpl.businessId,
-            status: "skipped_limit",
-            errorMessage: `Monthly limit of ${RECURRING_RUNS_PER_MONTH_FREE} runs reached`,
-          });
-          // Still advance nextRunDate so we don't retry every tick
-          const { computeNextRunDate } = await import("./recurring-invoice-generator.js");
-          const nextRun = computeNextRunDate(currentNextRunDate, tpl.frequency, tpl.customIntervalDays);
-          await db.update(recurringInvoiceTemplates)
-            .set({ nextRunDate: nextRun, updatedAt: new Date() })
-            .where(eq(recurringInvoiceTemplates.id, tpl.id));
-          break; // Plan limit exhausted for this business this month — stop catch-up
-        }
-
-        await generateInvoiceFromTemplate(db, {
-          ...tpl,
-          nextRunDate: currentNextRunDate,
-          totalRuns: currentTotalRuns,
-          lineItems: tpl.lineItems as Parameters<typeof generateInvoiceFromTemplate>[1]["lineItems"],
-          charges: tpl.charges as Parameters<typeof generateInvoiceFromTemplate>[1]["charges"],
-        });
-      } catch (err) {
-        console.error(`[recurring-scheduler] Failed to generate invoice for template ${tpl.id}:`, err);
-        // Record failed run
-        await db.insert(recurringInvoiceRuns).values({
+      if (count >= RECURRING_RUNS_PER_MONTH_FREE) {
+        await tx.insert(recurringInvoiceRuns).values({
           templateId: tpl.id,
           businessId: tpl.businessId,
-          status: "failed",
-          errorMessage: err instanceof Error ? err.message : String(err),
-        }).catch(() => {}); // Don't let logging failure crash the loop
-        break; // Stop catch-up on error to avoid cascading failures
+          status: "skipped_limit",
+          errorMessage: `Monthly limit of ${RECURRING_RUNS_PER_MONTH_FREE} runs reached`,
+          scheduledFor: tpl.nextRunDate,
+        });
+        await tx.update(recurringInvoiceTemplates)
+          .set({
+            nextRunDate: computeNextRunDate(tpl.nextRunDate, tpl.frequency, tpl.customIntervalDays, templateAnchor(tpl)),
+            updatedAt: new Date(),
+          })
+          .where(eq(recurringInvoiceTemplates.id, tpl.id));
+        return false; // Plan limit exhausted for this business this month — stop catch-up
       }
 
-      catchupCount++;
+      await generateInvoiceInTx(tx, toTemplateRow(tpl));
 
-      // Re-read template to get the updated nextRunDate and totalRuns (the generator advances both)
-      const [updated] = await db.select({
+      const [updated] = await tx.select({
         nextRunDate: recurringInvoiceTemplates.nextRunDate,
-        totalRuns: recurringInvoiceTemplates.totalRuns,
         status: recurringInvoiceTemplates.status,
         endDate: recurringInvoiceTemplates.endDate,
       })
@@ -130,11 +142,122 @@ export async function processDueTemplates(db: Awaited<ReturnType<typeof getTenan
         .where(eq(recurringInvoiceTemplates.id, tpl.id))
         .limit(1);
 
-      if (!updated || updated.status !== "active") break;
-      if (updated.endDate && updated.endDate <= new Date()) break;
+      const now = new Date();
+      if (!updated || updated.status !== "active") return false;
+      if (updated.endDate && updated.endDate <= now) return false;
+      return updated.nextRunDate <= now;
+    });
+  } catch (err) {
+    if (isOccurrenceConflict(err)) {
+      // The transaction rolled back, so nothing was generated twice; the run record that is
+      // already there stands. Whose is it? Another runner that consumed the occurrence just
+      // now advanced the template, and there is nothing to do. But a record from earlier (a
+      // "Run now", or a skip, on an occurrence the template was later moved back onto) leaves
+      // the template due on it with nothing to advance it: it would conflict on every tick for
+      // ever. Advance it past the occurrence.
+      return resolveOccurrenceConflict(db, templateId, claimed.tpl?.nextRunDate);
+    }
 
-      currentNextRunDate = updated.nextRunDate;
-      currentTotalRuns = updated.totalRuns;
+    const message = err instanceof Error ? err.message : String(err);
+    const { tpl } = claimed;
+    if (tpl && (await alreadyRecordedFailure(db, tpl.id, tpl.nextRunDate, message))) {
+      // A template that cannot generate stays due and is retried every tick;
+      // record the failure once, not once a minute for ever.
+      console.warn(`[recurring-scheduler] template ${templateId} is still failing with the recorded error: ${message}`);
+      return false;
+    }
+
+    console.error(`[recurring-scheduler] Failed to generate invoice for template ${templateId}:`, err);
+    if (tpl) {
+      // The failed transaction is rolled back, so record the failure on its own.
+      await db.insert(recurringInvoiceRuns).values({
+        templateId: tpl.id,
+        businessId: tpl.businessId,
+        status: "failed",
+        errorMessage: message,
+        scheduledFor: tpl.nextRunDate,
+      }).catch(() => {}); // Don't let logging failure crash the loop
+    }
+    return false; // Stop catch-up on error to avoid cascading failures
+  }
+}
+
+/**
+ * The occurrence `claimedOccurrence` of a template could not be consumed because a run for it is already
+ * recorded (`recurring_run_occurrence_uniq`). Looks at the template again under its row lock (waiting for
+ * a concurrent runner to commit): if it has moved on, that runner consumed the occurrence and all is well;
+ * if it is still due on that very occurrence, nothing will ever advance it, so advance it past the
+ * occurrence without billing it again. Returns true when the template is due again right away (catch-up).
+ */
+export async function resolveOccurrenceConflict(db: SchedulerDb, templateId: string, claimedOccurrence: Date | undefined): Promise<boolean> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [tpl] = await tx.select()
+        .from(recurringInvoiceTemplates)
+        .where(eq(recurringInvoiceTemplates.id, templateId))
+        .for("update");
+      if (!tpl || tpl.status !== "active") return false;
+      if (!claimedOccurrence || tpl.nextRunDate.getTime() !== claimedOccurrence.getTime()) {
+        console.warn(
+          `[recurring-scheduler] template ${templateId}: occurrence ${claimedOccurrence?.toISOString() ?? "?"} ` +
+            `was consumed by another run (${OCCURRENCE_INDEX}); skipped`,
+        );
+        return false;
+      }
+      const next = computeNextRunDate(tpl.nextRunDate, tpl.frequency, tpl.customIntervalDays, templateAnchor(tpl));
+      const finished = !!tpl.endDate && businessDateOf(next) > businessDateOf(tpl.endDate);
+      await tx.update(recurringInvoiceTemplates)
+        .set({ nextRunDate: next, status: finished ? "completed" : undefined, updatedAt: new Date() })
+        .where(eq(recurringInvoiceTemplates.id, templateId));
+      console.warn(
+        `[recurring-scheduler] template ${templateId}: occurrence ${tpl.nextRunDate.toISOString()} already has a run recorded ` +
+          `(${OCCURRENCE_INDEX}) and nothing had advanced the template; advanced it to ${next.toISOString()} without billing it again`,
+      );
+      return !finished && next.getTime() <= Date.now();
+    });
+  } catch (err) {
+    console.error(`[recurring-scheduler] template ${templateId}: could not resolve the occurrence conflict:`, err);
+    return false;
+  }
+}
+
+/** True when the latest run for this occurrence is already a `failed` run with this very message. */
+async function alreadyRecordedFailure(
+  db: SchedulerDb,
+  templateId: string,
+  occurrence: Date,
+  message: string,
+): Promise<boolean> {
+  try {
+    const [last] = await db.select({ status: recurringInvoiceRuns.status, errorMessage: recurringInvoiceRuns.errorMessage })
+      .from(recurringInvoiceRuns)
+      .where(and(
+        eq(recurringInvoiceRuns.templateId, templateId),
+        eq(recurringInvoiceRuns.scheduledFor, occurrence),
+      ))
+      .orderBy(desc(recurringInvoiceRuns.executedAt), desc(recurringInvoiceRuns.id))
+      .limit(1);
+    return last?.status === "failed" && last.errorMessage === message;
+  } catch {
+    return false; // can't tell: record it
+  }
+}
+
+export async function processDueTemplates(db: SchedulerDb) {
+  // Unlocked peek at what is due; each template is then claimed under its own
+  // row lock (processOccurrence), which is what excludes concurrent runners.
+  const due = await db.select({ id: recurringInvoiceTemplates.id })
+    .from(recurringInvoiceTemplates)
+    .where(and(
+      eq(recurringInvoiceTemplates.status, "active"),
+      lte(recurringInvoiceTemplates.nextRunDate, new Date()),
+    ))
+    .orderBy(asc(recurringInvoiceTemplates.nextRunDate))
+    .limit(MAX_TEMPLATES_PER_TICK);
+
+  for (const { id } of due) {
+    for (let catchup = 0; catchup < MAX_CATCHUP; catchup++) {
+      if (!(await processOccurrence(db, id))) break;
     }
   }
 }

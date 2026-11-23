@@ -11,6 +11,7 @@
  *   - Voucher types: Sales, Purchase, Receipt, Payment, Journal, Contra
  */
 
+import { businessDateParts } from "@hisaabo/shared";
 import type { DerivedEntry } from "./derive-ledger.js";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -44,10 +45,9 @@ function escapeXml(value: string): string {
 
 /** Format a Date as Tally's YYYYMMDD string. */
 function formatTallyDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
+  // the business-calendar (IST) date, not the server's
+  const { year, month, day } = businessDateParts(date);
+  return `${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`;
 }
 
 // ── Account type → Tally parent group ───────────────────────────

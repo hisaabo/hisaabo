@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
+import { Dialog } from "./Dialog";
+import { ArrowLeftIcon, Spinner } from "./Icons";
 
 interface PhoneVerifyProps {
   slug: string;
-  accentColor: string;
   /** When true the customer must enter an SMS code before checkout. */
   otpRequired?: boolean;
   onVerified: (phone: string, name: string, isNew: boolean, turnstileToken: string, otpToken?: string) => void;
@@ -11,7 +12,7 @@ interface PhoneVerifyProps {
 
 const RESEND_SECONDS = 30;
 
-export function PhoneVerify({ slug, accentColor, otpRequired = false, onVerified, onBack }: PhoneVerifyProps) {
+export function PhoneVerify({ slug, otpRequired = false, onVerified, onBack }: PhoneVerifyProps) {
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -252,152 +253,136 @@ export function PhoneVerify({ slug, accentColor, otpRequired = false, onVerified
   }
 
   const stage = showNameInput ? "name" : codeSent ? "code" : "phone";
+  const title =
+    stage === "name" ? "Welcome" : stage === "code" ? "Enter the code" : "Enter your mobile number";
 
   // One tree for every step so the Turnstile widget (mounted once) is never
   // unmounted; it is only hidden once a code is no longer needed.
   return (
-    <div className="max-w-sm mx-auto px-6 py-8 animate-fade-in">
+    <Dialog variant="modal" size="sm" title={title} closeLabel="Close and go back to the cart" onClose={onBack}>
       {stage === "name" && (
-        <>
+        <div className="space-y-4">
           <button
+            type="button"
             onClick={() => { setShowNameInput(false); if (otpRequired) backToPhone(); else resetWidget(); }}
-            className="flex items-center gap-1.5 text-sm font-medium mb-6"
-            style={{ color: accentColor }}
+            className="back-btn"
           >
-            <BackIcon color={accentColor} /> Back
+            <ArrowLeftIcon size={16} /> Back
           </button>
 
-          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
-            Welcome!
-          </h2>
-          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
-            Looks like you're new here. What should we call you?
+          <p className="text-sm" style={{ color: "var(--store-text-secondary)" }}>
+            Looks like you are new here. What should we call you?
           </p>
 
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => { setName(e.target.value); setError(""); }}
-            placeholder="Your name"
-            autoFocus
-            className="store-input w-full mb-3"
-            onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
-          />
+          <div className="field">
+            <label htmlFor="pv-name" className="field-label">Your name</label>
+            <input
+              id="pv-name"
+              type="text"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setError(""); }}
+              autoComplete="name"
+              data-autofocus
+              autoFocus
+              className="input"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "pv-error" : undefined}
+              onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
+            />
+          </div>
 
-          {error && (
-            <p className="text-xs font-medium mb-3" style={{ color: "var(--store-danger)" }}>
-              {error}
-            </p>
-          )}
+          {error && <p id="pv-error" role="alert" className="field-error">{error}</p>}
 
-          <button
-            onClick={handleNameSubmit}
-            className="btn-primary w-full py-3 text-base"
-            style={{ background: accentColor }}
-          >
-            Continue to Checkout
+          <button type="button" onClick={handleNameSubmit} className="btn btn-primary btn-block">
+            Continue to checkout
           </button>
-        </>
+        </div>
       )}
 
       {stage === "code" && (
-        <>
-          <button
-            onClick={backToPhone}
-            className="flex items-center gap-1.5 text-sm font-medium mb-6"
-            style={{ color: accentColor }}
-          >
-            <BackIcon color={accentColor} /> Change number
+        <div className="space-y-4">
+          <button type="button" onClick={backToPhone} className="back-btn">
+            <ArrowLeftIcon size={16} /> Change number
           </button>
 
-          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
-            Enter the code
-          </h2>
-          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
-            We sent a 6-digit code by SMS to +91 {phone}
+          <p className="text-sm" style={{ color: "var(--store-text-secondary)" }}>
+            We sent a 6-digit code by SMS to +91 {phone}.
           </p>
 
-          <input
-            type="text"
-            value={code}
-            onChange={(e) => { setCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }}
-            placeholder="123456"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            aria-label="Verification code"
-            autoFocus
-            className="store-input w-full mb-3 tracking-widest text-center"
-            onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
-          />
-        </>
+          <div className="field">
+            <label htmlFor="pv-code" className="field-label">Verification code</label>
+            <input
+              id="pv-code"
+              type="text"
+              value={code}
+              onChange={(e) => { setCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }}
+              placeholder="123456"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              data-autofocus
+              autoFocus
+              className="input text-center tracking-widest"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "pv-error" : undefined}
+              onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
+            />
+          </div>
+        </div>
       )}
 
       {stage === "phone" && (
-        <>
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-sm font-medium mb-6"
-            style={{ color: accentColor }}
-          >
-            <BackIcon color={accentColor} /> Back to cart
-          </button>
-
-          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
-            Enter your mobile number
-          </h2>
-          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
-            {otpRequired ? "We'll text you a code to verify it" : "We'll use this to process your order"}
+        <div className="space-y-4">
+          <p className="text-sm" style={{ color: "var(--store-text-secondary)" }}>
+            {otpRequired ? "We will text you a code to verify it." : "We will use this to process your order."}
           </p>
 
-          {/* Phone input with +91 prefix */}
-          <div className="flex mb-3">
-            <span
-              className="inline-flex items-center px-3.5 border border-r-0 rounded-l-lg text-sm font-medium flex-shrink-0"
-              style={{
-                background: "var(--store-bg-secondary)",
-                borderColor: "var(--store-border)",
-                color: "var(--store-text-secondary)",
-              }}
-            >
-              +91
-            </span>
-            <input
-              type="tel"
-              value={phone}
-              onChange={(e) => {
-                setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
-                setError("");
-              }}
-              placeholder="9876543210"
-              inputMode="numeric"
-              autoFocus
-              className="store-input rounded-l-none flex-1"
-              onKeyDown={(e) => e.key === "Enter" && handleIdentify()}
-            />
+          <div className="field">
+            <label htmlFor="pv-phone" className="field-label">Mobile number</label>
+            <div className="input-group">
+              <span className="input-addon" aria-hidden="true">+91</span>
+              <input
+                id="pv-phone"
+                type="tel"
+                value={phone}
+                onChange={(e) => {
+                  setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                  setError("");
+                }}
+                placeholder="9876543210"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                data-autofocus
+                autoFocus
+                className="input"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "pv-error" : undefined}
+                onKeyDown={(e) => e.key === "Enter" && handleIdentify()}
+              />
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* Turnstile widget (needed to request a code or identify) */}
-      <div ref={turnstileRef} className={stage === "name" || (stage === "code" && resendIn > 0) ? "hidden" : "mb-3"} />
+      <div ref={turnstileRef} className={stage === "name" || (stage === "code" && resendIn > 0) ? "hidden" : "mt-4"} />
 
       {stage !== "name" && error && (
-        <p className="text-xs font-medium mb-3" style={{ color: "var(--store-danger)" }}>
+        <p id="pv-error" role="alert" className="field-error mt-3">
           {error}
         </p>
       )}
 
       {stage === "phone" && (
         <button
+          type="button"
           onClick={handleIdentify}
           disabled={loading || phone.length !== 10}
-          className="btn-primary w-full py-3 text-base"
-          style={{ background: accentColor }}
+          className="btn btn-primary btn-block mt-4"
         >
           {loading ? (
-            <span className="flex items-center justify-center gap-2">
+            <>
               <Spinner /> {otpRequired ? "Sending code..." : "Verifying..."}
-            </span>
+            </>
           ) : (
             otpRequired ? "Send code" : "Continue"
           )}
@@ -405,77 +390,31 @@ export function PhoneVerify({ slug, accentColor, otpRequired = false, onVerified
       )}
 
       {stage === "code" && (
-        <>
+        <div className="mt-4 space-y-2">
           <button
+            type="button"
             onClick={handleVerifyCode}
             disabled={loading || code.length !== 6}
-            className="btn-primary w-full py-3 text-base"
-            style={{ background: accentColor }}
+            className="btn btn-primary btn-block"
           >
             {loading ? (
-              <span className="flex items-center justify-center gap-2">
+              <>
                 <Spinner /> Verifying...
-              </span>
+              </>
             ) : (
               "Verify"
             )}
           </button>
           <button
+            type="button"
             onClick={handleSendCode}
             disabled={loading || resendIn > 0}
-            className="w-full mt-3 text-sm font-medium disabled:opacity-60"
-            style={{ color: accentColor }}
+            className="btn btn-quiet btn-block"
           >
             {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
           </button>
-        </>
+        </div>
       )}
-    </div>
-  );
-}
-
-function BackIcon({ color }: { color: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      width="16"
-      height="16"
-    >
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12 19 5 12 12 5" />
-    </svg>
-  );
-}
-
-function Spinner() {
-  return (
-    <svg
-      className="animate-spin"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-    >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8v8H4z"
-      />
-    </svg>
+    </Dialog>
   );
 }

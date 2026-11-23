@@ -88,7 +88,7 @@ hisaabo whoami
 |---|---|
 | `invoice list` | List invoices (filterable by status, party, date range, type) |
 | `invoice get <id>` | Get full invoice details with line items |
-| `invoice create` | Create a new invoice (interactive or with flags) |
+| `invoice create` | Create a new invoice (interactive or with flags). `--update-item-prices` also updates the saved price of each linked item whose explicit `--rate` differs (the invoice is saved either way; the result has `itemPriceUpdate`). `--rate` is tax-exclusive |
 | `invoice status <id> <status>` | Update status (draft, sent, paid, cancelled) |
 | `invoice pdf <id>` | Download invoice as PDF |
 | `invoice delete <id>` | Delete an invoice |
@@ -223,7 +223,7 @@ hisaabo whoami
 | Command | Description |
 |---|---|
 | `journal list` / `get <id>` | List journal entries or show one |
-| `journal void <id>` | Void a journal entry |
+| `journal void <id>` | Void a journal entry: posts a reversing entry and keeps both on record (there is no delete; the API's `journal.delete` does the same thing since 0.10.1) |
 | `journal templates` | List journal entry templates |
 
 ### Shipments

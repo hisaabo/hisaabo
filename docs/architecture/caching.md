@@ -49,6 +49,7 @@ triggers in `packages/db/src/cache-triggers.ts`.
 | `apiKeys` (`auth-caches.ts`) | sha256(raw key) | user, tenant, expiry, key id | `apikey:ID`, `user:U`, `tenant:T` | 60 s / 2000 | `apiKey`, `user`, `tenant`; api_keys trigger |
 | `authz.membership` (`authz.ts`) | `tenantId:userId` | role + active status | `tenant:T`, `user:U` | 60 s / 10000 | `membership`, `tenant`, `user`; tenant_members and tenants triggers |
 | `authz.business` (`authz.ts`) | `tenantId:businessId` | creator user id (immutable) | `tenant:T`, `business:B` | 5 min / 5000 | `business` (create), `tenant` |
+| `authz.multiOrg` (`tenant-businesses.ts`) | constant | self-hosted only: does the database hold, or has it ever held (`system_config` latch), more than one organisation | - | 15 s / 1 | `tenant` (in-process tenant insert, `tenants` delete trigger) |
 | `tenantPlan` (`plan-limits.ts`) | tenant id | plan | `tenant:T` | 60 s / 2000 | `tenant`; tenants trigger (status, plan) |
 | `maintenance` (`maintenance-cache.ts`) | constant | maintenance status | - | 30 s / 1 | `maintenance`; system_config trigger |
 | `storeSlug` (`store-slug-cache.ts`) | slug | tenant id + business id | - | 5 min / 2000 | `storeSlug`; store_slugs trigger |
@@ -58,9 +59,17 @@ triggers in `packages/db/src/cache-triggers.ts`.
 entry point (tRPC middlewares, REST handlers in `server.ts`) through
 `lib/authz.ts` (`getAuthz`, `getActiveMembership`, `getBusinessAccess`) so there
 is one source of truth and one set of denial messages (`authzDenialError`).
-The business entry only holds immutable facts; "creator is still a member" is
-re-checked against the membership cache on each call, so removing the creator
-denies the very next request.
+The business entry only holds immutable facts. Where the creator rule applies
+(a self-hosted database holding more than one organisation; see
+`lib/tenant-businesses.ts`), "creator is still a member" is re-checked against
+the membership cache on each call, so removing the creator denies the very next
+request. On cloud (`MULTI_TENANT=true`, one database per tenant) and on a
+single-organisation self-hosted install the rule is off: the database is the
+tenant boundary and a business whose creator was removed stays accessible. The
+`authz.multiOrg` entry is a relaxation when it says "one organisation", so its
+TTL is short (15 s) and in-process writers that insert a tenant emit a `tenant`
+event; a second organisation created by another API replica is seen at the
+latest after the TTL.
 
 ## Never cache
 

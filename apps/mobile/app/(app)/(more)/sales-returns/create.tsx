@@ -17,13 +17,14 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
-import { calcInvoiceTotals } from "@hisaabo/shared";
+import { calcTotalsWithShelfTieOut, priceIsTaxInclusive, lineFieldsFromItemPrice, applyLineEdit, inclusiveBreakdown } from "@hisaabo/shared";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { pickerDateToISO } from "../../../../src/lib/business-day";
 
 interface LineItem {
   itemId?: string;
@@ -34,6 +35,13 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  /**
+   * The item's saved price INCLUDING tax ("Price includes tax") the Rate was derived from. The Rate is
+   * always tax-exclusive (the document adds the GST on top). See shared/inclusive-price.ts.
+   */
+  inclusivePrice?: string;
+  originalUnitPrice?: string;
+  itemPriceIncludesTax?: boolean;
 }
 
 function newLineItem(): LineItem {
@@ -79,7 +87,7 @@ function PartyPickerModal({ visible, onSelect, onClose }: {
 }
 
 function ItemPickerModal({ visible, onSelect, onClose }: {
-  visible: boolean; onSelect: (i: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => void; onClose: () => void;
+  visible: boolean; onSelect: (i: { id: string; name: string; salePrice?: string | null; taxPercent: string; taxInclusive?: boolean | null }) => void; onClose: () => void;
 }) {
   const ms = useMs();
   const colors = useColors();
@@ -150,6 +158,14 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
           </View>
         ))}
       </View>
+      {(() => {
+        const hint = inclusiveBreakdown(item);
+        return hint ? (
+          <Text style={s.lineTotalLabel} testID="inclusive-hint">
+            {`${formatCurrency(hint.inclusive)} incl. GST → ${formatCurrency(hint.base)} + ${formatCurrency(hint.tax)}${hint.ties ? "" : ` = ${formatCurrency(hint.total)}`}`}
+          </Text>
+        ) : null;
+      })()}
       <View style={s.lineTotalRow}>
         <Text style={s.lineTotalLabel}>Amount</Text>
         <Text style={s.lineTotalValue}>{formatCurrency(lineTotal)}</Text>
@@ -225,11 +241,12 @@ function SalesReturnCreateScreenContent() {
   const totals = useMemo(() => {
     const validItems = lineItems.filter((li) => li.itemName.trim().length > 0);
     if (validItems.length === 0) return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
-    return calcInvoiceTotals({ lineItems: validItems.map((li) => ({ quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })) });
+    // a tax-inclusive price (₹10.00 incl. 18% bills at 9.99) is brought back to its shelf total by the round-off
+    return calcTotalsWithShelfTieOut(validItems.map((li) => ({ quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0", inclusivePrice: li.inclusivePrice })));
   }, [lineItems]);
 
   const handleLineChange = useCallback((index: number, field: keyof LineItem, value: string) => {
-    setLineItems((prev) => { const next = [...prev]; next[index] = { ...next[index], [field]: value }; return next; });
+    setLineItems((prev) => { const next = [...prev]; next[index] = applyLineEdit(next[index]!, field, value); return next; });
   }, []);
 
   const handleRemoveLine = useCallback((index: number) => {
@@ -238,8 +255,8 @@ function SalesReturnCreateScreenContent() {
 
   const handlePickItemForLine = useCallback((index: number) => { setActiveLineIndex(index); setShowItemPicker(true); }, []);
 
-  const handleItemSelected = useCallback((item: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => {
-    setLineItems((prev) => { const next = [...prev]; next[activeLineIndex] = { ...next[activeLineIndex], itemId: item.id, itemName: item.name, unitPrice: item.salePrice ?? "0", taxPercent: item.taxPercent }; return next; });
+  const handleItemSelected = useCallback((item: { id: string; name: string; salePrice?: string | null; taxPercent: string; taxInclusive?: boolean | null }) => {
+    setLineItems((prev) => { const next = [...prev]; next[activeLineIndex] = { ...next[activeLineIndex], itemId: item.id, itemName: item.name, ...lineFieldsFromItemPrice({ price: item.salePrice ?? "0", inclusive: priceIsTaxInclusive(item, "sale"), taxPercent: item.taxPercent }), taxPercent: item.taxPercent }; return next; });
   }, [activeLineIndex]);
 
   const handleCreate = useCallback(() => {
@@ -248,8 +265,8 @@ function SalesReturnCreateScreenContent() {
     if (validItems.length === 0) { Alert.alert("Validation", "Add at least one item."); return; }
     createMutation.mutate({
       partyId: selectedParty.id, type: "sale", documentType: "sales_return",
-      invoiceDate: invoiceDate.toISOString(), notes: notes.trim() || undefined,
-      additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
+      invoiceDate: pickerDateToISO(invoiceDate), notes: notes.trim() || undefined,
+      additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: totals.roundOff,
       referenceDocumentId: referenceDocumentId,
       // Bug B: itemName is the required name snapshot; description is the
       // optional free-text per-line note (empty → omitted).
@@ -320,6 +337,7 @@ function SalesReturnCreateScreenContent() {
             {parseFloat(totals.taxTotal) > 0 && (
               <View style={s.totalRow}><Text style={s.totalLabel}>Tax</Text><Text style={s.totalValue}>{formatCurrency(totals.taxTotal)}</Text></View>
             )}
+            {parseFloat(totals.roundOff) !== 0 && <View style={s.totalRow}><Text style={s.totalLabel}>Round off</Text><Text style={s.totalValue}>{formatCurrency(totals.roundOff)}</Text></View>}
             <View style={s.totalDivider} />
             <View style={s.totalRow}><Text style={s.totalLabelBold}>Return Amount</Text><Text style={s.totalValueBold}>{formatCurrency(totals.total)}</Text></View>
           </View>

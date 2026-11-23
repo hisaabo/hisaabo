@@ -1,0 +1,3 @@
+ALTER TABLE "recurring_invoice_runs" ADD COLUMN "scheduled_for" timestamp with time zone;--> statement-breakpoint
+-- migration-lint-allow index-existing-table: the index is partial on the new nullable scheduled_for column (WHERE scheduled_for IS NOT NULL), so no existing row is indexed and the build is instant
+CREATE UNIQUE INDEX "recurring_run_occurrence_uniq" ON "recurring_invoice_runs" USING btree ("template_id","scheduled_for") WHERE "recurring_invoice_runs"."scheduled_for" IS NOT NULL AND "recurring_invoice_runs"."status" IN ('success', 'skipped_limit');

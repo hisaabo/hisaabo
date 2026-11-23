@@ -39,7 +39,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { gstr1ToCSV, gstr1ToPortalJson, type GSTR1Report } from "../lib/gst-reports.js";
+import { gstr1ToCSV, gstr1ToPortalJson, toUqc, assertGstr1JsonExportable, Gstr1ExportBlockedError, type GSTR1Report, type GSTR1Note, type GSTR1RateRow } from "../lib/gst-reports.js";
+import { units } from "@hisaabo/shared";
 
 // =============================================================================
 // Pure functions — extracted verbatim from lib/gst-reports.ts
@@ -618,15 +619,46 @@ describe("HSN aggregation — groups line items by HSN code", () => {
  * Builds a minimal but complete GSTR1Report fixture for CSV testing.
  * Using a factory avoids repetition while keeping individual tests readable.
  */
-function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
+type OldB2b = Omit<GSTR1Report["b2b"][number], "items" | "interState"> & Partial<Pick<GSTR1Report["b2b"][number], "items" | "interState">>;
+type OldNote = Omit<GSTR1Note, "items" | "interState"> & Partial<Pick<GSTR1Note, "items" | "interState">>;
+type ReportOverrides = Omit<Partial<GSTR1Report>, "b2b" | "creditNotes" | "debitNotes"> & {
+  b2b?: OldB2b[];
+  creditNotes?: OldNote[];
+  debitNotes?: OldNote[];
+};
+
+/**
+ * Fixture convenience: a document written without rate-wise rows gets ONE row whose rate is read off its
+ * own totals (tax / taxable). Tests that are about the rows themselves pass `items` explicitly.
+ */
+function oneRate(taxable: number, cgst: number, sgst: number, igst: number): GSTR1RateRow[] {
+  const tax = cgst + sgst + igst;
+  return [{ taxRate: taxable > 0 ? Math.round((tax / taxable) * 100) : 0, taxableValue: taxable, cgst, sgst, igst }];
+}
+function withRows(o: ReportOverrides): Partial<GSTR1Report> {
+  const out: Record<string, unknown> = { ...o };
+  if (o.b2b) out.b2b = o.b2b.map((r) => ({ interState: r.igst > 0, items: oneRate(r.taxableValue, r.cgst, r.sgst, r.igst), ...r }));
+  for (const key of ["creditNotes", "debitNotes"] as const) {
+    const notes = o[key];
+    if (notes) out[key] = notes.map((n) => ({ interState: n.igst > 0, items: oneRate(parseFloat(n.taxableAmount), n.cgst, n.sgst, n.igst), ...n }));
+  }
+  return out as Partial<GSTR1Report>;
+}
+
+function makeReport(overrides: ReportOverrides = {}): GSTR1Report {
   return {
     period: "Apr 2025",
     businessGstin: "27AAAPL1234C1ZV",
     businessName: "Laxmi Enterprises",
     b2b: [],
     b2cLarge: [],
+    b2cLargeInvoices: [],
     b2cSmall: [],
+    b2cSmallRows: [],
     hsn: [],
+    hsnMissing: [],
+    hsnInvalid: [],
+    portalIssues: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -636,7 +668,7 @@ function makeReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     totalTax: 0,
     totalInvoiceValue: 0,
     invoiceCount: 0,
-    ...overrides,
+    ...withRows(overrides),
   };
 }
 
@@ -911,15 +943,20 @@ describe("gstr1ToCSV — period format validation", () => {
  * Builds a minimal GSTR1Report for portal JSON testing.
  * Mirrors makeReport() but with concrete data matching the portal schema examples.
  */
-function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
+function makePortalReport(overrides: ReportOverrides = {}): GSTR1Report {
   return {
     period: "Aug 2025",
     businessGstin: "27AABCA0000R1ZM",
     businessName: "Test Business",
     b2b: [],
     b2cLarge: [],
+    b2cLargeInvoices: [],
     b2cSmall: [],
+    b2cSmallRows: [],
     hsn: [],
+    hsnMissing: [],
+    hsnInvalid: [],
+    portalIssues: [],
     creditNotes: [],
     debitNotes: [],
     totalTaxableValue: 0,
@@ -929,7 +966,7 @@ function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
     totalTax: 0,
     totalInvoiceValue: 0,
     invoiceCount: 0,
-    ...overrides,
+    ...withRows(overrides),
   };
 }
 
@@ -1135,15 +1172,13 @@ describe("gstr1ToPortalJson — B2B section", () => {
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
     );
-    type ItmDet = { txval: number; iamt: number; camt: number; samt: number; csamt: number };
+    type ItmDet = { txval: number; rt: number; iamt?: number; camt?: number; samt?: number; csamt: number };
     type InvEntry = { itms: Array<{ num: number; itm_det: ItmDet }> };
     type B2BEntry = { ctin: string; inv: InvEntry[] };
     const itm = (json.b2b as B2BEntry[])[0].inv[0].itms[0].itm_det;
-    expect(itm.txval).toBe(10000);
-    expect(itm.iamt).toBe(1800);
-    expect(itm.camt).toBe(0);
-    expect(itm.samt).toBe(0);
-    expect(itm.csamt).toBe(0);
+    expect(itm).toEqual({ txval: 10000, rt: 18, iamt: 1800, csamt: 0 }); // inter-state: IGST only, with the real rate
+    expect(itm.camt).toBeUndefined();
+    expect(itm.samt).toBeUndefined();
   });
 
   it("sets rchrg to 'N' and inv_typ to 'R' for regular invoices", () => {
@@ -1174,123 +1209,82 @@ describe("gstr1ToPortalJson — B2B section", () => {
 
 describe("gstr1ToPortalJson — B2CL section", () => {
   /**
-   * B2C Large invoices are grouped by state code (pos field).
-   * The state name from the report must be mapped to a 2-digit state code.
+   * B2C Large is invoice by invoice (number, date, value, rate-wise rows), grouped by place of supply.
    */
-
-  it("groups b2cLarge entries by state into b2cl array", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cLarge: [{
-          state: "Karnataka",
-          taxableValue: 254237.29,
-          cgst: 0,
-          sgst: 0,
-          igst: 45762.71,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    expect((json.b2cl as unknown[]).length).toBe(1);
+  const invoice = (over: Partial<GSTR1Report["b2cLargeInvoices"][number]> = {}) => ({
+    state: "Karnataka",
+    pos: "29",
+    invoiceNumber: "INV-00009",
+    invoiceDate: "2025-08-15T00:00:00.000Z",
+    totalInvoiceValue: 300000,
+    items: [{ taxRate: 18, taxableValue: 254237.29, cgst: 0, sgst: 0, igst: 45762.71 }],
+    ...over,
   });
 
-  it("b2cl entry has pos field (state code)", () => {
+  it("emits each invoice with its number, date, value and a rate-wise row under its place of supply", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cLargeInvoices: [invoice()] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cl).toEqual([
+      {
+        pos: "29",
+        inv: [
+          {
+            inum: "INV-00009",
+            idt: "15-08-2025",
+            val: 300000,
+            itms: [{ num: 1, itm_det: { txval: 254237.29, rt: 18, iamt: 45762.71, csamt: 0 } }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("two invoices to one state are one pos group; another state is another group; a mixed-rate invoice has one row per rate", () => {
     const json = gstr1ToPortalJson(
       makePortalReport({
-        b2cLarge: [{
-          state: "Karnataka",
-          taxableValue: 254237.29,
-          cgst: 0,
-          sgst: 0,
-          igst: 45762.71,
-        }],
+        b2cLargeInvoices: [
+          invoice(),
+          invoice({ invoiceNumber: "INV-00010", items: [
+            { taxRate: 5, taxableValue: 100000, cgst: 0, sgst: 0, igst: 5000 },
+            { taxRate: 18, taxableValue: 150000, cgst: 0, sgst: 0, igst: 27000 },
+          ] }),
+          invoice({ invoiceNumber: "INV-00011", state: "Delhi", pos: "07" }),
+        ],
       }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
+      "27AABCA0000R1ZM", "2025-26", "082025",
     );
-    type B2CLEntry = { pos: string; inv: unknown[] };
-    const entry = (json.b2cl as B2CLEntry[])[0];
-    expect(entry.pos).toBeDefined();
-    expect(typeof entry.pos).toBe("string");
+    type Group = { pos: string; inv: Array<{ inum: string; itms: Array<{ num: number; itm_det: { rt: number; iamt: number } }> }> };
+    const groups = json.b2cl as Group[];
+    expect(groups.map((g) => [g.pos, g.inv.map((v) => v.inum)])).toEqual([["29", ["INV-00009", "INV-00010"]], ["07", ["INV-00011"]]]);
+    expect(groups[0]!.inv[1]!.itms.map((x) => [x.num, x.itm_det.rt, x.itm_det.iamt])).toEqual([[1, 5, 5000], [2, 18, 27000]]);
   });
 });
 
 describe("gstr1ToPortalJson — B2CS section", () => {
   /**
-   * B2C Small entries use sply_ty (INTRA/INTER), pos, rt (tax rate),
-   * and aggregated tax amounts.
+   * B2C Small is keyed supply type + place of supply + rate. INTER carries the CUSTOMER's state and IGST only;
+   * INTRA the supplier's state and CGST + SGST only. (It used to put the supplier's state on every row and
+   * decide INTRA / INTER from "CGST > 0", so an inter-state row to Karnataka was filed with Maharashtra.)
    */
-
-  it("produces b2cs entries from b2cSmall data", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 50000,
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    expect((json.b2cs as unknown[]).length).toBe(1);
+  const row = (over: Partial<GSTR1Report["b2cSmallRows"][number]>) => ({
+    supplyType: "INTRA" as const, pos: "27", taxRate: 18, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, ...over,
   });
 
-  it("intra-state b2cs entry has sply_ty INTRA when cgst > 0", () => {
-    /**
-     * CGST and SGST are present only for intra-state supplies.
-     * When cgst > 0, the supply type must be "INTRA".
-     */
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 50000,
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    type B2CSEntry = { sply_ty: string };
-    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTRA");
+  it("an intra-state row: INTRA, the supplier's pos, rt, CGST + SGST only", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cSmallRows: [row({})] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cs).toEqual([{ sply_ty: "INTRA", pos: "27", typ: "OE", rt: 18, txval: 50000, camt: 4500, samt: 4500, csamt: 0 }]);
   });
 
-  it("inter-state b2cs entry has sply_ty INTER when igst > 0", () => {
+  it("an inter-state row: INTER, the CUSTOMER's pos, IGST only", () => {
     const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 18,
-          taxableValue: 25000,
-          cgst: 0,
-          sgst: 0,
-          igst: 4500,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
+      makePortalReport({ b2cSmallRows: [row({ supplyType: "INTER", pos: "29", taxableValue: 25000, cgst: 0, sgst: 0, igst: 4500 })] }),
+      "27AABCA0000R1ZM", "2025-26", "082025",
     );
-    type B2CSEntry = { sply_ty: string };
-    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTER");
+    expect(json.b2cs).toEqual([{ sply_ty: "INTER", pos: "29", typ: "OE", rt: 18, txval: 25000, iamt: 4500, csamt: 0 }]);
   });
 
-  it("b2cs entry includes txval and rt fields", () => {
-    const json = gstr1ToPortalJson(
-      makePortalReport({
-        b2cSmall: [{
-          taxRate: 12,
-          taxableValue: 30000,
-          cgst: 1800,
-          sgst: 1800,
-          igst: 0,
-        }],
-      }),
-      "27AABCA0000R1ZM", "2025-26", "082025"
-    );
-    type B2CSEntry = { txval: number; rt: number };
-    const entry = (json.b2cs as B2CSEntry[])[0];
-    expect(entry.txval).toBe(30000);
-    expect(entry.rt).toBe(12);
+  it("a row whose place of supply is unknown is left out (the export is refused first, see portalIssues)", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2cSmallRows: [row({ pos: null })] }), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2cs).toEqual([]);
   });
 });
 
@@ -1311,6 +1305,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1335,6 +1330,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "3000.00",
           taxableAmount: "2542.37",
           taxAmount: "457.63",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1357,6 +1353,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1377,6 +1374,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "5000.00",
           taxableAmount: "4237.29",
           taxAmount: "762.71",
+          cgst: 0, sgst: 0, igst: 0,
         }],
         debitNotes: [{
           invoiceNumber: "DN-00001",
@@ -1386,6 +1384,7 @@ describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
           totalAmount: "3000.00",
           taxableAmount: "2542.37",
           taxAmount: "457.63",
+          cgst: 0, sgst: 0, igst: 0,
         }],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1409,7 +1408,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1429,7 +1428,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1448,15 +1447,15 @@ describe("gstr1ToPortalJson — HSN section", () => {
     expect(entry.qty).toBe(10);
     expect(entry.txval).toBe(100000);
     expect(entry.num).toBe(1);
-    expect(entry.uqc).toBe("NOS"); // default UQC when unit not known
+    expect(entry.uqc).toBe("NOS"); // the row's UQC is passed through
   });
 
   it("assigns sequential num starting from 1", () => {
     const json = gstr1ToPortalJson(
       makePortalReport({
         hsn: [
-          { hsn: "8471", description: "Computers", quantity: 5, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, totalValue: 59000 },
-          { hsn: "7306", description: "Steel Pipes", quantity: 20, taxableValue: 20000, cgst: 1800, sgst: 1800, igst: 0, totalValue: 23600 },
+          { hsn: "8471", description: "Computers", uqc: "NOS", taxRate: 18, quantity: 5, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, totalValue: 59000 },
+          { hsn: "7306", description: "Steel Pipes", uqc: "NOS", taxRate: 18, quantity: 20, taxableValue: 20000, cgst: 1800, sgst: 1800, igst: 0, totalValue: 23600 },
         ],
       }),
       "27AABCA0000R1ZM", "2025-26", "082025"
@@ -1473,7 +1472,7 @@ describe("gstr1ToPortalJson — HSN section", () => {
       makePortalReport({
         hsn: [{
           hsn: "8471",
-          description: "Computers",
+          description: "Computers", uqc: "NOS", taxRate: 18,
           quantity: 10,
           taxableValue: 100000,
           cgst: 9000,
@@ -1491,6 +1490,16 @@ describe("gstr1ToPortalJson — HSN section", () => {
     expect(entry.samt).toBe(9000);
     expect(entry.iamt).toBe(0);
     expect(entry.csamt).toBe(0);
+  });
+
+  it("every HSN row carries val, the row's total value (it was missing)", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [{ hsn: "8471", description: "Computers", uqc: "NOS", taxRate: 18, quantity: 10, taxableValue: 100000, cgst: 9000, sgst: 9000, igst: 0, totalValue: 118000 }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025",
+    );
+    expect((json.hsn as { data: Array<{ val: number }> }).data[0]!.val).toBe(118000);
   });
 });
 
@@ -1572,5 +1581,207 @@ describe("gstr1ToCSV — formula injection", () => {
     expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
     expect(csv).toContain(`"'@SUM(1+1)"`);
     for (const line of csv.split("\n")) expect(line.startsWith("=")).toBe(false);
+  });
+});
+
+// =============================================================================
+// Section 7: GSTR-1 Table 12 (HSN summary) — rate and UQC per row (0.10.1)
+// =============================================================================
+
+describe("toUqc — every unit Hisaabo offers maps to a GST UQC code", () => {
+  // The GST UQC list has no foot, inch, jar or pouch: those are OTH. "pcs" stays NOS (numbers).
+  const expected: Record<(typeof units)[number], string> = {
+    pcs: "NOS", kg: "KGS", g: "GMS", l: "LTR", ml: "MLT", m: "MTR", cm: "CMS", ft: "OTH",
+    in: "OTH", box: "BOX", dozen: "DOZ", pair: "PRS", set: "SET", pkt: "PAC", bun: "BUN",
+    pouch: "OTH", jar: "OTH", btl: "BTL", bag: "BAG", ton: "TON", pack: "PAC", pet: "NOS",
+    person: "NOS", other: "OTH",
+  };
+
+  it.each(units.map((u) => [u, expected[u]] as const))("%s -> %s", (unit, uqc) => {
+    expect(toUqc(unit)).toBe(uqc);
+  });
+
+  it("is case-insensitive; an unknown or missing unit is NOS (numbers)", () => {
+    expect(toUqc("KG")).toBe("KGS");
+    expect(toUqc("Case")).toBe("NOS");
+    expect(toUqc(null)).toBe("NOS");
+    expect(toUqc(undefined)).toBe("NOS");
+  });
+});
+
+describe("Table 12 rows in the portal JSON and the CSV", () => {
+  const rows: GSTR1Report["hsn"] = [
+    { hsn: "730890", description: "Steel Rods", uqc: "KGS", taxRate: 5, quantity: 12.5, taxableValue: 1250, cgst: 31.25, sgst: 31.25, igst: 0, totalValue: 1312.5 },
+    { hsn: "730890", description: "Steel Rods", uqc: "KGS", taxRate: 18, quantity: 5, taxableValue: 1100, cgst: 90, sgst: 90, igst: 18, totalValue: 1298 },
+  ];
+
+  it("the same HSN at two rates is two JSON rows, each with its own rt and the row's UQC", () => {
+    const json = gstr1ToPortalJson(makePortalReport({ hsn: rows }), "27AABCA0000R1ZM", "2025-26", "012026");
+    const data = (json.hsn as { data: Array<Record<string, unknown>> }).data;
+    expect(data).toEqual([
+      { num: 1, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 12.5, val: 1312.5, rt: 5, txval: 1250, iamt: 0, camt: 31.25, samt: 31.25, csamt: 0 },
+      { num: 2, hsn_sc: "730890", desc: "Steel Rods", uqc: "KGS", qty: 5, val: 1298, rt: 18, txval: 1100, iamt: 18, camt: 90, samt: 90, csamt: 0 },
+    ]);
+  });
+
+  it("the CSV lists each row with UQC and rate, and neutralises a formula in the description", () => {
+    const csv = gstr1ToCSV(makeReport({ hsn: [{ ...rows[0]!, description: "=1+1" }, rows[1]!] }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(at).toBeGreaterThan(-1);
+    expect(lines[at + 1]).toBe("HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag");
+    expect(lines[at + 2]).toBe(`"730890","'=1+1","KGS","12.5","5","1250.00","31.25","31.25","0.00","0.00","1312.50",""`);
+    expect(lines[at + 3]).toBe(`"730890","Steel Rods","KGS","5","18","1100.00","90.00","90.00","18.00","0.00","1298.00",""`);
+  });
+});
+
+describe("a GSTR-1 JSON export is refused while a line has no HSN", () => {
+  const missing = (n: number, itemId: string | null, name: string, invoice = "INV-1") =>
+    ({ invoiceNumber: invoice, line: n, itemName: name, itemId });
+
+  it("nothing missing: allowed", () => {
+    expect(() => assertGstr1JsonExportable(makePortalReport())).not.toThrow();
+  });
+
+  it("groups the lines of one item, lists typed-in lines separately, and says how to fix each", () => {
+    const report = makePortalReport({
+      period: "Jan 2026",
+      hsnMissing: [
+        missing(1, "item-a", "Copper Wire", "INV-1"),
+        missing(2, null, "Packing", "INV-1"),
+        missing(1, "item-a", "Copper Wire", "INV-7"),
+      ],
+    });
+    expect(() => assertGstr1JsonExportable(report)).toThrow(Gstr1ExportBlockedError);
+    expect(() => assertGstr1JsonExportable(report)).toThrow(
+      "Cannot export GSTR-1 JSON for Jan 2026: 3 line(s) have no HSN code, and Table 12 cannot be filed with a made-up one. " +
+        "To fix: add the HSN on these items: 'Copper Wire' (INV-1 line 1, INV-7 line 1). " +
+        "Also these lines were typed in without an item and cannot carry an HSN: INV-1 line 2 ('Packing'); bill a catalogue item with an HSN instead. " +
+        "The on-screen report and the CSV still show these lines under HSN 0000, flagged.",
+    );
+  });
+
+  it("a long list is cut to ten items and says how many more", () => {
+    const hsnMissing = Array.from({ length: 12 }, (_, i) => missing(1, `item-${i}`, `Item ${i + 1}`, `INV-${i + 1}`));
+    let message = "";
+    try {
+      assertGstr1JsonExportable(makePortalReport({ hsnMissing }));
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("12 line(s) have no HSN code");
+    expect(message).toContain("'Item 10' (INV-10 line 1)");
+    expect(message).not.toContain("'Item 11'");
+    expect(message).toContain(", and 2 more");
+  });
+
+  it("the CSV lists each missing line, flagged, ahead of the HSN table", () => {
+    const csv = gstr1ToCSV(makeReport({
+      hsn: [{ hsn: "0000", description: "Packing", uqc: "NOS", taxRate: 0, quantity: 1, taxableValue: 10, cgst: 0, sgst: 0, igst: 0, totalValue: 10 }],
+      hsnMissing: [missing(2, null, "Packing", "INV-1"), missing(1, "item-a", "=Copper", "INV-2")],
+    }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(lines.slice(at + 1, at + 6)).toEqual([
+      `"WARNING: 2 line(s) have no HSN code and are filed under 0000, which is not a real HSN code. Fix them before filing"`,
+      `"NO HSN","INV-1","line 2","Packing","typed in without an item"`,
+      `"NO HSN","INV-2","line 1","'=Copper","item has no HSN: add it on the item"`,
+      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
+      `"0000","Packing","NOS","1","0","10.00","0.00","0.00","0.00","0.00","10.00","NO HSN"`,
+    ]);
+  });
+});
+
+describe("a GSTR-1 JSON export is refused while a line has an HSN that cannot be filed", () => {
+  const invalid = (invoiceNumber: string, line: number, itemName: string, hsn: string, problem: string) =>
+    ({ invoiceNumber, line, itemName, itemId: `item-${itemName}`, hsn, problem });
+  const short = invalid("INV-1", 2, "Steel Rods", "730", "line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item");
+
+  it("lists the line with the e-invoice wording and the 'invalid' header", () => {
+    const report = makePortalReport({ period: "Jan 2026", hsnInvalid: [short] });
+    expect(() => assertGstr1JsonExportable(report)).toThrow(Gstr1ExportBlockedError);
+    expect(() => assertGstr1JsonExportable(report)).toThrow(
+      "Cannot export GSTR-1 JSON for Jan 2026: 1 line(s) have a missing or unusable HSN code (0 missing, 1 invalid or too short for the turnover), " +
+        "and Table 12 cannot be filed with a made-up or invalid one. " +
+        "To fix: these lines have an HSN code that cannot be filed: INV-1 line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item. " +
+        "The on-screen report and the CSV still show these lines, flagged (missing ones under HSN 0000).",
+    );
+  });
+
+  it("combines with missing lines: both are listed, the count is the sum", () => {
+    const report = makePortalReport({
+      period: "Jan 2026",
+      hsnMissing: [{ invoiceNumber: "INV-2", line: 1, itemName: "Copper Wire", itemId: "item-c" }],
+      hsnInvalid: [short],
+    });
+    let message = "";
+    try {
+      assertGstr1JsonExportable(report);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("2 line(s) have a missing or unusable HSN code (1 missing, 1 invalid or too short for the turnover)");
+    expect(message).toContain("add the HSN on these items: 'Copper Wire' (INV-2 line 1)");
+    expect(message).toContain("INV-1 line 2 'Steel Rods' has HSN code '730'");
+  });
+
+  it("a long list of invalid lines is cut to ten and says how many more", () => {
+    const hsnInvalid = Array.from({ length: 12 }, (_, i) => invalid(`INV-${i + 1}`, 1, `Item ${i + 1}`, "7", `line 1 'Item ${i + 1}' has HSN code '7', which is not 4 to 8 digits; correct it on the item`));
+    let message = "";
+    try {
+      assertGstr1JsonExportable(makePortalReport({ hsnInvalid }));
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("INV-10 line 1 'Item 10'");
+    expect(message).not.toContain("INV-11 line 1");
+    expect(message).toContain("; and 2 more");
+  });
+
+  it("the CSV lists each unusable line and flags the Table 12 row", () => {
+    const csv = gstr1ToCSV(makeReport({
+      hsn: [{ hsn: "730", description: "Steel Rods", uqc: "NOS", taxRate: 18, quantity: 1, taxableValue: 50, cgst: 4.5, sgst: 4.5, igst: 0, totalValue: 59, hsnFlag: "invalid" }],
+      hsnInvalid: [short],
+    }));
+    const lines = csv.split("\n");
+    const at = lines.indexOf("HSN - Summary of Outward Supplies (Table 12)");
+    expect(lines.slice(at + 1, at + 5)).toEqual([
+      `"WARNING: 1 line(s) have an HSN code that cannot be filed (not 4 to 8 digits, or too short for the turnover). Fix them before filing"`,
+      `"INVALID HSN","INV-1","line 2","Steel Rods","730","line 2 'Steel Rods' has HSN code '730', which is not 4 to 8 digits; correct it on the item"`,
+      "HSN,Description,UQC,Quantity,Tax Rate %,Taxable Value,CGST,SGST,IGST,Cess,Total Value,Flag",
+      `"730","Steel Rods","NOS","1","18","50.00","4.50","4.50","0.00","0.00","59.00","INVALID HSN"`,
+    ]);
+  });
+});
+
+describe("gstr1ToPortalJson prints the IST day of an instant (IST-midnight inputs, not UTC midnight)", () => {
+  const b2b = (invoiceDate: string) => ({
+    partyGstin: "27AABCM0000R1ZM", partyName: "Buyer", invoiceNumber: "INV-1", invoiceDate,
+    invoiceType: "Regular", taxableValue: 100, cgst: 9, sgst: 9, igst: 0, totalInvoiceValue: 118,
+  });
+  const note = (invoiceDate: string) => ({
+    invoiceNumber: "CN-1", invoiceDate, partyName: "Buyer", partyGstin: "27AABCM0000R1ZM",
+    totalAmount: "118.00", taxableAmount: "100.00", taxAmount: "18.00", cgst: 9, sgst: 9, igst: 0,
+  });
+
+  it.each([
+    ["2026-03-31T18:30:00.000Z", "01-04-2026"], // 1 April 00:00 IST: the NEW financial year
+    ["2026-03-31T18:29:59.500Z", "31-03-2026"], // 31 March 23:59:59.500 IST
+    ["2026-10-31T18:30:00.000Z", "01-11-2026"],
+    ["2025-12-31T18:30:00.000Z", "01-01-2026"],
+    ["2026-04-01T00:00:00.000Z", "01-04-2026"], // UTC midnight is 05:30 IST on the same day
+  ])("invoice %s -> idt %s", (instant, expected) => {
+    const json = gstr1ToPortalJson(makePortalReport({ b2b: [b2b(instant)] }), "27AABCA0000R1ZM", "2025-26", "042026");
+    const rows = json.b2b as Array<{ inv: Array<{ idt: string }> }>;
+    expect(rows[0]!.inv[0]!.idt).toBe(expected);
+  });
+
+  it.each([
+    ["2026-03-31T18:30:00.000Z", "01-04-2026"],
+    ["2026-10-31T18:30:00.000Z", "01-11-2026"],
+  ])("credit note %s -> nt_dt %s", (instant, expected) => {
+    const json = gstr1ToPortalJson(makePortalReport({ creditNotes: [note(instant)] }), "27AABCA0000R1ZM", "2025-26", "042026");
+    const rows = json.cdnr as Array<{ nt: Array<{ nt_dt: string }> }>;
+    expect(rows[0]!.nt[0]!.nt_dt).toBe(expected);
   });
 });

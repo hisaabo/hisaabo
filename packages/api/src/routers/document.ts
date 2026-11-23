@@ -6,6 +6,7 @@ import { router, memberProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
 import { logAudit } from "../lib/audit.js";
 import { requireCan } from "../lib/permissions.js";
+import { DOCUMENT_STOCK_EFFECT } from "../lib/document-stock-reversal.js";
 
 // ── Per-document-type routers ───────────────────────────────────
 
@@ -14,7 +15,7 @@ export const quotationRouter = createDocumentRouter({
   prefixColumn: "quotationPrefix",
   counterColumn: "nextQuotationNumber",
   allowedStatuses: ["draft", "sent", "cancelled"],
-  stockEffect: "none",
+  stockEffect: DOCUMENT_STOCK_EFFECT.quotation,
 });
 
 export const creditNoteRouter = createDocumentRouter({
@@ -22,7 +23,7 @@ export const creditNoteRouter = createDocumentRouter({
   prefixColumn: "creditNotePrefix",
   counterColumn: "nextCreditNoteNumber",
   allowedStatuses: ["draft", "sent", "paid", "cancelled"],
-  stockEffect: "none", // financial adjustment only — no stock change
+  stockEffect: DOCUMENT_STOCK_EFFECT.credit_note, // financial adjustment only — no stock change
 });
 
 export const debitNoteRouter = createDocumentRouter({
@@ -30,7 +31,7 @@ export const debitNoteRouter = createDocumentRouter({
   prefixColumn: "creditNotePrefix", // shares credit note counter
   counterColumn: "nextCreditNoteNumber",
   allowedStatuses: ["draft", "sent", "paid", "cancelled"],
-  stockEffect: "none",
+  stockEffect: DOCUMENT_STOCK_EFFECT.debit_note,
 });
 
 export const deliveryChallanRouter = createDocumentRouter({
@@ -38,7 +39,7 @@ export const deliveryChallanRouter = createDocumentRouter({
   prefixColumn: "deliveryChallanPrefix",
   counterColumn: "nextDeliveryChallanNumber",
   allowedStatuses: ["draft", "sent", "cancelled"],
-  stockEffect: "decrement",
+  stockEffect: DOCUMENT_STOCK_EFFECT.delivery_challan,
 });
 
 export const proformaRouter = createDocumentRouter({
@@ -46,7 +47,7 @@ export const proformaRouter = createDocumentRouter({
   prefixColumn: "proformaPrefix",
   counterColumn: "nextProformaNumber",
   allowedStatuses: ["draft", "sent", "cancelled"],
-  stockEffect: "none",
+  stockEffect: DOCUMENT_STOCK_EFFECT.proforma,
 });
 
 export const salesReturnRouter = createDocumentRouter({
@@ -54,7 +55,7 @@ export const salesReturnRouter = createDocumentRouter({
   prefixColumn: "creditNotePrefix",
   counterColumn: "nextCreditNoteNumber",
   allowedStatuses: ["draft", "sent", "cancelled"],
-  stockEffect: "increment", // returned items come back into stock
+  stockEffect: DOCUMENT_STOCK_EFFECT.sales_return, // returned items come back into stock
 });
 
 export const purchaseReturnRouter = createDocumentRouter({
@@ -62,7 +63,7 @@ export const purchaseReturnRouter = createDocumentRouter({
   prefixColumn: "creditNotePrefix",
   counterColumn: "nextCreditNoteNumber",
   allowedStatuses: ["draft", "sent", "cancelled"],
-  stockEffect: "decrement", // sending items back reduces stock
+  stockEffect: DOCUMENT_STOCK_EFFECT.purchase_return, // sending items back reduces stock
 });
 
 // ── Document conversion router ──────────────────────────────────
@@ -162,6 +163,7 @@ export const documentRouter = router({
           entityId: newDoc.id,
           metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
           ipAddress: ctx.ipAddress,
+          source: ctx.source,
         });
 
         return { id: newDoc.id, documentType: "invoice" as DocumentType, invoiceNumber: newDoc.invoiceNumber };
@@ -196,6 +198,7 @@ export const documentRouter = router({
         entityId: newDoc.id,
         metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
         ipAddress: ctx.ipAddress,
+        source: ctx.source,
       });
 
       return { id: newDoc.id, documentType: targetType, invoiceNumber: newDoc.invoiceNumber };

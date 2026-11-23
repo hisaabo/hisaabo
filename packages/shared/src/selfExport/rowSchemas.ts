@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { auditSources } from "../audit-source.js";
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
 
@@ -547,6 +548,8 @@ export const recurringInvoiceRunRowSchema = z.object({
   status: recurringRunStatus,
   errorMessage: z.string().nullable(),
   executedAt: isoDatetime,
+  // Absent in exports made before the column existed; imports as NULL.
+  scheduledFor: isoDatetimeNullable.optional(),
 });
 
 export const bankStatementImportRowSchema = z.object({
@@ -713,6 +716,9 @@ export const auditLogRowSchema = z.object({
   entityId: uuidNullable,
   metadata: z.string().nullable(),
   ipAddress: z.string().nullable(),
+  // "webmcp" | "mcp" | null (see packages/api/src/lib/audit-source.ts). Optional so
+  // exports written before the column existed still validate; any other value is rejected.
+  source: z.enum(auditSources).nullable().optional(),
   createdAt: isoDatetime,
 });
 

@@ -1,3 +1,4 @@
+import { businessDateOf } from "@hisaabo/shared";
 /**
  * Shared building blocks for the WebMCP tool catalog.
  *
@@ -75,6 +76,54 @@ export function pageProp(): JsonSchema {
 /** Free-text search property. */
 export function searchProp(description: string): JsonSchema {
   return { type: "string", maxLength: 200, description };
+}
+
+/** What the server accepts as an idempotency key (mirrors `idempotencyKeySchema` in @hisaabo/shared). */
+export const IDEMPOTENCY_KEY_PATTERN = "^[A-Za-z0-9_.:-]{8,100}$";
+
+/** Optional idempotency key property for create tools (invoice_create, payment_create). */
+export function idempotencyKeyProp(): JsonSchema {
+  return {
+    type: "string",
+    pattern: IDEMPOTENCY_KEY_PATTERN,
+    description:
+      "Optional, and strictly opt-in: without it every call creates a record. Pass a FRESH key (for example a new UUID) for every record you intend to create, and reuse that same key only to retry the same request after a timeout or an error you could not read. A retry with the same key and the same input returns the record the first call created, flagged idempotentReplay, instead of a duplicate. The same key with different input is an error. Never reuse a key for a different record: it will be treated as a repeat and nothing new will be created. 8-100 characters: letters, digits and _ . : -",
+  };
+}
+
+/**
+ * The key the agent asked for, or undefined. There is deliberately no derived or
+ * default key: guessing one would silently swallow a legitimate second record
+ * (two identical cash sales are two sales).
+ */
+export function idempotencyKeyOf(input: Record<string, unknown>): string | undefined {
+  return str(input.idempotencyKey);
+}
+
+/** Throws if the agent sent a key the server would reject: better to say so before asking the user than to fail after. */
+export function assertIdempotencyKey(input: Record<string, unknown>): void {
+  if (input.idempotencyKey === undefined) return;
+  const key = str(input.idempotencyKey);
+  if (!key || !new RegExp(IDEMPOTENCY_KEY_PATTERN).test(key)) {
+    throw new Error("idempotencyKey must be 8-100 characters: letters, digits and _ . : - (or leave it out).");
+  }
+}
+
+/** What the agent is told when a call turned out to repeat an earlier one. */
+export const REPLAY_NOTICE =
+  "No new record was created; this matches an earlier request with the same idempotencyKey. Pass a new key to create another.";
+
+/**
+ * Wrap a create result for the agent. When the server says this call was a replay of
+ * an earlier one (`idempotentReplay: true`), the result says so in plain words and
+ * carries the existing record; otherwise it is returned unchanged.
+ */
+export function describeCreateResult(result: unknown): unknown {
+  if (result && typeof result === "object" && (result as { idempotentReplay?: unknown }).idempotentReplay === true) {
+    const { idempotentReplay: _flag, ...record } = result as Record<string, unknown>;
+    return { idempotentReplay: true, notice: REPLAY_NOTICE, record };
+  }
+  return result;
 }
 
 /**
@@ -162,8 +211,7 @@ export function withPaginationMeta<T>(
   return { ...result, hasMore: result.total > result.page * result.limit };
 }
 
-/** Local calendar date as `YYYY-MM-DD` (never UTC-shifted). */
-export function localIsoDate(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** The calendar date `YYYY-MM-DD` of an instant on the business calendar (IST), never the browser's zone. */
+export function businessIsoDate(d: Date): string {
+  return businessDateOf(d);
 }

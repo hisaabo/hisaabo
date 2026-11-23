@@ -1,3 +1,4 @@
+import { businessToday, businessDayStart, addDaysYmd, resolveDatePreset, windowToQuery } from "@hisaabo/shared";
 import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -5,11 +6,11 @@ import { Modal } from "@/components/ui/Modal";
 import { PillTabs } from "@/components/ui/Tabs";
 import { toast } from "@/hooks/useToast";
 import { cn, todayISODate } from "@/lib/utils";
-import dayjs from "dayjs";
 import { parseUserAgent } from "@/lib/parse-user-agent";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useCan } from "@/hooks/useCan";
 import { BrowserAgentSection } from "./BrowserAgentSection";
+import { OrgBrowserAgentPolicy } from "./OrgBrowserAgentPolicy";
 
 // ── Action label map ──────────────────────────────────────────────────────────
 
@@ -378,24 +379,24 @@ const AUDIT_FILTERS = [
   { value: "all", label: "All Time" },
 ];
 
-function getDateRange(filter: string): { fromDate?: string; toDate?: string } {
-  const now = dayjs();
+// Boundaries are IST midnights (the business calendar), see @hisaabo/shared business-time.
+function getDateRange(filter: string, now: Date = new Date()): { fromDate?: string; toDate?: string } {
   if (filter === "this-week") {
-    return {
-      fromDate: now.subtract(7, "day").startOf("day").toISOString(),
-      toDate: now.toISOString(),
-    };
+    // the last 7 days: from 00:00 IST seven days ago through the end of today
+    const today = businessToday(now);
+    return windowToQuery({ from: businessDayStart(addDaysYmd(today, -7)), before: businessDayStart(addDaysYmd(today, 1)) });
   }
-  if (filter === "this-month") {
-    return {
-      fromDate: now.startOf("month").toISOString(),
-      toDate: now.toISOString(),
-    };
-  }
+  if (filter === "this-month") return windowToQuery(resolveDatePreset("this-month", now));
   return {};
 }
 
 const AUDIT_PAGE_SIZE = 30;
+
+/** Attribution labels for `audit_log.source`. Shown, never acted on: see packages/api/src/lib/audit-source.ts. */
+const AUDIT_SOURCE_LABELS: Record<string, string> = {
+  webmcp: "via browser AI agent",
+  mcp: "via MCP server",
+};
 
 function ActivityLogContent() {
   const [filter, setFilter] = useState("all");
@@ -472,6 +473,11 @@ function ActivityLogContent() {
                     </div>
                     <span className="text-xs text-text-tertiary mt-0.5 block">
                       by {entry.userName ?? "Unknown"}
+                      {AUDIT_SOURCE_LABELS[entry.source as string] && (
+                        <span className="ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-text-secondary">
+                          {AUDIT_SOURCE_LABELS[entry.source as string]}
+                        </span>
+                      )}
                     </span>
                   </div>
                   <span className="text-xs text-text-tertiary whitespace-nowrap shrink-0">
@@ -734,6 +740,35 @@ const ACCOUNT_TABS = [
   { value: "activity", label: "Activity Log" },
 ];
 
+function BrowserAgentSettings() {
+  const utils = trpc.useUtils();
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: systemConfig } = trpc.system.config.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const setOrgDisabled = trpc.tenant.setWebMcpDisabled.useMutation({
+    onSuccess: () => utils.auth.me.invalidate(),
+  });
+
+  const scope = session?.user?.id ? { userId: session.user.id, tenantId: session.tenantId ?? null } : null;
+  const operatorDisabled = systemConfig?.webmcpDisabled === true;
+  const orgDisabled = session?.webmcpDisabled === true;
+  // The API accepts the change from the owner only; the control is hidden from everyone else.
+  const isOwner = session?.role === "owner" || session?.role === "superadmin";
+
+  return (
+    <>
+      <BrowserAgentSection scope={scope} operatorDisabled={operatorDisabled} orgDisabled={orgDisabled} />
+      {isOwner && (
+        <OrgBrowserAgentPolicy
+          disabled={orgDisabled}
+          saving={setOrgDisabled.isPending}
+          operatorDisabled={operatorDisabled}
+          onChange={(disabled) => setOrgDisabled.mutate({ disabled })}
+        />
+      )}
+    </>
+  );
+}
+
 export function AccountTab() {
   const [tab, setTab] = useState("sessions");
   const canManageKeys = useCan("manage", "Team");
@@ -742,7 +777,7 @@ export function AccountTab() {
   return (
     <div className="space-y-6">
       <ProfileCard />
-      <BrowserAgentSection />
+      <BrowserAgentSettings />
       <div>
         <PillTabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
         {tab === "sessions" && <SessionsContent />}

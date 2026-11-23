@@ -586,11 +586,49 @@ export const auditLog = pgTable("audit_log", {
   entityId: uuid("entity_id"),
   metadata: text("metadata"), // JSON string of changes
   ipAddress: text("ip_address"),
+  // Which kind of client made the change when it was not a person at the UI:
+  // "webmcp" (a browser AI agent, header x-hisaabo-agent) or "mcp" (the MCP
+  // server, header x-client-type). Null = a normal client. ATTRIBUTION, not
+  // authorisation: the headers are client-supplied, so this says what the caller
+  // claimed, and no permission check ever reads it. See lib/audit-source.ts.
+  source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("audit_log_business_idx").on(t.businessId),
   index("audit_log_entity_idx").on(t.entityType, t.entityId),
   index("audit_log_date_idx").on(t.businessId, t.createdAt),
+]);
+
+// ── Idempotency keys ──────────────────────────────────────────
+//
+// Remembers WHICH record a create mutation (invoice.create, payment.create)
+// made under a client-supplied key, so a retried or double-submitted call with
+// the same key and the same input is recognised as a replay instead of creating
+// a second record. Only the record's id is kept, never a copy of the response,
+// so nothing the record contains (names, amounts, notes) is retained here: a
+// replay re-reads the live record. The claim row is written in the SAME
+// transaction as the record it protects: either both exist or neither does, so
+// there is no "in progress" state to get stuck in. Rows are short-lived
+// (expiresAt), purged by the next keyed write in the business and by an hourly
+// sweep. Scoped per business, user and procedure.
+// See packages/api/src/lib/idempotency.ts.
+
+export const idempotencyKeys = pgTable("idempotency_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  // Plain UUID, no FK: users live in the control schema (a different DB in cloud mode).
+  userId: uuid("user_id").notNull(),
+  scope: text("scope").notNull(), // procedure, e.g. "invoice.create"
+  key: text("key").notNull(),
+  // sha256 of the canonical input: same key + different input is rejected, not replayed.
+  requestHash: text("request_hash").notNull(),
+  // The record the first call created (an invoice or payment id); null only inside the claiming transaction.
+  resourceId: uuid("resource_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [
+  uniqueIndex("idempotency_keys_claim_idx").on(t.businessId, t.userId, t.scope, t.key),
+  index("idempotency_keys_expires_idx").on(t.businessId, t.expiresAt),
 ]);
 
 // ── Shipments ─────────────────────────────────────────────────
@@ -762,10 +800,20 @@ export const recurringInvoiceRuns = pgTable("recurring_invoice_runs", {
   status: recurringRunStatusEnum("status").notNull(),
   errorMessage: text("error_message"),
   executedAt: timestamp("executed_at", { withTimezone: true }).defaultNow().notNull(),
+  // The occurrence this run consumed: the template's next_run_date when the run
+  // was claimed. NULL only on rows written before this column existed.
+  scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
 }, (t) => [
   index("recurring_run_template_idx").on(t.templateId),
   index("recurring_run_business_idx").on(t.businessId),
   index("recurring_run_executed_idx").on(t.businessId, t.executedAt),
+  // Backstop for the template row lock: one run may consume a given occurrence,
+  // so a second runner that somehow got past the lock fails instead of billing
+  // twice. Partial: history (scheduled_for IS NULL, which may already hold
+  // duplicate rows) is never touched, and `failed` rows repeat by design.
+  uniqueIndex("recurring_run_occurrence_uniq")
+    .on(t.templateId, t.scheduledFor)
+    .where(sql`${t.scheduledFor} IS NOT NULL AND ${t.status} IN ('success', 'skipped_limit')`),
 ]);
 
 // ── Chart of Accounts ──────────────────────────────────────────

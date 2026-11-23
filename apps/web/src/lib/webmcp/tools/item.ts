@@ -24,6 +24,7 @@ import {
   uuid,
   withPaginationMeta,
 } from "./shared";
+import { rupees } from "./summary";
 
 const ITEM_TYPES = ["product", "service"] as const;
 
@@ -127,11 +128,31 @@ const itemCreate: WebMcpToolDefinition = {
     },
     ["name"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Item", action: "create" },
-  execute: async (input, ctx) => {
+  summarize: async (input) => {
     const name = str(input.name);
-    if (!name) throw new Error("name is required.");
+    if (!name) return null;
+    const itemType = enumOf(input.itemType, ITEM_TYPES) ?? "product";
+    const details: string[] = [];
+    if (str(input.salePrice)) {
+      details.push(`Sale price: ${rupees(str(input.salePrice))}${bool(input.taxInclusive) ? " (includes GST)" : ""}`);
+    }
+    if (str(input.purchasePrice)) details.push(`Purchase price: ${rupees(str(input.purchasePrice))}`);
+    if (str(input.taxPercent)) details.push(`GST rate: ${str(input.taxPercent)}%`);
+    const stock = str(input.stockQuantity);
+    if (itemType === "product" && stock && Number(stock) !== 0) {
+      details.push(`Opening stock: ${stock} ${enumOf(input.unit, UNITS) ?? "pcs"}`);
+    }
+    if (str(input.hsn)) details.push(`HSN: ${str(input.hsn)}`);
+    return { headline: `Add ${itemType} “${name}” to the catalog`, details };
+  },
+  validate: (input) => {
+    if (!str(input.name)) throw new Error("name is required.");
+  },
+  execute: async (input, ctx) => {
+    itemCreate.validate!(input, ctx);
+    const name = str(input.name)!;
 
     return await ctx.client.item.create.mutate({
       name,

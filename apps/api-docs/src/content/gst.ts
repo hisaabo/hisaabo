@@ -47,7 +47,7 @@ export const gstEndpoints: EndpointGroup = {
             igst: "0.00",
           },
           hsnSummary: [
-            { hsn: "6109", description: "T-shirts", quantity: 500, taxableValue: "75000.00", cgst: "6750.00", sgst: "6750.00", igst: "0.00" },
+            { hsn: "6109", description: "T-shirts", uqc: "NOS", taxRate: 12, quantity: 500, taxableValue: "75000.00", cgst: "6750.00", sgst: "6750.00", igst: "0.00" },
           ],
           documentSummary: {
             invoicesIssued: { from: "INV-2026-0038", to: "INV-2026-0055", total: 18, cancelled: 1 },
@@ -82,6 +82,7 @@ print("Period:", report["period"])`,
         "Both GST-registered and non-GST businesses can use this endpoint. Non-GST businesses receive the same data with generic terminology.",
         "Only sale invoices with status != 'cancelled' are included.",
         "B2B section only includes invoices where the customer has a GSTIN.",
+        "The HSN summary (Table 12) has one row per HSN, UQC and GST rate: the same HSN sold at 5% and at 18% is two rows, each with its `taxRate`, and quantities in different units are never added together (`uqc` is the code of the unit the quantity is in). The HSN is the item's current HSN (invoice lines carry no HSN snapshot until 0.11.0); a line with no item, or an item with no HSN, is filed under `0000` and listed in `hsnMissing`. Cess is not modelled yet and is always 0.",
       ],
       relatedEndpoints: ["gst-gstr1csv", "gst-gstr1json", "gst-gstr3b"],
     },
@@ -90,7 +91,7 @@ print("Period:", report["period"])`,
       method: "query",
       path: "gst.gstr3b",
       title: "Generate GSTR-3B",
-      description: "Generate GSTR-3B (monthly summary return) data for a given month. Includes outward supplies summary, inter-state supplies, ITC claimed, and tax payable. This is a summary-level return — individual invoice details are not included.",
+      description: "Generate GSTR-3B (monthly summary return) data for a given month. Includes outward supplies summary, inter-state supplies, ITC claimed, and tax payable. This is a summary-level return — individual invoice details are not included. Output tax (table 3.1 and `taxPayable`) is net of the month's credit notes and sales returns and includes its sale-side debit notes; ITC (table 4) is net of purchase returns and purchase-side debit notes.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -141,6 +142,9 @@ print("Tax payable CGST:", summary["table3_1"]["outwardTaxable"]["cgst"])`,
       gotchas: [
         "Requires `Report:read` permission.",
         "GSTR-3B is a summary return — it aggregates all invoices into category totals. Use `gst.gstr1` for invoice-level detail.",
+        "A credit note or sales return is classified by its `type`, not its name: one raised from a purchase invoice (`type = purchase`) reverses the purchase, is not in `gst.gstr1` `creditNotes`, and reduces `itc` instead. Purchase-type quotations, proformas and delivery challans never count toward `itc`.",
+        "Since v0.10.1, `outwardSupplies.taxable` and `taxPayable` are net of credit notes / sales returns and include sale-side debit notes, while `gst.gstr1` still lists invoices gross and the notes in `creditNotes` / `debitNotes`. `itc` is reduced by purchase returns and purchase-side debit notes. Figures for past months can differ from what an earlier version returned.",
+        "CGST and SGST are split per line like the e-invoice (IRP) payload: CGST = round-half-up(line tax / 2), SGST = the remainder, so an odd paisa goes to CGST (0.29 = 0.15 + 0.14). The document figures are the sums of the lines. The invoice, the ledger, GSTR-1, GSTR-3B, GSTR-9, the PDF and the e-way bill all use this one rule.",
         "Inter-state supplies (table 3.2) are derived from invoice place-of-supply vs business state code.",
       ],
       relatedEndpoints: ["gst-gstr1", "itc-gstr3b-table4"],
@@ -203,7 +207,7 @@ with open(data["filename"], "w") as f:
       method: "query",
       path: "gst.gstr1Json",
       title: "Export GSTR-1 as Portal JSON",
-      description: "Generate GSTR-1 data in the exact JSON schema accepted by the GST portal's offline tool. Users can download this JSON and upload it directly to gstn.gov.in instead of manually entering invoice data. Includes the business GSTIN, financial year, and filing period in the portal-required format.",
+      description: "Generate GSTR-1 data in the JSON format of the GST portal's offline tool: B2B, B2CL, B2CS and credit / debit note (CDNR) rows with one entry per GST rate, and the HSN summary (Table 12). The format follows the offline tool as third parties document it and has not been checked against an official GSTN schema: validate the file in the offline tool or the portal before filing. The call fails with PRECONDITION_FAILED, naming what to fix, while a sale line has no usable HSN, a note is to an unregistered customer, a document's lines do not add up to its totals, or a customer's state is not a GST state.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -257,7 +261,8 @@ print("Saved portal JSON:", data["filename"])`,
       gotchas: [
         "The JSON schema matches the GST portal's offline tool format exactly. Upload it at gstn.gov.in under GSTR-1 > Upload JSON.",
         "The `fp` (filing period) field uses MMYYYY format (e.g. '012026' for January 2026) as required by the portal.",
-        "Financial year (`fy`) is auto-detected from the business's `financialYearStart` setting (default April).",
+        "The export is refused (`PRECONDITION_FAILED`) while any sale line of the month has no HSN code: the message lists the items and typed-in lines to fix. The `gst.gstr1` report and the CSV are not blocked and flag those lines.",
+        "The response also carries `financialYear` (e.g. `\"2025-26\"` for January 2026). The GST financial year is always April to March, whatever financial year the business keeps its books on (`financialYearStart` moves only the accounting reports).",
         "Requires `Report:read` permission.",
       ],
       relatedEndpoints: ["gst-gstr1", "gst-gstr1csv"],
@@ -380,20 +385,20 @@ with open(data["filename"], "w") as f:
       method: "query",
       path: "gst.cmp08",
       title: "Generate CMP-08 (Composition Scheme)",
-      description: "Generate CMP-08 quarterly return for composition scheme dealers. Composition dealers pay a flat tax rate on total outward supplies instead of collecting GST from customers. Calculates total taxable value from sale invoices in the quarter and applies the composition tax rate (default 1% for traders/manufacturers).",
+      description: "Generate CMP-08 quarterly return for composition scheme dealers. Composition dealers pay a flat tax rate on total outward supplies instead of collecting GST from customers. Calculates the quarter's taxable value exactly as GSTR-1 and GSTR-3B do (sale invoices only, not cancelled or deleted, net of credit notes and sales returns, plus sale-side debit notes) and applies the composition tax rate (default 1% for traders/manufacturers). Tax payable is 0.00 when the net value is not positive.",
       auth: "business",
       requiredRole: "viewer",
       input: [
-        { name: "year", type: "number", required: true, description: "Calendar year (2020–2099)" },
-        { name: "quarter", type: "number", required: true, description: "Quarter number (1–4). Q1 = Jan-Mar, Q2 = Apr-Jun, Q3 = Jul-Sep, Q4 = Oct-Dec." },
+        { name: "year", type: "number", required: true, description: "Start year of the GST financial year (2020–2099): 2025 means FY 2025-26, April 2025 to March 2026." },
+        { name: "quarter", type: "number", required: true, description: "GST quarter number (1–4). Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar of the following calendar year." },
       ],
       output: {
         description: "Total taxable value, tax payable at composition rate, and quarter date range.",
         example: {
           taxableValue: "450000.00",
           taxPayable: "4500.00",
-          quarterStart: "2026-01-01T00:00:00.000Z",
-          quarterEnd: "2026-03-31T23:59:59.000Z",
+          quarterStart: "2026-03-31T18:30:00.000Z", // 1 April 00:00 IST
+          quarterEnd: "2026-06-30T18:29:59.999Z", // the last millisecond of 30 June IST
         },
       },
       codeExamples: {
@@ -402,7 +407,7 @@ with open(data["filename"], "w") as f:
   -H "x-business-id: YOUR_BUSINESS_ID"`,
         javascript: `const cmp = await trpc.gst.cmp08.query({
   year: 2026,
-  quarter: 1, // Q1 = Jan-Mar
+  quarter: 1, // Q1 = Apr-Jun of FY 2026-27
 });
 console.log("Taxable value:", cmp.taxableValue);
 console.log("Tax payable (1%):", cmp.taxPayable);`,
@@ -422,9 +427,10 @@ print(f"Tax payable: Rs. {cmp['taxPayable']}")`,
       gotchas: [
         "Requires `Report:read` permission.",
         "The default composition rate is 1% (for traders/manufacturers). Restaurants pay 5%, service providers pay 6% — the endpoint currently defaults to 1%.",
-        "CMP-08 is filed quarterly by the 18th of the month following the quarter (e.g. Q1 Jan-Mar due by April 18).",
-        "Quarters are calendar quarters (Q1 = Jan-Mar), not financial year quarters. This differs from some GST contexts where Q1 starts in April.",
-        "Only sale invoices with status != 'cancelled' are included in the taxable value calculation.",
+        "CMP-08 is filed quarterly by the 18th of the month following the quarter (e.g. Q1 Apr-Jun is due by July 18).",
+        "Quarters are the GST financial-year quarters (Q1 = Apr-Jun), and `year` is the start year of the financial year. Before 0.10.1 they were calendar quarters (Q1 = Jan-Mar of `year`); a stored call that passed `quarter: 1` now returns a different period.",
+        "The GST financial year is always April to March; the business's own `financialYearStart` setting does not change it.",
+        "Quotations, proformas, delivery challans, cancelled and deleted documents and purchase-side documents are not counted; credit notes and sales returns are deducted and sale-side debit notes added, the same classification as GSTR-1 and GSTR-3B.",
       ],
       relatedEndpoints: ["gst-gstr1", "gst-gstr3b"],
     },

@@ -115,6 +115,7 @@ export const tdsSectionRouter = router({
       businessId: ctx.businessId, userId: ctx.user!.id, action: "tds_section.create",
       entityType: "tds_section_config", entityId: config.id,
       metadata: { sectionCode: config.sectionCode, version: config.version }, ipAddress: ctx.ipAddress,
+      source: ctx.source,
     });
     return config;
   }),

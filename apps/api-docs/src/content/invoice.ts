@@ -174,7 +174,7 @@ resp = httpx.get(
         { name: "lineItems", type: "array", required: true, description: "At least one line item required. See line item schema below." },
         { name: "lineItems[].description", type: "string", required: true, description: "Line item description (1–500 chars)" },
         { name: "lineItems[].quantity", type: "string (decimal)", required: true, description: "Quantity as decimal string, e.g. `\"10.000\"`" },
-        { name: "lineItems[].unitPrice", type: "string (decimal)", required: true, description: "Unit price as decimal string, e.g. `\"1500.00\"`" },
+        { name: "lineItems[].unitPrice", type: "string (decimal)", required: true, description: "TAX-EXCLUSIVE unit price as decimal string, e.g. `\"1500.00\"`: the line's GST is added on top. For an item whose SALE price includes GST (`taxInclusive: true`) send the price without the GST: 118.00 at 18% is `\"100.00\"` (11800 x 100 / 118 paise, half-up), or the customer is taxed twice. Purchase prices are always tax-exclusive." },
         { name: "lineItems[].taxPercent", type: "string (decimal)", required: false, description: "Tax rate percentage (0–56), e.g. `\"18.00\"`", default: "0" },
         { name: "lineItems[].discountPercent", type: "string (decimal)", required: false, description: "Line-level discount percentage (0–100), e.g. `\"5.00\"`", default: "0" },
         { name: "lineItems[].itemId", type: "string (UUID)", required: false, description: "Linked item catalog entry (updates stock)" },
@@ -189,6 +189,7 @@ resp = httpx.get(
         { name: "termsAndConditions", type: "string", required: false, description: "T&C text printed on the invoice (max 2000 chars)" },
         { name: "deliveryMethod", type: "enum", required: false, description: "How the goods are delivered. Defaults to `\"self_pickup\"` if omitted. Self-pickup invoices do not auto-create a shipment record. Use `invoice.lastDeliveryMethod` to pre-populate this from the party's previous invoice.", default: "self_pickup", enumValues: ["self_pickup", "hand_delivery", "courier", "bus", "transport", "post"] },
         { name: "referenceDocumentId", type: "string (UUID)", required: false, description: "ID of the source document (e.g. quotation being converted to invoice)" },
+        { name: "idempotencyKey", type: "string", required: false, description: "Makes the call safe to retry. 8-100 characters (letters, digits, `_ . : -`). Opt-in: without a key every call creates an invoice (two identical requests are two invoices). Repeating the identical request with the same key within 15 minutes creates nothing: the response is the live invoice, with `idempotentReplay: true`, and the same key with a different request is a `CONFLICT` (so is a replay whose invoice has since been deleted). Responses to a keyed call that did create the invoice carry `idempotentReplay: false`. Use a fresh key per invoice you intend to create. Keys are scoped to the business and the user, and only the invoice id is remembered." },
       ],
       output: {
         description: "Created invoice with generated invoice number and calculated totals.",

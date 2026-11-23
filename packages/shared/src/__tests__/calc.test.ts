@@ -102,6 +102,26 @@ describe("calcLineItem — calculates subtotal, discount, tax and total for a si
     expect(result.total).toBe("106.20");
   });
 
+  it.each([
+    ["quantity", { quantity: ".5" }],
+    ["quantity", { quantity: "2." }],
+    ["quantity", { quantity: "1e-1" }],
+    ["quantity", { quantity: "" }],
+    ["unit price", { unitPrice: "1e2" }],
+    ["unit price", { unitPrice: "abc" }],
+    ["discount", { discountPercent: "10%" }],
+    ["GST rate", { taxPercent: "1e1" }],
+  ])("a tax-INCLUSIVE line with a non-plain %s throws instead of silently billing the price as tax-exclusive: %j", (what, bad) => {
+    // before: the inclusive branch returned null and calcLineItem fell through to the exclusive formula,
+    // so "2." x ₹118 incl. 18% came out as 236 + 42.48 = 278.48 (the customer taxed twice)
+    const line = { quantity: "2", unitPrice: "118.00", taxPercent: "18", discountPercent: "0", taxInclusive: true, ...bad };
+    expect(() => calcLineItem(line)).toThrow(what);
+  });
+
+  it("the same non-plain quantity on a tax-EXCLUSIVE line keeps its (float-fallback) behaviour: only the inclusive path refuses", () => {
+    expect(() => calcLineItem({ quantity: "2.", unitPrice: "100.00", taxPercent: "18", discountPercent: "0" })).not.toThrow();
+  });
+
   it("handles 100% discount (zero total) — e.g. complimentary goods on an invoice", () => {
     // Sales teams sometimes add a free item to an invoice at 100% discount.
     const result = calcLineItem({

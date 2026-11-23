@@ -132,6 +132,16 @@ describe("delete / cancel guards", () => {
     await world.tenantDb.update(invoices).set({ irn: "b".repeat(64), eInvoiceStatus: "generated" }).where(eq(invoices.id, sr.id));
     await expect(owner.salesReturn.delete({ id: sr.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
+
+  it("finishing a half-cancel (IRN cancelled, document live) clears the stale e-invoice warning", async () => {
+    const cn = await owner.creditNote.create(input("sale"));
+    await world.tenantDb.update(invoices)
+      .set({ irn: "c".repeat(64), eInvoiceStatus: "cancelled", eInvoiceError: "IRN cancelled at the IRP, but the invoice is still active" })
+      .where(eq(invoices.id, cn.id));
+    const cancelled = await owner.creditNote.updateStatus({ id: cn.id, status: "cancelled" });
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.eInvoiceError).toBeNull();
+  });
 });
 
 describe("factory status transitions", () => {

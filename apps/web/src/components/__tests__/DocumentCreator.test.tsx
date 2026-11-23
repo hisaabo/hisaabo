@@ -127,6 +127,9 @@ vi.mock("@/lib/trpc", () => ({
       create: {
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
+      updatePricesFromDocument: {
+        useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+      },
     },
     invoice: {
       create: {

@@ -1,3 +1,4 @@
+import { businessToday, businessYearMonth, addDaysYmd } from "@hisaabo/shared";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Modal } from "@/components/ui/Modal";
@@ -54,31 +55,32 @@ const PERIOD_TYPE_OPTIONS = [
 
 // ── Utility helpers ────────────────────────────────────────────
 
-export function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: string } {
-  const now = new Date();
-  const today = formatDateInput(now);
+export function getDefaultPeriodDates(periodType: PeriodType, now: Date = new Date()): { start: string; end: string } {
+  // Days on the business calendar (IST): today, this week (Sunday-Saturday), month, calendar quarter.
+  const today = businessToday(now);
+  const { year, month } = businessYearMonth(now);
+  const ymd = (y: number, m: number, d: number) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const lastDayBefore = (y: number, m: number) => addDaysYmd(ymd(y, m, 1), -1); // last day of month m-1
 
   switch (periodType) {
     case "daily": {
       return { start: today, end: today };
     }
     case "weekly": {
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay());
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-      return { start: formatDateInput(startOfWeek), end: formatDateInput(endOfWeek) };
+      const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sunday
+      const start = addDaysYmd(today, -dow);
+      return { start, end: addDaysYmd(start, 6) };
     }
     case "monthly": {
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      return { start: formatDateInput(startOfMonth), end: formatDateInput(endOfMonth) };
+      return { start: ymd(year, month, 1), end: month === 12 ? ymd(year, 12, 31) : lastDayBefore(year, month + 1) };
     }
     case "quarterly": {
-      const quarter = Math.floor(now.getMonth() / 3);
-      const startOfQ = new Date(now.getFullYear(), quarter * 3, 1);
-      const endOfQ = new Date(now.getFullYear(), quarter * 3 + 3, 0);
-      return { start: formatDateInput(startOfQ), end: formatDateInput(endOfQ) };
+      const firstMonth = Math.floor((month - 1) / 3) * 3 + 1;
+      const endMonth = firstMonth + 3; // first month of the next quarter
+      return {
+        start: ymd(year, firstMonth, 1),
+        end: endMonth > 12 ? ymd(year, 12, 31) : lastDayBefore(year, endMonth),
+      };
     }
     case "custom":
     default:

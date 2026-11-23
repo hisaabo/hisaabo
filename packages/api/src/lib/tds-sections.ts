@@ -9,10 +9,11 @@
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { chartOfAccounts, tdsSectionConfigs } from "@hisaabo/db";
+import { BUSINESS_TIME_ZONE } from "@hisaabo/shared";
 import { seedTdsSections } from "./tds-seed.js";
 
-/** Hisaabo is an Indian business tool: business-local dates are IST. */
-export const BUSINESS_TIME_ZONE = "Asia/Kolkata";
+/** Hisaabo is an Indian business tool: business-local dates are IST (one definition, in @hisaabo/shared). */
+export { BUSINESS_TIME_ZONE };
 
 const dayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: BUSINESS_TIME_ZONE,
