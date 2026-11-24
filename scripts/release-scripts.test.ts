@@ -41,6 +41,8 @@ echo "$*" >> "$FAKE_GH_CALLS"
 if [ -n "\${FAKE_GH_FAIL:-}" ]; then echo "gh: not logged in" >&2; exit 4; fi
 if [[ " $* " == *" --method POST "* ]]; then echo "\${FAKE_GH_NEW_ID:-9001}"; exit 0; fi
 if [[ " $* " == *" --method PATCH "* ]]; then echo "patched"; exit 0; fi
+# publish-release.sh reads the tag back after publishing: FAKE_GH_RELEASE_TAG, else the tag it published.
+if [[ " $* " == *" --jq .tag_name "* ]]; then echo "\${FAKE_GH_RELEASE_TAG:-\${REF_NAME:-}}"; exit 0; fi
 cat "$FAKE_GH_PAGES"
 `,
   );
@@ -332,7 +334,7 @@ const TIMEOUT: Wait = { result: "failure", outcome: "timeout", byOperator: "fals
 // docker failed, so wait-for-api never ran: the job is skipped, with no outputs.
 const DOCKER_FAILED: Wait = { result: "skipped" };
 
-function publish(wait: Wait, pages: Release[][] = [[release(77, "v1.2.3", true)]], tag = "v1.2.3") {
+function publish(wait: Wait, pages: Release[][] = [[release(77, "v1.2.3", true)]], tag = "v1.2.3", extra: Record<string, string> = {}) {
   const body = join(work, "notes.md");
   writeFileSync(body, "notes");
   const r = sh(
@@ -346,6 +348,7 @@ function publish(wait: Wait, pages: Release[][] = [[release(77, "v1.2.3", true)]
       WAIT_RESULT: wait.result,
       WAIT_OUTCOME: wait.outcome ?? "",
       WAIT_SKIPPED_BY_OPERATOR: wait.byOperator ?? "",
+      ...extra,
     }),
   );
   const patch = ghCalls().split("\n").find((l) => l.includes("--method PATCH")) ?? "";
@@ -418,4 +421,21 @@ test("publish-release refuses to publish next to a second release for the tag", 
   assert.equal(r.status, 1);
   assert.match(r.stdout, /::error title=Duplicate releases::.*ids: 78/);
   assert.equal(r.patch, "");
+});
+
+// v0.10.1 went public as `untagged-<hash>`: the draft carried GitHub's placeholder tag and the
+// PATCH by id never set tag_name. Every PATCH now names the tag, and a publish reads it back.
+test("publish-release always sets tag_name, published or not", () => {
+  for (const wait of [SUCCESS, TIMEOUT]) {
+    const r = publish(wait);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.patch, /tag_name=v1\.2\.3(\s|$)/);
+  }
+});
+
+test("publish-release fails loudly when the published release does not carry the tag", () => {
+  const r = publish(SUCCESS, undefined, "v1.2.3", { FAKE_GH_RELEASE_TAG: "untagged-2c7e5a9c6544134ea175" });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout + r.stderr, /Release tag mismatch/);
+  assert.match(r.stdout + r.stderr, /untagged-2c7e5a9c6544134ea175/);
 });

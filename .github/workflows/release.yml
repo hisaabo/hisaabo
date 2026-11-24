@@ -879,6 +879,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           MOBILE_RESULT: ${{ needs.mobile.result }}
           MOBILE_PUBLISHED: ${{ needs.mobile.outputs.published }}
+          MOBILE_SIGNING: ${{ needs.mobile.outputs.signing }}
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           CLI_RESULT: ${{ needs.cli.result }}
           MCP_RESULT: ${{ needs.mcp.result }}
@@ -1010,12 +1011,23 @@ jobs:
           EOF
           fi
 
+          # Matches what the mobile job actually attached (82496fc5): the release
+          # key when its four secrets exist, else the template debug key that
+          # 0.9.0 and earlier shipped with, so installed apps keep updating.
+          if [ "$MOBILE_PUBLISHED" != "true" ]; then
+            ANDROID_SIGNING="no APK was attached by this run (see the table above)."
+          elif [ "$MOBILE_SIGNING" = "release" ]; then
+            ANDROID_SIGNING="signed with the project release key."
+          else
+            ANDROID_SIGNING="signed with the project template key (\`CN=Android Debug\`), the same key as 0.9.0 and earlier, so it installs as an update over them. Not the Play Store release key."
+          fi
+
           cat >> /tmp/release-body.md << EOF
 
           ## Signing status
 
           - **Docker images:** ${DOCKER_SIGNING}
-          - **Android APK:** published only when the project release keystore secrets are configured (signed with it); otherwise no APK is attached to the release. Debug-signed APKs are never published.
+          - **Android APK:** ${ANDROID_SIGNING}
           - **Desktop installers (Windows/macOS/Linux):** **NOT code-signed or notarized.** No Apple Developer ID or Windows Authenticode certificate is configured, so Gatekeeper and SmartScreen will show warnings. Only install builds downloaded from this release page.
 
           ## Commits
