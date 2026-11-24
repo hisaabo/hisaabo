@@ -50,7 +50,10 @@ if [ -n "$others" ]; then
   exit 1
 fi
 
-args=(-f name="Hisaabo ${REF_NAME}" -F body=@"$BODY_PATH" -F prerelease="$prerelease")
+# tag_name every time: a draft can carry a placeholder `untagged-<hash>` tag
+# (v0.10.1 was published under one), and publishing by id keeps whatever the
+# draft has. The tag already exists (this workflow runs on its push).
+args=(-f tag_name="$REF_NAME" -f name="Hisaabo ${REF_NAME}" -F body=@"$BODY_PATH" -F prerelease="$prerelease")
 
 publish=false
 if [ "$wait_result" = success ]; then
@@ -65,6 +68,11 @@ fi
 if [ "$publish" = true ]; then
   args+=(-F draft=false -f make_latest="$make_latest")
   gh api --method PATCH "repos/${REPOSITORY}/releases/${RELEASE_ID}" "${args[@]}" --jq '"Published " + .html_url'
+  tag="$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}" --jq .tag_name)"
+  if [ "$tag" != "$REF_NAME" ]; then
+    echo "::error title=Release tag mismatch::Release ${RELEASE_ID} is published with tag '${tag}', expected '${REF_NAME}'. Set it with: gh api -X PATCH repos/${REPOSITORY}/releases/${RELEASE_ID} -f tag_name=${REF_NAME}"
+    exit 1
+  fi
   exit 0
 fi
 
