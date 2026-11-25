@@ -1008,6 +1008,7 @@ export const invoiceRouter = router({
     .input(claimOwnlystBillSchema)
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "create", "Invoice");
-      return await processClaimOwnlystBill(ctx.db, ctx.businessId, ctx.user!, input);
+      const targetBusinessId = input.businessId || ctx.businessId;
+      return await processClaimOwnlystBill(ctx.db, targetBusinessId, ctx.user!, input);
     }),
 });

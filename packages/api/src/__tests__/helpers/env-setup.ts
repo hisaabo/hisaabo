@@ -15,7 +15,8 @@
 
 const testUrl =
   process.env.TEST_DATABASE_URL ??
-  "postgresql://test:test@localhost:5433/hisaabo_test";
+  (process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/\/hisaabo$/, "/hisaabo_test") : null) ??
+  "postgresql://hisaabo:hisaabo_dev@127.0.0.1:5432/hisaabo_test";
 
 process.env.DATABASE_URL = testUrl;
 process.env.CONTROL_DATABASE_URL = testUrl;

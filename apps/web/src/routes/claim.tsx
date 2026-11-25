@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo, useId } from "react";
-import { trpc } from "@/lib/trpc";
+import { trpc, setBusinessId } from "@/lib/trpc";
 import { Logo } from "@/components/ui/Logo";
 import { Modal } from "@/components/ui/Modal";
 import { FormField } from "@/components/ui/FormField";
@@ -147,8 +147,8 @@ function ClaimPage() {
   const addressId = useId();
 
   // Session & Businesses
-  const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
-  const { data: businesses, isLoading: businessesLoading } = trpc.business.list.useQuery(undefined, {
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: businesses } = trpc.business.list.useQuery(undefined, {
     enabled: !!session?.tenantId,
   });
 
@@ -175,6 +175,13 @@ function ClaimPage() {
   const [bizStateCode, setBizStateCode] = useState("33");
   const [provisionError, setProvisionError] = useState("");
 
+  // Synchronize active business ID with tRPC headers
+  useEffect(() => {
+    if (selectedBusinessId) {
+      setBusinessId(selectedBusinessId);
+    }
+  }, [selectedBusinessId]);
+
   // Extract hash & parse envelope
   useEffect(() => {
     const rawHash = window.location.hash;
@@ -194,7 +201,7 @@ function ClaimPage() {
       setEnvelope(parsed);
 
       if (!parsed.protected) {
-        const rawPlain = parsed.plainPayload;
+        const rawPlain = parsed.plainPayload || (parsed as any).plaintext;
         if (rawPlain) {
           const invJson = new TextDecoder().decode(base64UrlToBytes(rawPlain));
           const inv = JSON.parse(invJson) as OwnlystInvoice;
@@ -252,6 +259,7 @@ function ClaimPage() {
       await utils.business.list.invalidate();
       setShowProvisionModal(false);
       setSelectedBusinessId(newBiz.id);
+      setBusinessId(newBiz.id);
     },
     onError: (err) => {
       setProvisionError(err.message || "Failed to create business.");
@@ -298,6 +306,7 @@ function ClaimPage() {
   const handleClaim = () => {
     if (!decodedInvoice || !selectedBusinessId) return;
     setError(null);
+    setBusinessId(selectedBusinessId);
 
     const sender = decodedInvoice.sender;
     const gstin = sender.taxId?.trim() || null;
@@ -307,6 +316,7 @@ function ClaimPage() {
     const dedupeKey = `${decodedInvoice.invoiceNumber.trim()}::${gstin || sender.iban || "OWNLYST"}`;
 
     const claimPayload = {
+      businessId: selectedBusinessId,
       dedupeKey,
       supplier: {
         name: sender.name || "Vendor",

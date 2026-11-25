@@ -52,7 +52,7 @@ function CompleteProfilePage() {
     } else {
       const pendingClaim = localStorage.getItem("pendingClaimHash");
       if (pendingClaim) {
-        navigate({ to: `/claim${pendingClaim}` });
+        window.location.href = `/claim${pendingClaim.startsWith("#") ? pendingClaim : `#${pendingClaim}`}`;
       } else {
         navigate({ to: peekNativeRequest() ? "/auth/native" : session?.tenantId ? "/" : "/settings" });
       }
@@ -77,7 +77,7 @@ function CompleteProfilePage() {
         const pendingClaim = localStorage.getItem("pendingClaimHash");
         setTimeout(() => {
           if (pendingClaim) {
-            navigate({ to: `/claim${pendingClaim}` });
+            window.location.href = `/claim${pendingClaim.startsWith("#") ? pendingClaim : `#${pendingClaim}`}`;
           } else {
             navigate({ to: nativePending ? "/auth/native" : "/settings" });
           }

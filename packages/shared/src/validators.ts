@@ -372,6 +372,7 @@ export const updateInvoiceStatusSchema = z.object({
 });
 
 export const claimOwnlystBillSchema = z.object({
+  businessId: z.string().uuid().optional(),
   dedupeKey: z.string().min(1),
   supplier: z.object({
     name: z.string().min(1).max(200),
@@ -402,6 +403,7 @@ export const claimOwnlystBillSchema = z.object({
     taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
     discountPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
     unit: z.enum(units).default("pcs"),
+    itemType: z.enum(["product", "service"]).optional(),
   })).min(1),
 });
 

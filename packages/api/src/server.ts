@@ -2335,9 +2335,9 @@ app.post("/api/hisaabo/push", async (c) => {
     }
   }
 
-  const [biz] = await db.select({ id: businesses.id }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
-  if (!biz) {
-    return c.json({ ok: false, error: "BUSINESS_NOT_FOUND", message: "Business not found in this organization" }, 404);
+  const bizAccess = await verifyBusinessAccess(db, businessId, ctx.tenantId);
+  if (!bizAccess.ok) {
+    return c.json({ ok: false, error: "FORBIDDEN", message: bizAccess.error }, 403);
   }
 
   let claimInput: ClaimOwnlystBillInput;

@@ -43,7 +43,7 @@ function VerifyPage() {
           search: pendingToken ? { invite: "1" } : undefined,
         });
       } else if (pendingClaim) {
-        navigate({ to: `/claim${pendingClaim}` });
+        window.location.href = `/claim${pendingClaim.startsWith("#") ? pendingClaim : `#${pendingClaim}`}`;
       } else if (pendingToken) {
         navigate({ to: `/invite/${pendingToken}` });
       } else if (peekNativeRequest()) {

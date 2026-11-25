@@ -1,4 +1,4 @@
-import { eq, and, sql, ilike } from "drizzle-orm";
+import { eq, and, sql, ilike, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, items, businesses, parties, itcLedgerEntries } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@hisaabo/shared";
 import { applyStockDeltas } from "./stock-adjust.js";
 import { logAudit } from "./audit.js";
+import { escapeLike } from "./escape-like.js";
 
 export interface ClaimResult {
   success: boolean;
@@ -24,6 +25,7 @@ export async function processClaimOwnlystBill(
   input: ClaimOwnlystBillInput
 ): Promise<ClaimResult> {
   // 1. Idempotency check via dedupeKey in notes
+  const escapedDedupe = escapeLike(input.dedupeKey);
   const [existing] = await db
     .select({ id: invoices.id, invoiceNumber: invoices.invoiceNumber })
     .from(invoices)
@@ -31,7 +33,8 @@ export async function processClaimOwnlystBill(
       and(
         eq(invoices.businessId, businessId),
         eq(invoices.type, "purchase"),
-        sql`${invoices.notes} LIKE ${`%[ownlyst-claim:${input.dedupeKey}]%`}`
+        isNull(invoices.deletedAt),
+        sql`${invoices.notes} LIKE ${`%[ownlyst-claim:${escapedDedupe}]%`}`
       )
     )
     .limit(1);
@@ -132,7 +135,13 @@ export async function processClaimOwnlystBill(
       const [foundItem] = await tx
         .select({ id: items.id, itemType: items.itemType })
         .from(items)
-        .where(and(eq(items.businessId, businessId), ilike(items.name, li.itemName.trim())))
+        .where(
+          and(
+            eq(items.businessId, businessId),
+            isNull(items.deletedAt),
+            ilike(items.name, li.itemName.trim())
+          )
+        )
         .limit(1);
 
       let itemId: string;
@@ -141,7 +150,7 @@ export async function processClaimOwnlystBill(
         itemId = foundItem.id;
         itemType = foundItem.itemType;
       } else {
-        itemType = li.hsn?.startsWith("99") ? "service" : "product";
+        itemType = li.itemType ?? (li.hsn?.startsWith("99") ? "service" : "product");
         const [newItem] = await tx
           .insert(items)
           .values({
@@ -198,22 +207,32 @@ export async function processClaimOwnlystBill(
       .where(eq(businesses.id, businessId))
       .for("update");
 
-    const [clash] = await tx
+    let assignedNumber = input.invoiceNumber;
+    let nextNum = biz.nextNum;
+    let [clash] = await tx
       .select({ id: invoices.id })
       .from(invoices)
       .where(
-        and(eq(invoices.businessId, businessId), eq(invoices.invoiceNumber, input.invoiceNumber))
+        and(eq(invoices.businessId, businessId), eq(invoices.invoiceNumber, assignedNumber))
       )
       .limit(1);
 
-    const assignedNumber = clash
-      ? `${biz.prefix}-${String(biz.nextNum).padStart(5, "0")}`
-      : input.invoiceNumber;
+    while (clash) {
+      assignedNumber = `${biz.prefix}-${String(nextNum).padStart(5, "0")}`;
+      nextNum++;
+      [clash] = await tx
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(
+          and(eq(invoices.businessId, businessId), eq(invoices.invoiceNumber, assignedNumber))
+        )
+        .limit(1);
+    }
 
-    if (clash) {
+    if (nextNum !== biz.nextNum) {
       await tx
         .update(businesses)
-        .set({ nextInvoiceNumber: biz.nextNum + 1 })
+        .set({ nextInvoiceNumber: nextNum })
         .where(eq(businesses.id, businessId));
     }
 
@@ -258,7 +277,22 @@ export async function processClaimOwnlystBill(
     // 7. Insert Line Items
     if (resolvedLineItems.length > 0) {
       await tx.insert(invoiceItems).values(
-        resolvedLineItems.map(({ itemType: _, ...li }) => ({ ...li, invoiceId: invoice.id }))
+        resolvedLineItems.map((li) => ({
+          invoiceId: invoice.id,
+          itemId: li.itemId,
+          itemName: li.itemName,
+          description: li.description,
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          taxAmount: li.taxAmount,
+          discountPercent: li.discountPercent,
+          totalAmount: li.totalAmount,
+          sortOrder: li.sortOrder,
+          selectedUnit: li.selectedUnit,
+          conversionFactor: li.conversionFactor,
+          variantId: li.variantId,
+        }))
       );
     }
 
