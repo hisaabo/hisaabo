@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoices'
 import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
 import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
+import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as CreditNotesRouteImport } from './routes/credit-notes'
 import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
 import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
@@ -58,6 +59,11 @@ const BankReconciliationRoute = BankReconciliationRouteImport.update({
 const CashAndBankRoute = CashAndBankRouteImport.update({
   id: '/cash-and-bank',
   path: '/cash-and-bank',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClaimRoute = ClaimRouteImport.update({
+  id: '/claim',
+  path: '/claim',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CreditNotesRoute = CreditNotesRouteImport.update({
@@ -196,6 +202,7 @@ export interface FileRoutesByFullPath {
   '/automated-invoices': typeof AutomatedInvoicesRoute
   '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
+  '/claim': typeof ClaimRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
   '/e-invoicing': typeof EInvoicingRoute
@@ -228,6 +235,7 @@ export interface FileRoutesByTo {
   '/automated-invoices': typeof AutomatedInvoicesRoute
   '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
+  '/claim': typeof ClaimRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
   '/e-invoicing': typeof EInvoicingRoute
@@ -261,6 +269,7 @@ export interface FileRoutesById {
   '/automated-invoices': typeof AutomatedInvoicesRoute
   '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
+  '/claim': typeof ClaimRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
   '/e-invoicing': typeof EInvoicingRoute
@@ -295,6 +304,7 @@ export interface FileRouteTypes {
     | '/automated-invoices'
     | '/bank-reconciliation'
     | '/cash-and-bank'
+    | '/claim'
     | '/credit-notes'
     | '/delivery-challans'
     | '/e-invoicing'
@@ -327,6 +337,7 @@ export interface FileRouteTypes {
     | '/automated-invoices'
     | '/bank-reconciliation'
     | '/cash-and-bank'
+    | '/claim'
     | '/credit-notes'
     | '/delivery-challans'
     | '/e-invoicing'
@@ -359,6 +370,7 @@ export interface FileRouteTypes {
     | '/automated-invoices'
     | '/bank-reconciliation'
     | '/cash-and-bank'
+    | '/claim'
     | '/credit-notes'
     | '/delivery-challans'
     | '/e-invoicing'
@@ -392,6 +404,7 @@ export interface RootRouteChildren {
   AutomatedInvoicesRoute: typeof AutomatedInvoicesRoute
   BankReconciliationRoute: typeof BankReconciliationRoute
   CashAndBankRoute: typeof CashAndBankRoute
+  ClaimRoute: typeof ClaimRoute
   CreditNotesRoute: typeof CreditNotesRoute
   DeliveryChallansRoute: typeof DeliveryChallansRoute
   EInvoicingRoute: typeof EInvoicingRoute
@@ -448,6 +461,13 @@ declare module '@tanstack/react-router' {
       path: '/cash-and-bank'
       fullPath: '/cash-and-bank'
       preLoaderRoute: typeof CashAndBankRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/claim': {
+      id: '/claim'
+      path: '/claim'
+      fullPath: '/claim'
+      preLoaderRoute: typeof ClaimRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/credit-notes': {
@@ -640,6 +660,7 @@ const rootRouteChildren: RootRouteChildren = {
   AutomatedInvoicesRoute: AutomatedInvoicesRoute,
   BankReconciliationRoute: BankReconciliationRoute,
   CashAndBankRoute: CashAndBankRoute,
+  ClaimRoute: ClaimRoute,
   CreditNotesRoute: CreditNotesRoute,
   DeliveryChallansRoute: DeliveryChallansRoute,
   EInvoicingRoute: EInvoicingRoute,

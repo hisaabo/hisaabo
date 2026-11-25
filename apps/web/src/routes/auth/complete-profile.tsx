@@ -50,7 +50,12 @@ function CompleteProfilePage() {
       setName(session!.user!.name!);
       setStep("org-choice");
     } else {
-      navigate({ to: peekNativeRequest() ? "/auth/native" : session?.tenantId ? "/" : "/settings" });
+      const pendingClaim = localStorage.getItem("pendingClaimHash");
+      if (pendingClaim) {
+        navigate({ to: `/claim${pendingClaim}` });
+      } else {
+        navigate({ to: peekNativeRequest() ? "/auth/native" : session?.tenantId ? "/" : "/settings" });
+      }
     }
   }, [alreadyHasName, step, pendingToken, inviteInfo]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -69,7 +74,14 @@ function CompleteProfilePage() {
         setDoneMessage("Setting up your account...");
         setStep("done");
         const nativePending = !!peekNativeRequest();
-        setTimeout(() => navigate({ to: nativePending ? "/auth/native" : "/settings" }), 800);
+        const pendingClaim = localStorage.getItem("pendingClaimHash");
+        setTimeout(() => {
+          if (pendingClaim) {
+            navigate({ to: `/claim${pendingClaim}` });
+          } else {
+            navigate({ to: nativePending ? "/auth/native" : "/settings" });
+          }
+        }, 800);
       }
     },
     onError: (e) => setError(e.message),

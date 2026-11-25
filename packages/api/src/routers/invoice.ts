@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { createInvoiceSchema, updateInvoiceStatusSchema, claimOwnlystBillSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -12,6 +12,7 @@ import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { processClaimOwnlystBill } from "../lib/claim-ownlyst-bill.js";
 
 // Reverse the stock (and purchase ITC) impact an invoice had at creation.
 // Shared by delete and cancel so both undo exactly the same effects.
@@ -1001,5 +1002,12 @@ export const invoiceRouter = router({
       });
 
       return { success: true };
+    }),
+
+  claimOwnlystBill: memberProcedure
+    .input(claimOwnlystBillSchema)
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "Invoice");
+      return await processClaimOwnlystBill(ctx.db, ctx.businessId, ctx.user!, input);
     }),
 });

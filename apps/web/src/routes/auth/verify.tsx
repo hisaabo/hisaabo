@@ -36,11 +36,14 @@ function VerifyPage() {
       if (existingSession?.user) utils.invalidate();
       else utils.auth.me.invalidate();
       const pendingToken = sessionStorage.getItem("pendingInviteToken");
+      const pendingClaim = localStorage.getItem("pendingClaimHash");
       if (data.needsProfile) {
         navigate({
           to: "/auth/complete-profile",
           search: pendingToken ? { invite: "1" } : undefined,
         });
+      } else if (pendingClaim) {
+        navigate({ to: `/claim${pendingClaim}` });
       } else if (pendingToken) {
         navigate({ to: `/invite/${pendingToken}` });
       } else if (peekNativeRequest()) {

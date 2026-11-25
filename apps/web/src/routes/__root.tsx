@@ -442,7 +442,7 @@ function RootLayout() {
   }, [businesses, currentBusinessId]);
 
   // Single consolidated redirect — priority order matters
-  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite", "/auth/native"];
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite", "/auth/native", "/claim"];
   useEffect(() => {
     if (sessionLoading || sessionFetching) return;
 
@@ -479,7 +479,7 @@ function RootLayout() {
     // businessesLoading is true when the query is enabled but has no data yet.
     // This prevents redirecting to /settings before we know if businesses exist.
     if (session?.tenantId && !businessesLoading && !businessesFetching && Array.isArray(businesses) && businesses.length === 0) {
-      if (pathname !== "/settings") {
+      if (pathname !== "/settings" && !pathname.startsWith("/claim")) {
         navigate({ to: "/settings" });
       }
       return;

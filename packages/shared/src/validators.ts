@@ -317,6 +317,9 @@ export const invoiceLineItemSchema = z.object({
   variantId: z.string().uuid().nullish(),
 });
 
+export const invoiceSources = ["pos", "online_store", "webhook", "ownlyst"] as const;
+export type InvoiceSource = (typeof invoiceSources)[number];
+
 export const createInvoiceBaseSchema = z.object({
   partyId: z.string().uuid(),
   type: z.enum(invoiceTypes),
@@ -343,11 +346,12 @@ export const createInvoiceBaseSchema = z.object({
   /**
    * Origin channel for this invoice. "pos" for the fullscreen register,
    * "online_store" for storefront orders, "webhook" for public-API /
-   * carrier-webhook triggered invoices. Null/undefined = manually created
+   * carrier-webhook triggered invoices, "ownlyst" for invoices claimed
+   * or pushed from Ownlyst Studio. Null/undefined = manually created
    * from the invoice form. Used by reporting and the invoice list to
-   * attribute a sale to its channel.
+   * attribute a sale or purchase to its channel.
    */
-  source: z.enum(["pos", "online_store", "webhook"]).optional(),
+  source: z.enum(invoiceSources).optional(),
 });
 
 // Rejects manipulated totals (discount > 100% / > subtotal+tax, oversized
@@ -366,6 +370,42 @@ export const createInvoiceSchema = createInvoiceBaseSchema.superRefine((d, ctx) 
 export const updateInvoiceStatusSchema = z.object({
   status: z.enum(invoiceStatuses),
 });
+
+export const claimOwnlystBillSchema = z.object({
+  dedupeKey: z.string().min(1),
+  supplier: z.object({
+    name: z.string().min(1).max(200),
+    gstin: z.string().optional().nullable(),
+    pan: z.string().optional().nullable(),
+    email: z.string().email().optional().nullable().or(z.literal("")),
+    phone: z.string().optional().nullable(),
+    address: z.string().optional().nullable(),
+    city: z.string().optional().nullable(),
+    state: z.string().optional().nullable(),
+    stateCode: z.string().max(2).optional().nullable(),
+    pincode: z.string().optional().nullable(),
+    bankAccountNumber: z.string().optional().nullable(),
+    bankIfsc: z.string().optional().nullable(),
+  }),
+  invoiceNumber: z.string().min(1),
+  invoiceDate: z.string(),
+  dueDate: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  isReverseCharge: z.boolean().default(false),
+  currency: z.string().default("INR"),
+  lineItems: z.array(z.object({
+    itemName: z.string().min(1).max(200),
+    description: z.string().optional().nullable(),
+    hsn: z.string().optional().nullable(),
+    quantity: z.string().regex(/^\d+(\.\d{1,3})?$/),
+    unitPrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+    taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+    discountPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+    unit: z.enum(units).default("pcs"),
+  })).min(1),
+});
+
+export type ClaimOwnlystBillInput = z.infer<typeof claimOwnlystBillSchema>;
 
 // ── Payment ────────────────────────────────────────────────────
 

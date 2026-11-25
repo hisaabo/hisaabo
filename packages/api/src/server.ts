@@ -21,7 +21,8 @@ import { startCacheListener, setDegraded, isDegraded, type CacheListener } from 
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { calcLineItem, calcInvoiceTotals, money, claimOwnlystBillSchema, type ClaimOwnlystBillInput } from "@hisaabo/shared";
+import { processClaimOwnlystBill } from "./lib/claim-ownlyst-bill.js";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -2303,6 +2304,101 @@ app.get("/", (c) => {
     "Professional billing for Indian businesses. This is the API server — the web app is at <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
     200,
   ));
+});
+
+// POST /api/hisaabo/push — headless & Ownlyst Studio REST ingestion endpoint
+app.post("/api/hisaabo/push", async (c) => {
+  const ctx = await createContext({
+    req: c.req.raw,
+    resHeaders: new Headers(),
+    info: {} as never,
+  });
+  if (!ctx.user || !ctx.tenantId) {
+    return c.json({ ok: false, error: "UNAUTHORIZED", message: "API key or active session required" }, 401);
+  }
+
+  const rawBody = await c.req.json().catch(() => ({}));
+  const db = await getTenantDb(ctx.tenantId);
+
+  // Resolve businessId from header, body, or single business fallback
+  let businessId = c.req.header("x-business-id") || rawBody.businessId || ctx.businessId;
+  if (!businessId) {
+    const bizList = await db.select({ id: businesses.id }).from(businesses).limit(2);
+    if (bizList.length === 1) {
+      businessId = bizList[0].id;
+    } else {
+      return c.json({
+        ok: false,
+        error: "BUSINESS_REQUIRED",
+        message: "x-business-id header or businessId body parameter is required",
+      }, 400);
+    }
+  }
+
+  const [biz] = await db.select({ id: businesses.id }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
+  if (!biz) {
+    return c.json({ ok: false, error: "BUSINESS_NOT_FOUND", message: "Business not found in this organization" }, 404);
+  }
+
+  let claimInput: ClaimOwnlystBillInput;
+  if (rawBody.bundle && rawBody.bundle.hisaabo) {
+    const h = rawBody.bundle.hisaabo;
+    const inv = h.purchaseInvoice;
+    const party = h.party;
+    const rawItems = inv?.line_items || rawBody.bundle.invoice?.items || [];
+
+    const normalized = {
+      dedupeKey: h.dedupeKey || `OWNLYST-${inv?.invoice_number || Date.now()}`,
+      supplier: {
+        name: party?.party_name || inv?.supplier_name || "Unknown Supplier",
+        gstin: party?.tax_id || inv?.supplier_gstin || null,
+        pan: party?.tax_id && party.tax_id.length === 15 ? party.tax_id.slice(2, 12) : null,
+        email: party?.email || null,
+        phone: null,
+        address: party?.address_line_1 || null,
+        city: party?.city || null,
+        state: null,
+        stateCode: party?.tax_id && party.tax_id.length === 15 ? party.tax_id.slice(0, 2) : null,
+        pincode: party?.postal_code || null,
+        bankAccountNumber: null,
+        bankIfsc: null,
+      },
+      invoiceNumber: inv?.invoice_number || "INV-OWNLYST",
+      invoiceDate: inv?.invoice_date || new Date().toISOString(),
+      dueDate: inv?.due_date || null,
+      notes: inv?.notes || null,
+      isReverseCharge: Boolean(inv?.reverse_charge),
+      currency: inv?.currency || "INR",
+      lineItems: rawItems.map((li: any) => ({
+        itemName: li.description || li.item_name || "Item",
+        description: li.description || null,
+        hsn: li.hsn_sac || li.hsn || null,
+        quantity: String(li.quantity || "1"),
+        unitPrice: String(li.unit_price || "0"),
+        taxPercent: String(li.tax_rate ?? li.taxPercent ?? "0"),
+        discountPercent: "0",
+        unit: "pcs" as const,
+      })),
+    };
+
+    const parsed = claimOwnlystBillSchema.safeParse(normalized);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "INVALID_BUNDLE_DATA", details: parsed.error.flatten() }, 400);
+    }
+    claimInput = parsed.data;
+  } else {
+    const parsed = claimOwnlystBillSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "INVALID_INPUT", details: parsed.error.flatten() }, 400);
+    }
+    claimInput = parsed.data;
+  }
+
+  const result = await processClaimOwnlystBill(db, businessId, ctx.user, claimInput);
+  return c.json({
+    ok: true,
+    ...result,
+  });
 });
 
 // 404 handler — catch-all for unmatched routes
