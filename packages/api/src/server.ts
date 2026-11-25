@@ -2341,11 +2341,11 @@ app.post("/api/hisaabo/push", async (c) => {
   }
 
   let claimInput: ClaimOwnlystBillInput;
-  if (rawBody.bundle && rawBody.bundle.hisaabo) {
-    const h = rawBody.bundle.hisaabo;
+  if (rawBody.hisaabo || (rawBody.bundle && rawBody.bundle.hisaabo)) {
+    const h = rawBody.hisaabo || rawBody.bundle.hisaabo;
     const inv = h.purchaseInvoice;
     const party = h.party;
-    const rawItems = inv?.line_items || rawBody.bundle.invoice?.items || [];
+    const rawItems = inv?.line_items || rawBody.bundle?.invoice?.items || rawBody.invoice?.items || [];
 
     const normalized = {
       dedupeKey: h.dedupeKey || `OWNLYST-${inv?.invoice_number || Date.now()}`,
